@@ -70,7 +70,7 @@ fm-topic.sh ──Unix socket（0600）──┘      │  獨家寫入 data/top
 | TypeScript 怎麼變成能跑的東西 | 用釘死版本的 `tsc` 編成 `.js` 提交進 git，執行期只跑 `dist/`。原因：這台的 `node` 沒有 TypeScript 支援（實測） | [第二段](stage-2-service.markdown) |
 | 規則範本放哪 | `topic-board/rules/*.md.tmpl`。不能是 `.md`，也不能放 `config/` 或 `data/` | [第六段](stage-6-rules.markdown) |
 | 頁面上改名、改目標、封存、議題併議題放哪 | 都在議題頁：標題與目標旁的「編輯」鈕；標題列的「⋯」選單放「封存」與「併入其他議題…」 | [第五段](stage-5-browser.markdown) |
-| 執行期的 npm 相依 | 沒有。只用 Node 的內建模組；開發期只有 `typescript` 一個 | [第二段](stage-2-service.markdown) |
+| 執行期的 npm 相依 | 沒有。只用 Node 的內建模組；開發期只有 `typescript` 與 `@types/node` | [第二段](stage-2-service.markdown) |
 
 另外定了 spec 自己的位置：`topic-board/spec/*.markdown`，由第一段的 PR 帶進 fork。
 

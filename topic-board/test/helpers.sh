@@ -68,3 +68,39 @@ tb_write_registry() {
 - far1 - Remote helper (host: farbox; root: /srv/fm; home: /srv/fm-home; scope: remote work; projects: beta; added 2026-11-01)
 EOF
 }
+
+# --- board service fixtures ---------------------------------------------------
+
+# tb_free_port: print a TCP port nothing is listening on right now.
+tb_free_port() {
+  node -e 'const s = require("node:net").createServer(); s.listen(0, "127.0.0.1", () => { console.log(s.address().port); s.close(); });'
+}
+
+# tb_make_service_home <name>: a main home with its own board port.
+tb_make_service_home() {
+  local home
+  home=$(tb_make_home "$1")
+  tb_free_port > "$home/config/topic-board-port"
+  printf '%s\n' "$home"
+}
+
+# tb_board_pid <home>: the pid the running board recorded, or nothing.
+tb_board_pid() {
+  cat "$1/state/topic-board/pid" 2>/dev/null || true
+}
+
+# tb_board_count <home>: how many board-server processes serve <home>.
+tb_board_count() {
+  pgrep -f "board-server.js.*--state $1/state" | wc -l | tr -d ' '
+}
+
+# tb_stop_boards: kill every board started under TMP_ROOT. Registered on EXIT so
+# a failed assertion never leaves a service behind.
+tb_stop_boards() {
+  pkill -KILL -f "board-server.js.*--state $TMP_ROOT/" 2>/dev/null || true
+}
+
+# tb_mode <path>: the ls-style type and permission string, e.g. "-rw-------".
+tb_mode() {
+  stat -c '%A' "$1" 2>/dev/null || stat -f '%Sp' "$1"
+}

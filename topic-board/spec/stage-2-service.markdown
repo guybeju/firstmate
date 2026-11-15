@@ -30,10 +30,10 @@
 
 - 原始碼在 `topic-board/src/`，TypeScript。`tsc` 把它編到 `topic-board/dist/`，`dist/` 提交進 git。執行期只跑 `dist/` 裡的 `.js`。
 - **執行期沒有任何 npm 相依**：只用 Node 的內建模組（`node:net`、`node:http`、`node:fs`、`node:child_process`、`node:crypto`、`node:path`）。`topic-board/` 底下不需要 `node_modules` 就能跑。
-- 開發期只有一個相依：`typescript`，在 `package.json` 的 `devDependencies` 釘死確切版本（實作時查當下的穩定版，不加 `^`）。測試用 Node 內建的 `node:test`。
+- 開發期有兩個相依，都在 `package.json` 的 `devDependencies` 釘死確切版本：`typescript`（7.0.2）與 `@types/node`（22.20.5，沒有它就沒有 Node 內建模組的型別）。用 pnpm 安裝，lockfile 是 `pnpm-lock.yaml`。測試是 Bash 寫的整合測試，從 `fm-topic.sh` 進去，跑的是提交的 `dist/`。
 - `package.json`：`"private": true`、`"type": "module"`、`"engines": {"node": ">=22"}`，scripts 只有 `build`（`tsc -p .`）與 `test`。
 - `tsconfig.json`：`"strict"`、`"noUncheckedIndexedAccess"`、`"exactOptionalPropertyTypes"`、`"noImplicitOverride"`、`"noPropertyAccessFromIndexSignature"`、`"verbatimModuleSyntax"`、`"isolatedModules"` 全開；`"module": "nodenext"`、`"target": "es2023"`、`"rootDir": "src"`、`"outDir": "dist"`；不產生 source map 與 `.d.ts`，讓輸出穩定。
-- `topic-board/.gitignore` 一行 `node_modules/`。上游的 `.gitignore` 沒有這一條，不加的話開發用的 clone 會顯示 dirty。
+- `topic-board/.gitignore` 忽略 `node_modules/` 與 `.metrics/`（分析工具的輸出）。上游的 `.gitignore` 沒有這一條，不加的話開發用的 clone 會顯示 dirty。
 - `topic-board/test/check-dist.sh`：有 `topic-board/node_modules/.bin/tsc` 時，把 `src/` 編到暫存目錄，和 `dist/` 逐檔比對，不同就失敗並列出檔名；沒有 `tsc` 時印 `skip:` 並回 0。每個動到 `src/` 的 PR 都要重編並提交 `dist/`。
 
 ### 入口
@@ -51,6 +51,8 @@
 
 ### 啟動與單例
 
+同一個 home 一次只有一個 client 能啟動、殺掉或換掉服務：client 先拿 `state/topic-board/start.lock`（`mkdir` 當鎖，裡面記 pid；持有者死了就接手，最多等 30 秒），拿到之後重新問一次 health 再動手。沒有這把鎖時，兩個指令同時啟動，輸的那個會在贏家還沒綁好 socket 之前把它誤判成「埠被別的程式佔用」（實作時的並行測試抓到的）。
+
 client 的流程，除了 `status`、`stop` 之外的每個經 socket 的子命令都一樣：
 
 1. 連 socket 送 `health`，逾時 3 秒。
@@ -65,9 +67,9 @@ client 的流程，除了 `status`、`stop` 之外的每個經 socket 的子命�
 
 1. 檢查 socket 路徑的位元組長度：Linux 超過 107、macOS 超過 103 就印原因並以非 0 結束。
 2. 綁 TCP 埠。這是單例的仲裁點。
-   - 回 `EADDRINUSE`：連 socket 送 `health`，3 秒內有回應就是已經有看板在跑，exit 0；沒有回應或連不上就是埠被別的程式佔用，把原因寫進 log 後以特定的 exit code 結束。不自動換埠。
-3. 綁到埠之後：刪掉 `state/topic-board/` 與 `data/` 底下殘留的 `*.tmp-<pid>` 暫存檔並記入 log；載入議題檔、`events.jsonl`、`summaries.jsonl`、`audit.jsonl`（後三個在這一段只要能讀、能截掉沒寫完的半行）。
-4. token 檔不存在就產生。寫 `port`、`pid`。
+   - 回 `EADDRINUSE`：`pid` 檔裡的程序還活著，就是已經有看板在跑或正在啟動，exit 0。否則連 socket 送 `health`，3 秒內有回應也 exit 0；沒有回應或連不上就是埠被別的程式佔用，把原因寫進 log 後以特定的 exit code 結束。不自動換埠。
+3. 綁到埠之後：先寫 `pid` 檔（另一個剛啟動的服務靠它知道佔住埠的是看板）。然後刪掉 `state/topic-board/` 與 `data/` 底下殘留的 `*.tmp-<pid>` 暫存檔並記入 log；載入議題檔、`events.jsonl`、`summaries.jsonl`、`audit.jsonl`（後三個在這一段只要能讀、能截掉沒寫完的半行）。
+4. token 檔不存在就產生。寫 `port`。
 5. 最後才刪掉殘留的 socket 檔、`umask 0o177`、綁 socket。載入完成前不綁，免得 3 秒的 health 逾時把還在載入的新服務當成卡死。
 6. 產生這次啟動的 `boot_id`（亂數）。
 
@@ -87,7 +89,10 @@ client 的流程，除了 `status`、`stop` 之外的每個經 socket 的子命�
 | socket 路徑太長（<n> 位元組，上限 <m>） | home 的路徑太深，請把 home 搬到較短的路徑 |
 | `state/` 不可寫 | 檢查 `state/` 的權限 |
 | 編譯結果不見了（`dist/board-server.js` 不存在） | 在主 home 跑 `/updatefirstmate`，或確認 checkout 完整 |
+| `data/topics.json` 或封存檔讀不懂 | 修好或移開那個檔之後再試（服務不會覆寫讀不懂的檔） |
 | 10 秒內沒就緒，或啟動中當掉 | 附 `service.log` 最後 20 行 |
+
+服務把啟動失敗的原因寫進 `state/topic-board/startup-error`（一行 JSON），client 讀它來印那一行；啟動成功就刪掉。
 
 要求已送出、回應前連線斷掉：exit 3，印「結果不明，可以原樣重做一次」。client 自己不重送。還沒送出就失敗的（連不上），照上面的流程重啟後送一次。
 
@@ -111,8 +116,8 @@ client 的流程，除了 `status`、`stop` 之外的每個經 socket 的子命�
 | `close-propose <id> --reason <文字>` | 寫入 `close_proposal` | 理由相同不動，不同就換掉 |
 | `move <id> <佇列> [--before <id> \| --first]` | 移動佇列與位置；沒給位置時，新進這個佇列的放尾端 | 沒給位置而議題已在那個佇列就不動 |
 | `rename <id> <名稱>`、`goal <id> <一行>` | 改名、改目標 | 值相同不動 |
-| `archive <id>` | 從 `topics.json` 搬到封存檔，加 `archived_at`，清掉 `close_proposal` | 已封存就回成功 |
-| `reopen <id> [--queue <佇列>]` | 從封存檔搬回來，預設放「一般」尾端 | 已不在封存檔而且存在就回成功 |
+| `archive <id>` | 從 `topics.json` 搬到封存檔，加 `archived_at`，清掉 `close_proposal`。提議中的議題也可以封存，等於不採用這個提議 | 已封存就回成功 |
+| `reopen <id> [--queue <佇列>]` | 從封存檔搬回來，一律變成已確認，預設放「一般」尾端 | 已不在封存檔而且存在就回成功 |
 
 每個 id 參數都先過 `merged` 表。名稱與目標是單行、去頭尾空白、不能是空的；名稱上限 80 個碼位，目標上限 200 個碼位。`move`、`reopen` 觸發的「議題變成可派」通知是第四段的事，這一段只留一個內部事件的掛點。`confirm`、`merge`、`close-propose`、`archive`、`reopen` 各寫一筆系統紀錄進 `events.jsonl`。
 

@@ -10,9 +10,25 @@
 #   fm-topic.sh --in-home <secondmate-id> tag <task-id> <topic-id>
 #   fm-topic.sh --in-home <secondmate-id> answers        (one answer line on stdin)
 #   fm-topic.sh --in-home <secondmate-id> setup
+#   fm-topic.sh propose <name> --goal <one line> [--id <id>] [--queue high|normal|later]
+#   fm-topic.sh confirm <topic-id> [--queue <queue>]
+#   fm-topic.sh merge <old-topic-id> <new-topic-id>
+#   fm-topic.sh close-propose <topic-id> --reason <text>
+#   fm-topic.sh move <topic-id> <queue> [--before <topic-id> | --first]
+#   fm-topic.sh rename <topic-id> <name>
+#   fm-topic.sh goal <topic-id> <one line>
+#   fm-topic.sh archive <topic-id>
+#   fm-topic.sh reopen <topic-id> [--queue <queue>]
+#   fm-topic.sh open | status | stop | restart | reset-token
 #
-# These subcommands only read and write files; none of them needs the board
-# service, so they keep working when it is down.
+# tag, list, order, setup, and --in-home only read and write files; they do not
+# need the board service, so they keep working when it is down. Every other
+# subcommand talks to the board service over its Unix socket and, except for
+# status and stop, starts the service first when it is not running. Those run
+# only in the main home and need node 22 or newer. Repeating any of them
+# unchanged is safe.
+#
+# open prints the board's URL. status and stop never start the service.
 #
 # tag    Appends "<topic-id> <UTC time>" to this home's data/<task-id>/topic.
 #        The last line is the task's current topic. In the main home the topic
@@ -33,7 +49,8 @@
 # exit code unchanged.
 #
 # Exit codes: 0 success (including an identical repeat), 1 refused or failed
-# with nothing written, 2 usage error.
+# with nothing written, 2 usage error, 3 outcome unknown (the request was sent
+# but no answer came back; repeat it once), 69 the board service is unavailable.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,6 +58,10 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+BOARD_DIST="$FM_ROOT/topic-board/dist"
+DEFAULT_PORT=47819
+EXIT_UNAVAILABLE=69
 TOPICS_FILE="$DATA/topics.json"
 ARCHIVE_FILE="$DATA/topics-archive.json"
 OWN_HOLD_PREFIX='topic-board：'
@@ -317,6 +338,66 @@ cmd_in_home() {
   tb_exec_in_home "$home" "$SCRIPT_DIR/fm-topic.sh" "$@"
 }
 
+service_unavailable() {  # <reason> <fix>
+  printf '%s\n' "看板服務無法啟動：$1。$2。這次的要求沒有寫入。" >&2
+  exit "$EXIT_UNAVAILABLE"
+}
+
+# The port the board should listen on: config/topic-board-port, or the default.
+configured_port() {
+  local port=$DEFAULT_PORT
+  if [ -f "$CONFIG/topic-board-port" ]; then
+    IFS= read -r port < "$CONFIG/topic-board-port" || true
+    case "$port" in
+      '' | *[!0-9]*) port=0 ;;
+    esac
+    if [ "$port" -lt 1024 ] || [ "$port" -gt 65535 ]; then
+      service_unavailable "config/topic-board-port 不是 1024 到 65535 的埠號" "改成合法的埠號，或刪掉那個檔用預設的 $DEFAULT_PORT"
+    fi
+  fi
+  printf '%s\n' "$port"
+}
+
+# What status can still say when node is missing: only what the files show.
+status_without_node() {
+  local file
+  printf '%s\n' "看板服務：不明（沒有 node，無法詢問服務）"
+  for file in pid port; do
+    if [ -f "$STATE/topic-board/$file" ]; then
+      printf '上次的 %s：%s\n' "$file" "$(< "$STATE/topic-board/$file")"
+    fi
+  done
+  for file in "$DATA/topic-board/events.jsonl" "$DATA/topic-board/summaries.jsonl" "$STATE/topic-board/audit.jsonl"; do
+    if [ -f "$file" ]; then
+      printf '%s：%s 位元組\n' "${file##*/}" "$(wc -c < "$file" | tr -d ' ')"
+    fi
+  done
+}
+
+# Hand a socket subcommand to the node client, after the checks that must not
+# need node themselves.
+cmd_service() {
+  local sub=$1 port commit major
+  require_main_home "$sub"
+  if ! command -v node >/dev/null 2>&1; then
+    if [ "$sub" = status ]; then
+      status_without_node
+      return 0
+    fi
+    service_unavailable "沒有 node" "安裝：brew install node  # or the platform's package manager"
+  fi
+  major=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || printf '0')
+  case "$major" in '' | *[!0-9]*) major=0 ;; esac
+  [ "$major" -ge 22 ] || service_unavailable "node 版本低於 22" "請升級到 22 以上"
+  if [ ! -f "$BOARD_DIST/board-client.js" ] || [ ! -f "$BOARD_DIST/board-server.js" ]; then
+    service_unavailable "編譯結果不見了（$BOARD_DIST）" "在主 home 跑 /updatefirstmate，或確認 checkout 完整"
+  fi
+  port=$(configured_port)
+  commit=$(git -C "$FM_ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown')
+  exec node "$BOARD_DIST/board-client.js" --home "$FM_HOME" --root "$FM_ROOT" --commit "$commit" \
+    --port "$port" --state "$STATE" --data "$DATA" -- "$@"
+}
+
 main() {
   [ "$#" -gt 0 ] || usage_error "少了子命令"
   local sub=$1
@@ -330,6 +411,10 @@ main() {
     list) cmd_list "$@" ;;
     order) cmd_order "$@" ;;
     setup) cmd_setup "$@" ;;
+    propose | confirm | merge | close-propose | move | rename | goal | archive | reopen | \
+      open | status | stop | restart | reset-token)
+      cmd_service "$sub" "$@"
+      ;;
     *) usage_error "不認得的子命令：$sub" ;;
   esac
 }
