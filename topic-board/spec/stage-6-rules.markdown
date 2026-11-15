@@ -11,7 +11,7 @@
 | 6-3 | 壓縮之後 Claude Code 確實重印了含偏好檔的啟動摘要 | 在主 home 的 session 手動 `/compact`，看重印的內容有沒有「議題看板」那一段 | 沒有的話，長 session 後段規則會掉。退路是把最關鍵的一條（建立項目時 `tag`）靠未分類區兜住，其餘接受；不另做提醒機制 |
 | 6-4 | 上游的 stow 跑過一輪之後，區塊的起訖標記還在 | 裝好規則後跑一次 stow，再跑 `bin/fm-topic.sh status` | 標記不見時 `status` 顯示「未裝」或「和範本不同」，重跑 `install-rules`；只剩一個標記時它會拒絕並指出位置，由使用者手動清掉 |
 
-6-1 這台就能做。6-2 到 6-4 要等主 home 的 firstmate 能用。
+6-1 已驗（2026-11-16）：測試直接 source 上游的 `fm-config-inherit-lib.sh`，對新建的 `data/captain-shared.md` 跑 `shared_captain_header_valid`，通過；`install-rules` 自己也用同一個函式檢查既有的檔。6-2 到 6-4 要等主 home 的 firstmate 能用。
 
 ## 要做的事
 
@@ -44,7 +44,7 @@
 3. `data/captain-shared.md` 不存在：先寫檔頭範本，再寫共用段。已存在但檔頭不合上游的要求：不碰這個檔，印出缺的詞。`data/captain.md` 不存在：直接建立，內容只有那一段。
 4. 寫之前把原檔複製到 `state/topic-board/rules-backup/<檔名>.<UTC 時間>`。`state/topic-board/`（0700）不存在就自己建。寫入用暫存檔加 rename。
 5. 印出：
-   - 每個檔是「新增」「已更新 vM → vN」還是「已是最新」（版本號取自標記那一行的 `vN`，只是給人看的）。
+   - 每個檔是「新增（vN）」「已更新（<原本的狀態> → vN）」還是「已是最新（vN）」（版本號取自標記那一行的 `vN`，只是給人看的）。
    - 已註冊的 secondmate 清單，並提醒「共用段會叫每個 secondmate 跑 fm-topic.sh；還沒換到 fork 的 home 沒有這支指令」。
    - 什麼時候生效：主 first mate 是下一次 session 開始或下一次壓縮後；secondmate 是主 home 下一次 bootstrap 傳播共用檔之後、它下次啟動時。
    - `bin/fm-startup-memory-budget.sh report` 的輸出。超過預算只警告，不退回。
@@ -58,7 +58,7 @@
 規則：captain.md <狀態>；captain-shared.md <狀態>
 ```
 
-狀態三種：`未裝`、`和範本相同（vN）`、`和範本不同（vN）`。比的是區塊的內容，不是版本號（採建議 C7）。
+狀態四種：`未裝`、`和範本相同（vN）`、`和範本不同（vN）`，以及標記不成對時的 `標記不完整`。比的是區塊的內容，不是版本號（採建議 C7）。
 
 ## 驗收
 

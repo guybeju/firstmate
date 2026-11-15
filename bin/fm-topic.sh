@@ -22,6 +22,7 @@
 #   fm-topic.sh summary [--home <secondmate-id>] <task-id> <ready|report|failed|landed> -
 #   fm-topic.sh which [--home <secondmate-id>] <task-id>
 #   fm-topic.sh open | status | stop | restart | reset-token
+#   fm-topic.sh install-rules
 #
 # tag, list, order, setup, and --in-home only read and write files; they do not
 # need the board service, so they keep working when it is down. Every other
@@ -51,6 +52,14 @@
 #        dispatch proceed.
 # setup  Creates this home's config/fleet-ledger flag. Safe to repeat.
 #
+# install-rules writes the board's rules into this home's data/captain.md and
+# data/captain-shared.md, each as one block between "<!-- topic-board:begin"
+# and "<!-- topic-board:end -->" lines. An existing block is replaced whole;
+# nothing outside the block is changed, and each file is backed up to
+# state/topic-board/rules-backup/ before it is written. Main home only; it
+# needs neither the board service nor node. status reports whether each block
+# matches the templates in topic-board/rules/.
+#
 # --in-home runs tag, answers, or setup inside a LOCAL registered secondmate
 # home. answers forwards stdin to that home's
 # "fm-captain-hold.sh answers --source topic-board" and returns its output and
@@ -68,6 +77,9 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 BOARD_DIST="$FM_ROOT/topic-board/dist"
+RULES_DIR="$FM_ROOT/topic-board/rules"
+RULES_BEGIN='<!-- topic-board:begin'
+RULES_END='<!-- topic-board:end -->'
 DEFAULT_PORT=47819
 EXIT_UNAVAILABLE=69
 TOPICS_FILE="$DATA/topics.json"
@@ -382,6 +394,157 @@ status_without_node() {
   done
 }
 
+# Where the rules block sits in <file>: prints "none", "ok <begin-line>
+# <end-line>", or "broken <what is wrong>" when the two markers do not form
+# exactly one block.
+rules_block() {
+  awk -v begin="$RULES_BEGIN" -v end="$RULES_END" '
+    index($0, begin) == 1 { begins = begins " " NR; b++ }
+    $0 == end { ends = ends " " NR; e++ }
+    END {
+      if (b == 0 && e == 0) print "none"
+      else if (b == 1 && e == 1 && begins + 0 < ends + 0) print "ok" begins ends
+      else print "broken 開頭標記在第" (b ? begins : " -") " 行，結尾標記在第" (e ? ends : " -") " 行"
+    }
+  ' "$1"
+}
+
+# The "vN" on a block's first line, for people; the content decides what is current.
+rules_version() {
+  sed -n '1s/^.*topic-board:begin \(v[0-9]*\).*$/\1/p'
+}
+
+# One file's rules state for status: 未裝, 和範本相同（vN）, or 和範本不同（vN）.
+rules_state() {  # <file> <template>
+  local file=$1 template=$2 block first last installed
+  [ -f "$file" ] || { printf '未裝'; return 0; }
+  block=$(rules_block "$file")
+  case "$block" in
+    none) printf '未裝' ;;
+    ok\ *)
+      read -r _ first last <<< "$block"
+      installed=$(sed -n "${first},${last}p" "$file")
+      if [ "$installed" = "$(cat "$template")" ]; then
+        printf '和範本相同（%s）' "$(printf '%s\n' "$installed" | rules_version)"
+      else
+        printf '和範本不同（%s）' "$(printf '%s\n' "$installed" | rules_version)"
+      fi
+      ;;
+    *) printf '標記不完整' ;;
+  esac
+}
+
+print_rules_status() {
+  printf '規則：captain.md %s；captain-shared.md %s\n' \
+    "$(rules_state "$DATA/captain.md" "$RULES_DIR/captain.block.md.tmpl")" \
+    "$(rules_state "$DATA/captain-shared.md" "$RULES_DIR/captain-shared.block.md.tmpl")"
+}
+
+# Print what <file> should contain once <template> is installed, or return 1
+# after explaining why the file is left alone.
+rules_new_content() {  # <file> <template> [header-template]
+  local file=$1 template=$2 header=${3:-} block first last
+  if [ ! -f "$file" ]; then
+    [ -z "$header" ] || cat "$header"
+    cat "$template"
+    return 0
+  fi
+  block=$(rules_block "$file")
+  case "$block" in
+    none)
+      cat "$file"
+      [ -z "$(tail -c 1 "$file")" ] || printf '\n'
+      [ ! -s "$file" ] || printf '\n'
+      cat "$template"
+      ;;
+    ok\ *)
+      read -r _ first last <<< "$block"
+      head -n "$((first - 1))" "$file"
+      cat "$template"
+      tail -n "+$((last + 1))" "$file"
+      ;;
+    *)
+      printf '%s\n' "${file##*/}：標記不成對（${block#broken }），沒有動這個檔。請手動整理成一對標記，或把它們都刪掉。" >&2
+      return 1
+      ;;
+  esac
+}
+
+# Upstream's own check of a shared preference file's header: prints the first
+# required phrase that is missing and returns 1, or prints nothing and returns
+# 0. Run in a subshell so the library it comes from defines nothing here.
+shared_header_gap() {
+  (
+    # shellcheck source=bin/fm-config-inherit-lib.sh
+    . "$SCRIPT_DIR/fm-config-inherit-lib.sh" >/dev/null 2>&1 && shared_captain_header_valid "$1"
+  )
+}
+
+# Install one template into one preference file; prints what happened.
+install_rules_file() {  # <file> <template> [header-template]
+  local file=$1 template=$2 header=${3:-} name=${1##*/} gap fresh before after backup
+  if [ -n "$header" ] && [ -f "$file" ]; then
+    gap=$(shared_header_gap "$file") || {
+      printf '%s\n' "$name：檔頭不合上游的要求（少了「$gap」），沒有動這個檔。" >&2
+      return 1
+    }
+  fi
+  fresh="$STATE/topic-board/rules.new.$$"
+  rules_new_content "$file" "$template" "$header" > "$fresh" || {
+    rm -f "$fresh"
+    return 1
+  }
+  after=$(rules_version < "$template")
+  if [ ! -f "$file" ]; then
+    mkdir -p "$DATA"
+    mv "$fresh" "$file"
+    printf '%s\n' "$name：新增（$after）"
+  elif cmp -s "$fresh" "$file"; then
+    rm -f "$fresh"
+    printf '%s\n' "$name：已是最新（$after）"
+  else
+    before=$(rules_state "$file" "$template")
+    backup="$STATE/topic-board/rules-backup/$name.$(date -u +%Y%m%dT%H%M%SZ)"
+    cp -p "$file" "$backup"
+    mv "$fresh" "$file"
+    case "$before" in
+      未裝) printf '%s\n' "$name：新增（$after），原檔備份在 $backup" ;;
+      *) printf '%s\n' "$name：已更新（$before → $after），原檔備份在 $backup" ;;
+    esac
+  fi
+}
+
+list_secondmate_ids() {
+  local reg="$DATA/secondmates.md" line
+  [ -f "$reg" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in '- '*) ;; *) continue ;; esac
+    secondmate_registry_parse_line "$line" || continue
+    printf '%s ' "$SECONDMATE_REGISTRY_ID"
+  done < "$reg"
+}
+
+cmd_install_rules() {
+  local failed=0 secondmates
+  [ "$#" -eq 0 ] || usage_error "install-rules 不收參數"
+  if in_secondmate_home; then
+    tb_die 1 "install-rules 只能在主 home 跑。secondmate home 的共用偏好檔是主 home 傳過來的唯讀複本，改了會被當成漂移。什麼都沒有寫。"
+  fi
+  [ -d "$FM_HOME" ] || tb_die 1 "找不到 home：$FM_HOME。什麼都沒有寫。"
+  [ -f "$RULES_DIR/captain.block.md.tmpl" ] || tb_die 1 "找不到規則範本（$RULES_DIR）。什麼都沒有寫。"
+  mkdir -p "$STATE/topic-board/rules-backup"
+  chmod 700 "$STATE/topic-board" "$STATE/topic-board/rules-backup"
+  install_rules_file "$DATA/captain.md" "$RULES_DIR/captain.block.md.tmpl" || failed=1
+  install_rules_file "$DATA/captain-shared.md" "$RULES_DIR/captain-shared.block.md.tmpl" \
+    "$RULES_DIR/captain-shared.header.md.tmpl" || failed=1
+  secondmates=$(list_secondmate_ids)
+  printf '%s\n' "已註冊的 secondmate：${secondmates:-（沒有）}"
+  printf '%s\n' "提醒：共用段會叫每個 secondmate 跑 fm-topic.sh；還沒換到 fork 的 home 沒有這支指令。"
+  printf '%s\n' "生效時間：主 first mate 是下一次 session 開始或下一次壓縮後；secondmate 是主 home 下一次 bootstrap 傳播共用檔之後、它下次啟動時。"
+  "$SCRIPT_DIR/fm-startup-memory-budget.sh" report 2>&1 || printf '%s\n' "（讀不到啟動記憶的預算，沒有檢查用量。）"
+  return "$failed"
+}
+
 # Hand a socket subcommand to the node client, after the checks that must not
 # need node themselves.
 cmd_service() {
@@ -390,6 +553,7 @@ cmd_service() {
   if ! command -v node >/dev/null 2>&1; then
     if [ "$sub" = status ]; then
       status_without_node
+      print_rules_status
       return 0
     fi
     service_unavailable "沒有 node" "安裝：brew install node  # or the platform's package manager"
@@ -402,6 +566,12 @@ cmd_service() {
   fi
   port=$(configured_port)
   commit=$(git -C "$FM_ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown')
+  if [ "$sub" = status ]; then
+    node "$BOARD_DIST/board-client.js" --home "$FM_HOME" --root "$FM_ROOT" --commit "$commit" \
+      --port "$port" --state "$STATE" --data "$DATA" -- "$@"
+    print_rules_status
+    return 0
+  fi
   exec node "$BOARD_DIST/board-client.js" --home "$FM_HOME" --root "$FM_ROOT" --commit "$commit" \
     --port "$port" --state "$STATE" --data "$DATA" -- "$@"
 }
@@ -419,6 +589,7 @@ main() {
     list) cmd_list "$@" ;;
     order) cmd_order "$@" ;;
     setup) cmd_setup "$@" ;;
+    install-rules) cmd_install_rules "$@" ;;
     propose | confirm | merge | close-propose | move | rename | goal | archive | reopen | \
       summary | which | open | status | stop | restart | reset-token)
       cmd_service "$sub" "$@"
