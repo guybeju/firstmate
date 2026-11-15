@@ -15,6 +15,14 @@
 
 5-1 到 5-3 都是這一段開工時就能做的。
 
+實作時（2026-11-16）的結果：
+
+- 這台只有 Firefox（154，snap 版），沒有 Chrome；5-1 的 Chrome 部分仍未驗。
+- 頁面用無頭 Firefox 加 WebDriver BiDi 從頭到尾走過一遍（`topic-board/test/stage-5-page.sh`）：作答、確認提議、併入、拖曳、改名、送訊息、直送、封存與重開、服務停掉時的紅色橫幅與自動恢復，都通過。
+- 拖曳在這個測試裡用的是程式送出的 `dragstart`、`dragover`、`drop`、`dragend` 事件，驗到的是頁面自己的處理邏輯（即時換位、落點、沒放下就還原）。作業系統層級真的用滑鼠拖，仍要人手試一次。
+- 5-2（很多議題時的側欄）用「每個佇列內部可捲動」處理，還沒有用 40 個議題實際看過。
+- snap 版 Firefox 讀不到家目錄下的隱藏資料夾，測試工具把暫時的設定檔放在 `~/tb-firefox-tmp-*`，跑完就刪。
+
 ## 要做的事
 
 ### TCP 通道
@@ -32,7 +40,7 @@
 | `GET /api/state?v=<boot_id>:<n>` | — | 看板狀態。沒變回 `{"changed":false}`；`boot_id` 不同回全量。每次呼叫都算「有人在看」，維持輪詢 |
 | `POST /api/refresh` | `{}` | 立刻更新 |
 | `POST /api/topics/confirm` | `{id, queue?}` | 確認提議 |
-| `POST /api/topics/move` | `{id, queue, before?}` | 拖曳的落點；`before` 省略就是尾端 |
+| `POST /api/topics/move` | `{id, queue, before?}` 或 `{id, queue, first: true}` | 拖曳的落點；`before` 與 `first` 都省略就是尾端 |
 | `POST /api/topics/rename`、`/goal` | `{id, value}` | 改名、改目標 |
 | `POST /api/topics/archive`、`/reopen` | `{id, queue?}` | 封存、重開 |
 | `POST /api/topics/keep` | `{id}` | 對提議關閉按「先不關」：清掉 `close_proposal` |
@@ -139,5 +147,5 @@
 3. 兩步確認：第二步沒帶 `mode` 或 `mode` 不是 `done`／`release`、沒有確認碼直接送作答、確認碼用第二次、確認碼過期、兩步之間 hold 的問題變了、服務重啟後用舊的確認碼，全部被拒。
 4. `reset-token` 之後，舊 token 的請求回 401。
 5. 手動走一遍（用假資料的暫存 `FM_HOME`，在 Chrome 與 Firefox 各一次），每項截圖貼進 PR：首頁五段、議題頁、拖曳跨佇列與 Esc 取消、從待辦拖出的倒數、改名、改目標、封存與重開、併入其他議題、確認提議、歸併 agent、作答一個有選項的 hold、送一則訊息給 first mate、直送、一筆失敗的寫入按重送與忽略、停掉服務後的紅色橫幅、再啟動後頁面自己恢復。
-6. 和 `topic-board/test/prototype-variant-c.html` 並排比對版面；有出入的地方在 PR 裡列出原因。
+6. 和 `topic-board/test/prototype-variant-c.html` 並排比對版面；有出入的地方在 PR 裡列出原因。已知的出入：側欄的議題卡多了一個「移到…」選單（鍵盤可用的後備）；提議中的議題多了「不採用」；Host 不對回 403（不是 400）。
 7. 前四段的驗收再跑一次。

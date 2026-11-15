@@ -122,3 +122,85 @@ tb_op() {
     connection.on("error", (error) => { console.error(error.message); process.exit(1); });
   ' "$1/state/topic-board/board.sock" "$2" "${3:-{\}}"
 }
+
+# tb_make_fake_root <dir>: a private code root with this checkout's scripts and
+# build, its own git history, and stand-ins for the four scripts the board
+# writes through (fm-inbox.sh, fm-send.sh, fm-captain-hold.sh, fm-on.sh).
+#
+# Each stand-in appends "cmd=<key>\targv=<a|b|...>\thome=<FM_HOME>\tstdin=<text>"
+# to $TB_LOG, then follows the next step in $TB_PLAY/<key> when there is one. A
+# step is "<exit code or sleepN>\t<stdout>". "Remote" home <id> is the local
+# directory $TB_REMOTES/<id>.
+tb_make_fake_root() {
+  local fake=$1 name
+  fm_git_init_commit "$fake"
+  mkdir -p "$fake/bin" "$fake/topic-board"
+  ln -s "$ROOT"/bin/* "$fake/bin/"
+  ln -s "$ROOT/topic-board/dist" "$fake/topic-board/dist"
+  rm "$fake/bin/fm-on.sh" "$fake/bin/fm-inbox.sh" "$fake/bin/fm-send.sh" "$fake/bin/fm-captain-hold.sh"
+  cat > "$fake/bin/tb-fake-lib.sh" <<'SH'
+tb_fake() {  # <play key> <stdin> <argv...>
+  local key=$1 input=$2 step code out play
+  shift 2
+  {
+    printf 'cmd=%s\targv=' "$key"
+    printf '%s|' "$@"
+    printf '\thome=%s\tstdin=%s\n' "${FM_HOME:-}" "${input//$'\n'/\\n}"
+  } >> "$TB_LOG"
+  play="$TB_PLAY/$key"
+  [ -s "$play" ] || return 0
+  IFS= read -r step < "$play"
+  tail -n +2 "$play" > "$play.next"
+  mv "$play.next" "$play"
+  code=${step%%$'\t'*}
+  out=${step#*$'\t'}
+  [ "$out" = "$step" ] || printf '%s\n' "$out"
+  case "$code" in
+    sleep*)
+      printf 'start %s\n' "$key" >> "$TB_LOG"
+      sleep "${code#sleep}"
+      printf 'end %s\n' "$key" >> "$TB_LOG"
+      code=0
+      ;;
+  esac
+  exit "$code"
+}
+SH
+  for name in fm-inbox.sh fm-send.sh; do
+    cat > "$fake/bin/$name" <<'SH'
+#!/usr/bin/env bash
+set -u
+. "$(dirname "$0")/tb-fake-lib.sh"
+tb_fake "$(basename "$0")" "$(cat)" "$@"
+exit 0
+SH
+  done
+  cat > "$fake/bin/fm-captain-hold.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+. "$(dirname "$0")/tb-fake-lib.sh"
+input=$(cat)
+tb_fake fm-captain-hold.sh "$input" "$@"
+printf 'closed: %s\n' "${input%%$'\t'*}"
+SH
+  cat > "$fake/bin/fm-on.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+. "$(dirname "$0")/tb-fake-lib.sh"
+[ "$1" != --stdin ] || shift
+id=$1
+script=$2
+shift 2
+case "$script" in
+  fm-remote-file.sh) exit 1 ;;
+  fm-topic-board-read.sh) FM_HOME="$TB_REMOTES/$id" exec "$(dirname "$0")/$script" "$@" ;;
+esac
+input=$(cat)
+tb_fake "fm-on.sh.$script" "$input" "$id" "$@"
+case "$script" in
+  fm-topic.sh) FM_HOME="$TB_REMOTES/$id" exec "$(dirname "$0")/$script" "$@" ;;
+  fm-captain-hold.sh) printf 'closed: %s\n' "${input%%$'\t'*}" ;;
+esac
+SH
+  chmod +x "$fake"/bin/fm-on.sh "$fake"/bin/fm-inbox.sh "$fake"/bin/fm-send.sh "$fake"/bin/fm-captain-hold.sh
+}

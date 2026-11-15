@@ -9,8 +9,13 @@ import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
-import { fileSize, isAlive, isRecord, readCompleteLines, readPidFile, removeStaleTemps, stringField, writeFileAtomic, } from "./files.js";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { appendLine, fileSize, isAlive, isRecord, readCompleteLines, readPidFile, removeStaleTemps, stringField, writeFileAtomic, } from "./files.js";
 import * as actions from "./actions.js";
+import { createApi } from "./api.js";
+import { ConfirmStore } from "./confirm.js";
+import { serveBoard } from "./http.js";
 import { commandRunner } from "./commands.js";
 import { Journal, MAIN_HOME, Offsets, SUMMARY_KINDS, SUMMARY_MAX, Summaries } from "./journal.js";
 import { boardPaths, parseConfigArgs } from "./layout.js";
@@ -83,6 +88,8 @@ function movePosition(args) {
     const before = args["before"];
     if (args["first"] === true)
         return before === undefined ? { first: true } : null;
+    if (args["last"] === true)
+        return before === undefined ? { last: true } : null;
     if (before === undefined)
         return undefined;
     return typeof before === "string" ? { before } : null;
@@ -148,6 +155,10 @@ const TOPIC_HANDLERS = {
         if (id === null)
             return { usage: "archive 需要議題 id。" };
         return topics.archive(service.state, id, now());
+    },
+    keep: (service, args) => {
+        const id = stringField(args, "id");
+        return id === null ? { usage: "keep 需要議題 id。" } : topics.keepOpen(service.state, id);
     },
     reopen: (service, args) => {
         const id = stringField(args, "id");
@@ -358,11 +369,7 @@ async function handle(service, request) {
     const serviceHandler = SERVICE_HANDLERS[request.op];
     if (serviceHandler !== undefined)
         return serviceHandler(service, request.args);
-    const topicHandler = TOPIC_HANDLERS[request.op];
-    if (topicHandler === undefined)
-        return usage(`不認得的 op：${request.op}`);
-    const result = topicHandler(service, request.args);
-    return "usage" in result ? usage(result.usage) : commit(service, result);
+    return topicOp(service, request.op, request.args);
 }
 function parseRequest(line) {
     let raw;
@@ -512,6 +519,7 @@ function loadService(boot) {
         version: 1,
         ipc: null,
         poller: new Poller(run, journal, new Offsets(paths), timings, bump),
+        confirm: new ConfirmStore(),
         notifier: new DispatchNotifier(notifyDelay(), (ids) => notifyDispatchable(service, ids)),
         writes: new WriteEngine(paths.audit, {
             run,
@@ -529,6 +537,41 @@ function loadService(boot) {
     void service.writes.resumeUnfinished();
     return service;
 }
+/** Runs one topic operation the way the socket does, for the browser API. */
+function topicOp(service, op, args) {
+    const handler = TOPIC_HANDLERS[op];
+    if (handler === undefined)
+        return usage(`不認得的 op：${op}`);
+    const result = handler(service, args);
+    return "usage" in result ? usage(result.usage) : commit(service, result);
+}
+/** Starts answering browser requests on the port this process already holds. */
+function serveBrowser(service) {
+    const dist = path.dirname(fileURLToPath(import.meta.url));
+    const publicDir = path.join(dist, "..", "public");
+    serveBoard(service.web, {
+        port: service.config.port,
+        tokenFile: service.paths.token,
+        assetDirs: [publicDir, path.join(dist, "page")],
+        indexFile: path.join(publicDir, "index.html"),
+        api: createApi({
+            bootId: service.bootId,
+            version: () => service.version,
+            view: () => boardView(service),
+            touch: () => service.poller.touch(),
+            refresh: () => service.poller.refreshAll(),
+            topicOp: (op, args) => topicOp(service, op, args),
+            actionContext: () => actionContext(service),
+            writes: service.writes,
+            confirm: service.confirm,
+        }),
+        // Only the path is recorded: a query string could carry a token someone pasted into the URL.
+        onRejected: (reason, request) => {
+            const entry = { ts: new Date().toISOString(), rejected: reason, host: request.headers.host ?? null, origin: request.headers.origin ?? null, path: (request.url ?? "").split("?")[0] ?? null };
+            appendLine(service.paths.audit, JSON.stringify(entry), PRIVATE_FILE);
+        },
+    });
+}
 function bindSocket(service) {
     const { paths } = service;
     fs.rmSync(paths.socket, { force: true });
@@ -538,6 +581,7 @@ function bindSocket(service) {
     ipc.listen(paths.socket, () => {
         process.umask(previousMask);
         service.ipc = ipc;
+        serveBrowser(service);
         fs.rmSync(paths.startupError, { force: true });
         log(`ready on port ${service.config.port}, commit ${service.config.commit}`);
     });

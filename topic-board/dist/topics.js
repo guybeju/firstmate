@@ -197,6 +197,8 @@ function insertAt(queue, id, position, doc) {
         return queue.includes(id) ? queue : [...without, id];
     if ("first" in position)
         return [id, ...without];
+    if ("last" in position)
+        return [...without, id];
     const anchor = resolveTopicId(doc, position.before);
     const at = without.indexOf(anchor);
     if (anchor === id || at === -1)
@@ -277,4 +279,16 @@ export function reopen(state, rawId, queue) {
     next.doc.queues[target].push(id);
     const dispatchable = target === "later" ? [] : [id];
     return changed(next, `ok ${id} 已重開，放進「${QUEUE_LABEL[target]}」`, [{ kind: "topic.reopened", topic: id, text: `議題「${archived.name}」已重開，放進「${QUEUE_LABEL[target]}」` }], dispatchable);
+}
+/** Turns down firstmate's proposal to close a topic. */
+export function keepOpen(state, rawId) {
+    const id = resolveTopicId(state.doc, rawId);
+    const topic = state.doc.topics[id];
+    if (topic === undefined)
+        return archivedRefusal(state, id) ?? missing(rawId);
+    if (topic.close_proposal === undefined)
+        return unchanged(state, `ok ${id} 沒有關閉的提議`);
+    const next = clone(state);
+    delete next.doc.topics[id].close_proposal;
+    return changed(next, `ok ${id} 先不關`);
 }

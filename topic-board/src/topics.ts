@@ -272,12 +272,14 @@ export function closePropose(state: TopicState, rawId: string, rawReason: string
   ]);
 }
 
-export type MovePosition = { first: true } | { before: string } | undefined;
+/** Where in the queue a moved topic lands; undefined keeps a topic already in the queue where it is. */
+export type MovePosition = { first: true } | { last: true } | { before: string } | undefined;
 
 function insertAt(queue: string[], id: string, position: MovePosition, doc: TopicsDoc): string[] | string {
   const without = queue.filter((entry) => entry !== id);
   if (position === undefined) return queue.includes(id) ? queue : [...without, id];
   if ("first" in position) return [id, ...without];
+  if ("last" in position) return [...without, id];
   const anchor = resolveTopicId(doc, position.before);
   const at = without.indexOf(anchor);
   if (anchor === id || at === -1) return `--before 指的 ${position.before} 不在那個佇列裡。`;
@@ -360,4 +362,15 @@ export function reopen(state: TopicState, rawId: string, queue: Queue | undefine
     [{ kind: "topic.reopened", topic: id, text: `議題「${archived.name}」已重開，放進「${QUEUE_LABEL[target]}」` }],
     dispatchable,
   );
+}
+
+/** Turns down firstmate's proposal to close a topic. */
+export function keepOpen(state: TopicState, rawId: string): TopicResult {
+  const id = resolveTopicId(state.doc, rawId);
+  const topic = state.doc.topics[id];
+  if (topic === undefined) return archivedRefusal(state, id) ?? missing(rawId);
+  if (topic.close_proposal === undefined) return unchanged(state, `ok ${id} 沒有關閉的提議`);
+  const next = clone(state);
+  delete (next.doc.topics[id] as Topic).close_proposal;
+  return changed(next, `ok ${id} 先不關`);
 }

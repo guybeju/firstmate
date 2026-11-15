@@ -246,6 +246,7 @@ function topicViews(topics) {
             goal: topic.goal,
             status: topic.status,
             queue: QUEUES.find((queue) => topics.doc.queues[queue].includes(id)) ?? null,
+            suggested_queue: topic.suggested_queue ?? null,
             close_reason: topic.close_proposal?.reason ?? null,
             archived_at: null,
         };
@@ -256,6 +257,7 @@ function topicViews(topics) {
             goal: topic.goal,
             status: "archived",
             queue: null,
+            suggested_queue: null,
             close_reason: null,
             archived_at: topic.archived_at,
         };

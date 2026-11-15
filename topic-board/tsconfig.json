@@ -15,7 +15,16 @@
     "newLine": "lf",
     "sourceMap": false,
     "declaration": false,
-    "types": ["node"]
+    "types": [
+      "node"
+    ],
+    "lib": [
+      "es2023",
+      "dom",
+      "dom.iterable"
+    ]
   },
-  "include": ["src/**/*.ts"]
+  "include": [
+    "src/**/*.ts"
+  ]
 }

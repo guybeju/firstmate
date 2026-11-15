@@ -90,3 +90,13 @@ export function stringRecord(raw: unknown): Record<string, string> {
   }
   return result;
 }
+
+/** An error that carries the exit code or HTTP status to finish with. */
+export class CodedError extends Error {
+  constructor(
+    readonly code: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}

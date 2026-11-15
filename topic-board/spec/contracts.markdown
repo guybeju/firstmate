@@ -123,7 +123,7 @@
 
 - `state`：`sending`（送出中）、`retrying`（重試中，另帶 `attempt`、`next_at`、`error`）、`delivered`（已送達）、`handled_elsewhere`（已由別處處理）、`failed`（失敗，帶 `stderr`）、`undelivered`（未送達）、`unknown`（結果不明）、`ignored`（使用者按了忽略）。
 - 全文、對象、去重用的 key 只在 `sending` 那一行寫一次。
-- 被拒絕的瀏覽器請求另記 `{"ts":…,"rejected":"<原因>","host":…,"origin":…}`，不記 token。
+- 被拒絕的瀏覽器請求另記 `{"ts":…,"rejected":"<原因>","host":…,"origin":…,"path":…}`。`path` 只記路徑、不記查詢字串（有人可能把 token 貼在網址裡），所以紀錄裡不會有 token。
 
 ## 4. 彙整腳本的輸出
 
@@ -184,7 +184,7 @@
 3. 改變狀態的請求（非 GET）要求 `Origin` 精確等於 `http://127.0.0.1:<埠>` 或 `http://localhost:<埠>`；缺少或是 `null` 一律拒絕。
 4. 改變狀態的請求 `Content-Type` 只收 `application/json`，body 上限 64 KiB，解析失敗回 400。
 5. 靜態頁面不需要 token，但仍檢查 `Host`，而且不內嵌任何資料。
-6. 每個回應都帶 `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'` 與 `X-Frame-Options: DENY`。不設任何 CORS header。不回應 `OPTIONS` 預檢（回 405）。
+6. 每個回應都帶 `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'`、`X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`、`Cache-Control: no-store`。不設任何 CORS header。不回應 `OPTIONS` 預檢（回 405）。
 7. 不提供 WebSocket 或 SSE；`Upgrade` 請求回 400。
 
 token 是 32 位元組亂數的十六進位，第一次啟動時產生，之後不變，直到 `reset-token`。`fm-topic.sh open` 印出 `http://127.0.0.1:<埠>/#t=<token>`；頁面讀到後存進 `sessionStorage`、把 fragment 從網址列拿掉，之後用 header 帶。

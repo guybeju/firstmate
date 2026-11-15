@@ -10,7 +10,7 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { fileSize, isAlive, readPidFile } from "./files.js";
+import { CodedError, fileSize, isAlive, readPidFile } from "./files.js";
 import { boardPaths, parseConfigArgs } from "./layout.js";
 const EXIT_REFUSED = 1;
 const EXIT_USAGE = 2;
@@ -23,12 +23,7 @@ const POLL_MS = 200;
 const LOCK_TIMEOUT_MS = 30_000;
 const LOG_ROTATE_BYTES = 1024 * 1024;
 const SERVER_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), "board-server.js");
-class Exit extends Error {
-    code;
-    constructor(code, message) {
-        super(message);
-        this.code = code;
-    }
+class Exit extends CodedError {
 }
 function unavailable(reason, fix) {
     return new Exit(EXIT_UNAVAILABLE, `看板服務無法啟動：${reason}。${fix}。這次的要求沒有寫入。`);

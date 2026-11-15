@@ -89,3 +89,11 @@ export function stringRecord(raw) {
     }
     return result;
 }
+/** An error that carries the exit code or HTTP status to finish with. */
+export class CodedError extends Error {
+    code;
+    constructor(code, message) {
+        super(message);
+        this.code = code;
+    }
+}
