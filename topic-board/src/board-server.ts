@@ -19,22 +19,29 @@ import {
   stringField,
   writeFileAtomic,
 } from "./files.js";
+import * as actions from "./actions.js";
+import type { ActionContext, ActionResult } from "./actions.js";
 import { commandRunner } from "./commands.js";
 import { Journal, MAIN_HOME, Offsets, SUMMARY_KINDS, SUMMARY_MAX, Summaries } from "./journal.js";
 import { boardPaths, parseConfigArgs } from "./layout.js";
 import type { BoardConfig, BoardPaths } from "./layout.js";
 import { MAX_REQUEST_BYTES } from "./protocol.js";
 import type { BoardRequest, BoardResponse, HealthData } from "./protocol.js";
+import { DispatchNotifier } from "./notifier.js";
 import { DEFAULT_TIMINGS, Poller } from "./poller.js";
 import type { PollTimings } from "./poller.js";
 import { loadTopicState, saveTopicState } from "./store.js";
 import * as topics from "./topics.js";
 import type { MovePosition, Queue, TopicResult, TopicState } from "./topics.js";
 import { buildView, placeTask } from "./view.js";
+import { DEFAULT_WRITE_TIMINGS, WriteEngine } from "./writes.js";
+import type { WriteRecord, WriteTimings } from "./writes.js";
 
 const PRIVATE_FILE = 0o600;
 const HEALTH_PROBE_MS = 3000;
 const LOOKUP_WAIT_MS = 10_000;
+const NOTIFY_DELAY_MS = 30_000;
+const WRITE_HISTORY_MS = 24 * 60 * 60 * 1000;
 const TEST_MODE = process.env["FM_TOPIC_BOARD_TEST"] === "1";
 // sizeof(sun_path) minus the terminating NUL. Node silently truncates a longer
 // path instead of failing, so the length is checked before listening.
@@ -54,6 +61,8 @@ interface Service extends Boot {
   journal: Journal;
   summaries: Summaries;
   poller: Poller;
+  writes: WriteEngine;
+  notifier: DispatchNotifier;
   timings: PollTimings;
   /** Bumped whenever anything a viewer could see changes. */
   version: number;
@@ -103,6 +112,7 @@ function commit(service: Service, result: TopicResult): BoardResponse {
   if (!result.ok) return refused(result.line);
   if (result.changed) {
     saveTopicState(service.paths, service.state, result.state);
+    service.notifier.observe(service.state, result.state, result.dispatchable);
     service.state = result.state;
     for (const event of result.events) {
       service.journal.appendBoard({ ts: epochSeconds(), home: null, task: null, ...event });
@@ -288,11 +298,46 @@ async function which(service: Service, args: Record<string, unknown>): Promise<B
   return { ok: true, line: await reminderPrefix(service, home, task) };
 }
 
+function writeView(record: WriteRecord): Record<string, unknown> {
+  return {
+    id: record.id,
+    kind: record.plan.type,
+    home: record.home,
+    task: record.task,
+    topic: record.topic,
+    text: record.text,
+    state: record.state,
+    error: record.error,
+    attempt: record.attempt,
+    next_at: record.nextAt,
+    created_at: record.createdAt,
+  };
+}
+
+/** Writes worth showing: everything from the last day, plus anything still unsettled. */
+function visibleWrites(service: Service): Record<string, unknown>[] {
+  const settled = ["delivered", "handled_elsewhere", "ignored"];
+  const cutoff = Date.now() - WRITE_HISTORY_MS;
+  return [...service.writes.records.values()]
+    .filter((record) => record.createdAt >= cutoff || !settled.includes(record.state))
+    .map(writeView);
+}
+
+function actionContext(service: Service): ActionContext {
+  return {
+    topics: service.state,
+    homes: service.poller.snapshots(),
+    secondmates: service.poller.secondmates(),
+    writes: service.writes,
+  };
+}
+
 function boardView(service: Service): Record<string, unknown> {
   return {
     boot_id: service.bootId,
     version: service.version,
     polling: service.poller.active,
+    writes: visibleWrites(service),
     ...buildView({
       topics: service.state,
       homes: service.poller.snapshots(),
@@ -311,6 +356,42 @@ async function dump(service: Service, args: Record<string, unknown>): Promise<Bo
   return { ok: true, line: "ok", data: boardView(service) };
 }
 
+function actionResponse(result: ActionResult): BoardResponse {
+  return result.ok ? { ok: true, line: `ok ${result.write.id}`, data: { write_id: result.write.id } } : refused(result.line);
+}
+
+/** Test-only: submit a write the way the browser API will. */
+async function testWrite(service: Service, args: Record<string, unknown>): Promise<BoardResponse> {
+  const context = actionContext(service);
+  const field = (name: string): string => stringField(args, name) ?? "";
+  switch (args["kind"]) {
+    case "message":
+      return actionResponse(actions.message(context, field("topic"), field("text"), "socket"));
+    case "direct":
+      return actionResponse(actions.direct(context, field("home"), field("task"), field("text"), "socket"));
+    case "tag":
+      return actionResponse(actions.tagAgent(context, field("home"), field("task"), field("topic"), "socket"));
+    case "answer": {
+      const mode = actions.ANSWER_MODES.find((name) => name === args["mode"]);
+      if (mode === undefined) return usage("mode 要是 done 或 release。");
+      const input = { home: field("home"), task: field("task"), answer: field("answer"), label: field("label"), mode };
+      return actionResponse(actions.answer(context, input, "socket"));
+    }
+    default:
+      return usage("不認得的寫入種類。");
+  }
+}
+
+async function testResend(service: Service, args: Record<string, unknown>): Promise<BoardResponse> {
+  const problem = service.writes.resend(stringField(args, "write_id") ?? "", args["confirmed"] === true);
+  return problem === null ? { ok: true, line: "ok" } : refused(problem);
+}
+
+async function testIgnore(service: Service, args: Record<string, unknown>): Promise<BoardResponse> {
+  const problem = service.writes.ignore(stringField(args, "write_id") ?? "");
+  return problem === null ? { ok: true, line: "ok" } : refused(problem);
+}
+
 type AsyncHandler = (service: Service, args: Record<string, unknown>) => Promise<BoardResponse>;
 
 const SERVICE_HANDLERS: Record<string, AsyncHandler> = {
@@ -320,7 +401,7 @@ const SERVICE_HANDLERS: Record<string, AsyncHandler> = {
   "reset-token": async (service) => resetToken(service),
   summary,
   which,
-  ...(TEST_MODE ? { dump } : {}),
+  ...(TEST_MODE ? { dump, "test-write": testWrite, "test-resend": testResend, "test-ignore": testIgnore } : {}),
 };
 
 async function handle(service: Service, request: BoardRequest): Promise<BoardResponse> {
@@ -345,9 +426,11 @@ function parseRequest(line: string): BoardRequest | null {
   return { v: 1, op, args };
 }
 
-function shutdown(service: Boot & { ipc?: net.Server | null; poller?: Poller }): void {
+function shutdown(service: Boot & Partial<Pick<Service, "ipc" | "poller" | "writes" | "notifier">>): void {
   log("stopping");
   service.poller?.stop();
+  service.writes?.stop();
+  service.notifier?.stop();
   service.ipc?.close();
   service.web.close();
   for (const file of [service.paths.socket, service.paths.pid]) {
@@ -405,6 +488,54 @@ function pollTimings(): PollTimings {
   };
 }
 
+/** Test runs may shorten the write timings through FM_TOPIC_BOARD_RETRY_MS and _RESUME_MS. */
+function writeTimings(): WriteTimings {
+  if (!TEST_MODE) return DEFAULT_WRITE_TIMINGS;
+  const delays = (process.env["FM_TOPIC_BOARD_RETRY_MS"] ?? "").split(",").map(Number);
+  const resume = Number(process.env["FM_TOPIC_BOARD_RESUME_MS"]);
+  return {
+    ...DEFAULT_WRITE_TIMINGS,
+    ...(delays.every((delay) => Number.isFinite(delay) && delay > 0) ? { retryDelaysMs: delays } : {}),
+    ...(Number.isFinite(resume) && resume > 0 ? { resumeWindowMs: resume } : {}),
+  };
+}
+
+function notifyDelay(): number {
+  const override = Number(process.env["FM_TOPIC_BOARD_NOTIFY_MS"]);
+  return TEST_MODE && Number.isFinite(override) && override > 0 ? override : NOTIFY_DELAY_MS;
+}
+
+/** Tells firstmate which topics just became dispatchable, as one note. */
+function notifyDispatchable(service: Service, topicIds: string[]): void {
+  const names = topicIds
+    .filter((id) => service.state.doc.topics[id] !== undefined)
+    .map((id) => `「${service.state.doc.topics[id]?.name ?? id}」`);
+  if (names.length === 0) return;
+  service.writes.submit({
+    channel: "auto",
+    home: MAIN_HOME,
+    task: null,
+    topic: topicIds[0] ?? null,
+    text: `議題${names.join("、")}已可派工，請跑 order 重新評估`,
+    plan: {
+      type: "note",
+      requestId: `tb-dispatch-${crypto.randomBytes(8).toString("hex")}`,
+      body: `議題${names.join("、")}已可派工，請跑 order 重新評估`,
+    },
+  });
+}
+
+/** Records a delivered answer or tag as a system record and re-reads the home it changed. */
+function recordDelivery(service: Service, record: WriteRecord): void {
+  const kinds: Partial<Record<WriteRecord["plan"]["type"], string>> = { answer: "hold.answered", tag: "agent.tagged" };
+  const kind = kinds[record.plan.type];
+  if (kind === undefined) return;
+  const text = record.plan.type === "answer" ? `在看板回答 ${record.home}/${record.task ?? ""}：${record.text}` : `${record.home}/${record.task ?? ""} ${record.text}`;
+  service.journal.appendBoard({ ts: epochSeconds(), kind, topic: record.topic, home: record.home, task: record.task, text });
+  service.version += 1;
+  void service.poller.readNow(record.home);
+}
+
 /** Loads everything the board keeps on disk and returns the running service's state. */
 function loadService(boot: Boot): Service {
   const { paths } = boot;
@@ -412,9 +543,12 @@ function loadService(boot: Boot): Service {
   for (const dir of [paths.runtimeDir, paths.dataDir, paths.boardDataDir]) {
     for (const name of removeStaleTemps(dir)) log(`removed stale temp file ${name} in ${dir}`);
   }
-  readCompleteLines(paths.audit);
   const timings = pollTimings();
   const journal = new Journal(paths.events);
+  const run = commandRunner(boot.config);
+  const bump = (): void => {
+    service.version += 1;
+  };
   const service: Service = {
     ...boot,
     state: loadTopicState(paths),
@@ -423,10 +557,27 @@ function loadService(boot: Boot): Service {
     timings,
     version: 1,
     ipc: null,
-    poller: new Poller(commandRunner(boot.config), journal, new Offsets(paths), timings, () => {
-      service.version += 1;
-    }),
+    poller: new Poller(run, journal, new Offsets(paths), timings, bump),
+    notifier: new DispatchNotifier(notifyDelay(), (ids) => notifyDispatchable(service, ids)),
+    writes: new WriteEngine(
+      paths.audit,
+      {
+        run,
+        secondmates: () => service.poller.secondmates(),
+        readTags: async (home, task) =>
+          (await service.poller.readFresh(home))
+            ? (service.poller.snapshots().find((entry) => entry.id === home)?.report?.topics[task] ?? "")
+            : null,
+        prepare: async () => {
+          await service.poller.readNow(MAIN_HOME);
+        },
+        onChange: bump,
+        onDelivered: (record) => recordDelivery(service, record),
+      },
+      writeTimings(),
+    ),
   };
+  void service.writes.resumeUnfinished();
   return service;
 }
 
