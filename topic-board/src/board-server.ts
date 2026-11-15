@@ -344,10 +344,22 @@ function actionContext(service: Service): ActionContext {
   };
 }
 
+/**
+ * What a viewer compares to learn that the board changed. A home going stale is
+ * a change no read announces, so each home's staleness is part of the version.
+ */
+function viewVersion(service: Service): string {
+  const now = Date.now();
+  const stale = service.poller
+    .snapshots()
+    .map((home) => (home.lastOkAt === null || now - home.lastOkAt > service.timings.staleMs ? "1" : "0"));
+  return `${service.version}-${stale.join("")}`;
+}
+
 function boardView(service: Service): Record<string, unknown> {
   return {
     boot_id: service.bootId,
-    version: service.version,
+    version: viewVersion(service),
     polling: service.poller.active,
     writes: visibleWrites(service),
     ...buildView({
@@ -610,7 +622,7 @@ function serveBrowser(service: Service): void {
     indexFile: path.join(publicDir, "index.html"),
     api: createApi({
       bootId: service.bootId,
-      version: () => service.version,
+      version: () => viewVersion(service),
       view: () => boardView(service),
       touch: () => service.poller.touch(),
       refresh: () => service.poller.refreshAll(),

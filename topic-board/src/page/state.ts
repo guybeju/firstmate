@@ -16,7 +16,7 @@ export interface WriteView {
   created_at: number;
 }
 
-export type View = BoardView & { boot_id: string; version: number; polling: boolean; writes: WriteView[] };
+export type View = BoardView & { boot_id: string; version: string; polling: boolean; writes: WriteView[] };
 
 /** The first half of a two-step action, waiting for the captain to confirm. */
 export interface Pending {

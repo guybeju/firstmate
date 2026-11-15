@@ -131,6 +131,18 @@ secondmates_section() {
   fi | jq -s '.' > "$out"
 }
 
+# The commit of the code this home runs. A home is normally its own checkout,
+# and a local secondmate home can lag behind the main home whose script is
+# reading it, so the home's own HEAD is preferred over the code root's.
+home_commit() {
+  local top
+  top=$(git -C "$FM_HOME" rev-parse --show-toplevel 2>/dev/null || true)
+  if [ -n "$top" ] && [ "$(cd "$top" && pwd -P)" = "$(cd "$FM_HOME" && pwd -P)" ]; then
+    git -C "$FM_HOME" rev-parse HEAD 2>/dev/null && return 0
+  fi
+  git -C "$FM_ROOT" rev-parse HEAD 2>/dev/null || true
+}
+
 main() {
   local offset prefix home is_secondmate=false ledger_enabled=false code_commit
   if [ "${1:-}" = --in-home ]; then
@@ -167,7 +179,7 @@ main() {
   if [ -e "$CONFIG/fleet-ledger" ]; then
     ledger_enabled=true
   fi
-  code_commit=$(git -C "$FM_ROOT" rev-parse HEAD 2>/dev/null || true)
+  code_commit=$(home_commit)
 
   jq -n --argjson schema "$SCHEMA" --arg code_commit "$code_commit" \
     --argjson ledger_enabled "$ledger_enabled" --argjson is_secondmate "$is_secondmate" \

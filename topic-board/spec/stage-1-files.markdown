@@ -102,7 +102,7 @@
    - `--in-home`：id 不存在、id 是遠端的，都被拒；`answers` 的輸出與 exit code 原樣傳回（用假的 `fm-captain-hold.sh`）。
    - 彙整腳本：`0 -` 的全量、接續的 delta、帳本被截斷後的 `continuity-broken`、沒有帳本的 `absent`、超過 256 KiB 時 `more: true`、輸出通過 `jq -e .schema`。
 2. `<clone>/bin/fm-lint.sh bin/fm-topic.sh bin/fm-topic-board-read.sh` 沒有任何訊息。
-3. `/bin/bash -n` 兩支腳本都過；`shfmt -d` 沒有差異（縮排照上游既有的腳本）。
+3. `/bin/bash -n` 兩支腳本都過；`shfmt -d` 沒有差異（縮排照上游既有的腳本）。實作時這兩項沒有做到位：這台的 `/bin/bash` 是 5.3、沒有 docker 權限可以跑 3.2，也沒有裝 `shfmt`。bash 3.2 相容只靠人工避開新語法（沒有關聯陣列、`mapfile`、`${var,,}`），要在 macOS 上補跑一次。
 4. `<clone>/bin/fm-doc-audience-check.sh` 回 `ok`；`<clone>/bin/fm-test-run.sh --check-coverage` 回 0。這兩條證明沒有碰到上游的清單。
 5. `git -C <clone> diff --stat carry...HEAD` 只有新增的檔（`--diff-filter=A` 之外是空的）。
 6. 在暫時的 `FM_HOME` 手動跑一次 `tag`、`list`、`order`、`setup`，輸出貼進 PR。

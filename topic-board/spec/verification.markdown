@@ -55,15 +55,30 @@
 | 上游既有的 TypeScript 怎麼跑 | `tests/fm-commandcode-harness.test.sh:81-100`、`tests/fm-pi-primary-types.test.sh:2-6` | 靠 node 原生的 type stripping，載不了就 `skip:`；型別檢查在暫存目錄臨時裝 TypeScript。repo 裡沒有 `tsconfig.json`、沒有 lockfile。上游對 node 的最低版本沒有明文 |
 | 壓縮後會重印啟動摘要（偏好檔那張） | `docs/sessionstart-nudge.md:68-72`；`bin/fm-session-start.sh:1057-1058` | 文件與程式都這樣寫（規劃時已確認）。實際行為仍列在未驗 |
 
+## 二之一、實作時（2026-11-16）補驗的
+
+| 項目 | 做了什麼 | 結果 |
+| --- | --- | --- |
+| 1-3 到 1-5（部分） | 用真的 `fm-fleet-snapshot.sh` 讀手寫的 `data/backlog.md` | 不帶 `hold-kind` 的 hold 是 `hold_kind: null`、`hold_reason` 原樣；`state`、`hold_until`、`unresolved_blocker_ids` 足以判斷可派；origin 在 `body_lines`，格式 `Captain hold origin: <task-id>`。沒有經過真的 `tasks-axi` 寫入，`unhold` 的確切名稱仍未驗 |
+| 3-4 | 30 000 筆、9.9 MB 的 `events.jsonl` | 從下指令到服務可連 0.6 秒 |
+| 6-1 | 對新建的 `data/captain-shared.md` 跑上游的 `shared_captain_header_valid` | 通過 |
+| C1 的現象 | 第三段的測試裡，假的 `fm-on.sh` 記下收到的呼叫 | 主 home 每次讀取，上游的 snapshot 確實自己去抓一台遠端的 `home-summary.json` |
+| 並行啟動 | 三個指令同時啟動服務 | 沒有啟動鎖時會誤判成「埠被別的程式佔用」；加鎖後只留一個服務 |
+| 真的 `fm-inbox.sh` | 暫時的 `FM_HOME`，從 API 送一則訊息，執行的是上游原本的腳本 | 已送達：note 存進 `state/inbox/`，request id 有登記 |
+| 真的 `fm-send.sh` | 同上，直送一個不存在的 task | 回非 0，寫入記成「失敗」並附 stderr。送到真的 worker 還沒驗 |
+| 瀏覽器 | 無頭 Firefox 154 經 WebDriver BiDi 走完整個使用流程 | 通過。Chrome、真的滑鼠拖曳未驗 |
+| 上游的檢查 | `bin/fm-doc-audience-check.sh`、`bin/fm-test-run.sh --check-coverage`、`tests/fm-documentation-audiences.test.sh`、`bin/fm-lint.sh` 對三支新腳本 | 都過；六段相對 `carry` 只有新增的檔（91 個） |
+
 ## 三、未驗
 
 | 項目 | 原因 | 所屬 |
 | --- | --- | --- |
+| `unhold` 的確切指令名稱；經真的 `tasks-axi` 寫入的 hold 欄位 | 沒有 `tasks-axi` | 第一段 1-3 |
+| bash 3.2 的語法相容、`shfmt` 的格式 | 沒有 bash 3.2、沒有 docker 權限、沒有裝 `shfmt` | 第一段的驗收 |
+| CRAP 分數與 mutation testing | 測試是從 `fm-topic.sh` 進去的 Bash 整合測試，跑的是編譯後的 `dist/`；`crapper-axi`、`mutator-axi` 拿不到覆蓋率（mutator 回報 97 個位置都沒被覆蓋）。複雜度有量，全部 8 以下 | 全部 |
 | 服務活過 Claude Code session 結束 | 要結束目前的 session 才能驗，這次做不到。已驗到的部分見上 | 第二段 2-1 |
 | macOS 上比對 `pid` 的指令列 | 這台是 Linux | 第二段 2-2 |
 | `tsc` 的輸出跨機器逐位元組相同 | 這次沒有裝 `typescript` | 第二段 2-3 |
-| `fm-tasks-axi.sh hold` 不帶 `--kind captain` 的行為、`unhold` 的確切名稱 | 沒有 `tasks-axi` | 第一段 1-3、1-4 |
-| `Captain hold origin:` 那一行的格式 | 沒有 `tasks-axi`，開不了 hold | 第一段 1-5 |
 | task 多時一次 snapshot 的耗時 | 這個 home 沒有任何 task | 第一段 1-2 |
 | 主 home 每輪抓遠端摘要的成本 | 沒有 secondmate | 第一段 1-1 |
 | `fm-on.sh` 經遠端 lane 的排隊延遲與 job 逾時 | 沒有 secondmate | 第一段 1-6 |
@@ -71,13 +86,11 @@
 | 用主 home 的程式碼對同機 secondmate home 跑 `answers` | 沒有 secondmate | 第一段 1-8 |
 | parent channel 的每一行帶子 task 的 id；手上的文字夠寫摘要 | 沒有 secondmate | 第三段 3-1、3-2 |
 | 遠端沒有彙整腳本時 stderr 的確切字串 | 沒有 secondmate | 第三段 3-3 |
-| `events.jsonl` 的大小與啟動時間 | 可以在這台做，留給實作時用真的服務量 | 第三段 3-4 |
 | secondmate 照字面轉達「轉給」的訊息、轉不出去時回報 | 沒有 secondmate，而且要先裝規則 | 第四段 4-2 |
 | `fm-on.sh --stdin … answers` 寫進遠端的 hold | 沒有 secondmate | 第四段 4-3 |
 | `done` 與 `release` 兩種作答之後，被 hold 的項目各變成什麼狀態、會不會被 `order` 列為可派 | 沒有 `tasks-axi` | 第四段 4-4 |
 | 設了容量之後照 `order` 的順序拿空位 | 主 home 還不能派工 | 上線 R-7 |
 | 原生拖放在 Chrome 上；議題很多時的側欄；兩個情境的截圖 | 這次沒有開瀏覽器 | 第五段 5-1 到 5-3 |
-| 新建的 `captain-shared.md` 檔頭通過上游的傳播驗證 | 要先有 `install-rules` | 第六段 6-1 |
 | first mate 會不會照規則在對的時機跑指令 | 主 home 還不能用；這是整個看板最依賴模型的地方 | 第六段 6-2 |
 | 壓縮後 Claude Code 實際重印了摘要 | 主 home 還不能用 | 第六段 6-3 |
 | stow 之後區塊的標記還在 | 主 home 還不能用 | 第六段 6-4 |

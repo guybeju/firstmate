@@ -12,7 +12,7 @@ import type { WriteEngine } from "./writes.js";
 /** What the API needs from the running service. */
 export interface ApiHost {
   bootId: string;
-  version: () => number;
+  version: () => string;
   view: () => Record<string, unknown>;
   /** Records that a viewer is present, which keeps polling going. */
   touch: () => void;

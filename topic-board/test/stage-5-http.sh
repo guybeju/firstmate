@@ -124,6 +124,7 @@ test_response_headers_and_exposure() {
 
 test_topic_routes() {
   local version
+  api refresh '{}' >/dev/null
   assert_equals "billing login" "$(state '.queues.normal | join(" ")')" "the state must carry the queues"
   version=$(state '"\(.boot_id):\(.version)"')
   assert_equals false "$(curl -s -H "$AUTH" "$BASE/api/state?v=$version" | jq -r '.changed')" "an unchanged board answers changed: false"
@@ -236,6 +237,31 @@ test_messages_and_writes() {
   pass "messages, direct messages, tags, resend, and ignore work through the API"
 }
 
+test_quiet_polling_is_not_a_change() {
+  local version
+  t stop >/dev/null
+  FM_TOPIC_BOARD_LOCAL_MS=300 FM_TOPIC_BOARD_STALE_MS=4000 FM_TOPIC_BOARD_IDLE_MS=2000 t open >/dev/null
+  AUTH="Authorization: Bearer $(cat "$MAIN/state/topic-board/token")"
+  curl -s -H "$AUTH" "$BASE/api/state" >/dev/null
+  sleep 2
+  version=$(state '"\(.boot_id):\(.version)"')
+  sleep 1.5
+  assert_equals false "$(curl -s -H "$AUTH" "$BASE/api/state?v=$version" | jq -r '.changed')" \
+    "polls that find nothing new must not make the page redraw"
+  : > "$MAIN/config/fleet-ledger"
+  sleep 1.5
+  assert_equals true "$(curl -s -H "$AUTH" "$BASE/api/state?v=$version" | jq -r '.changed')" \
+    "a poll that finds something new must reach the page"
+  version=$(state '"\(.boot_id):\(.version)"')
+  # Nobody asks for long enough that polling stops and the home goes stale.
+  sleep 6.5
+  assert_equals "true|true" "$(curl -s -H "$AUTH" "$BASE/api/state?v=$version" | jq -r '"\(.changed)|\(.homes[0].stale)"')" \
+    "a home going stale must reach the page even though no read reported it"
+  t stop >/dev/null
+  t open >/dev/null
+  pass "the page is told about changes, including staleness, and nothing else"
+}
+
 test_reset_token() {
   t reset-token >/dev/null
   assert_equals 401 "$(status -H "$AUTH" "$BASE/api/state")" "the old token must stop working after a reset"
@@ -244,5 +270,5 @@ test_reset_token() {
 }
 
 fm_test_run test_request_checks test_response_headers_and_exposure test_topic_routes test_merge_takes_two_steps \
-  test_answer_takes_two_steps test_messages_and_writes test_reset_token
+  test_answer_takes_two_steps test_messages_and_writes test_quiet_polling_is_not_a_change test_reset_token
 t stop >/dev/null

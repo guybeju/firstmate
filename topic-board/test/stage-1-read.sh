@@ -155,6 +155,9 @@ test_secondmates_and_in_home() {
   assert_equals false "$(printf '%s' "$out" | jq -r 'has("secondmates")')" "a secondmate home must not output secondmates"
   expect_code 1 "$(tb_code "$home" "$BOARD_READ" --in-home far1 0 -)" "--in-home with a remote secondmate"
   expect_code 1 "$(tb_code "$home" "$BOARD_READ" --in-home nobody 0 -)" "--in-home with an unknown secondmate"
+  fm_git_init_commit "$sm"
+  assert_equals "$(git -C "$sm" rev-parse HEAD)" "$(read_board "$home" --in-home sm1 0 - | jq -r '.code_commit')" \
+    "a home that is its own checkout must report its own commit, not the reading home's"
   pass "the main home lists secondmates and --in-home reads a local secondmate home"
 }
 

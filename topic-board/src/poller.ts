@@ -155,6 +155,8 @@ export class Poller {
 
   private async readHome(home: HomeState): Promise<boolean> {
     let ok = false;
+    const before = fingerprint(home);
+    const eventsBefore = this.journal.events.length;
     for (let reads = 0; reads < MAX_CATCH_UP_READS; reads += 1) {
       const timeout = home.remote ? this.timings.remoteTimeoutMs : this.timings.localTimeoutMs;
       const result = await this.run(this.command(home), this.secondmates(), timeout);
@@ -162,7 +164,9 @@ export class Poller {
       ok = home.error === null;
       if (!more) break;
     }
-    this.onChange();
+    // A read that found nothing new must not look like a change, or every
+    // viewer would redraw the whole page on every poll.
+    if (fingerprint(home) !== before || this.journal.events.length !== eventsBefore) this.onChange();
     return ok;
   }
 
@@ -235,6 +239,13 @@ export class Poller {
       if (home.report !== null) home.version = versionOf(home.id, home.report.code_commit, main);
     }
   }
+}
+
+/** Everything about a home that a viewer could see, apart from when it was last read. */
+function fingerprint(home: HomeState): string {
+  const { report } = home;
+  const shown = report === null ? null : { ...report, ledger: null };
+  return JSON.stringify([home.error, home.version, home.remote, shown]);
 }
 
 function versionOf(home: string, commit: string, mainCommit: string): HomeSnapshot["version"] {

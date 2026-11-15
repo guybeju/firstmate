@@ -35,7 +35,7 @@
 | `topic-board/rules/` | 三個規則範本，副檔名 `.md.tmpl` | 六 |
 | `topic-board/spec/` | 這份 spec，副檔名 `.markdown` | 一 |
 | `topic-board/test/` | fork 自己的測試與 `run.sh` | 一起 |
-| `topic-board/package.json`、`package-lock.json`、`tsconfig.json`、`.gitignore` | 只有開發期相依；`.gitignore` 忽略 `node_modules/` | 二 |
+| `topic-board/package.json`、`pnpm-lock.yaml`、`tsconfig.json`、`.gitignore` | 只有開發期相依；`.gitignore` 忽略 `node_modules/` 與 `.metrics/` | 二 |
 
 硬性限制（都實測過，見 [verification](verification.markdown)）：
 
@@ -59,6 +59,8 @@
 | `state/topic-board/board.sock` | 0600 | Unix socket | 服務 |
 | `state/topic-board/token` | 0600 | 瀏覽器用的 token | 服務 |
 | `state/topic-board/port`、`pid` | 0600 | 實際的埠、服務的 pid | 服務 |
+| `state/topic-board/startup-error` | 0600 | 上一次啟動失敗的原因，一行 JSON；啟動成功就刪掉 | 服務 |
+| `state/topic-board/start.lock/` | — | 啟動鎖（目錄），裡面記持有它的 client 的 pid | node client |
 | `state/topic-board/service.log`、`service.log.1` | 0600 | 服務的 stdio | 服務 |
 | `state/topic-board/audit.jsonl` | 0600 | 稽核紀錄，只追加 | 服務 |
 | `state/topic-board/rules-backup/` | 0700 | 偏好檔的備份 | `install-rules` |
@@ -171,7 +173,7 @@
 
 `state/topic-board/board.sock`，0600，不帶 token。一條連線一個要求：client 送一行 JSON `{"v":1,"op":"<名稱>","args":{…}}`，服務回一行 JSON `{"ok":true,"line":"<要印的那一行>",…}` 或 `{"ok":false,"code":"refused|usage|…","line":"<原因與修法>"}`，然後關閉連線。
 
-`op` 的清單：`health`、`status`、`stop`、`propose`、`confirm`、`merge`、`close-propose`、`move`、`rename`、`goal`、`archive`、`reopen`、`summary`、`which`、`reset-token`。`open` 與 `restart` 由 client 用 `health` 與 `stop` 組出來。另有只給測試用的 `dump`、`test-write`、`test-resend`、`test-ignore`，只在服務的環境變數 `FM_TOPIC_BOARD_TEST=1` 時註冊，平常送這些 `op` 會得到「不認得的 op」。
+`op` 的清單：`health`、`status`、`stop`、`propose`、`confirm`、`merge`、`close-propose`、`move`、`rename`、`goal`、`archive`、`reopen`、`keep`（清掉關閉的提議；`fm-topic.sh` 沒有對應的子命令，頁面的「先不關」用它）、`summary`、`which`、`reset-token`。`open` 與 `restart` 由 client 用 `health` 與 `stop` 組出來。另有只給測試用的 `dump`、`test-write`、`test-resend`、`test-ignore`，只在服務的環境變數 `FM_TOPIC_BOARD_TEST=1` 時註冊，平常送這些 `op` 會得到「不認得的 op」。
 
 `health` 回 `{"ok":true,"pid":…,"port":…,"code_commit":…,"boot_id":…,"started_at":…}`。
 
@@ -191,7 +193,7 @@ token 是 32 位元組亂數的十六進位，第一次啟動時產生，之後�
 
 API 的路徑與 body 由第五段定；這裡只定兩件事：
 
-- **輪詢**：`GET /api/state?v=<boot_id>:<版本號>`。版本沒變回 `{"changed":false}`；`boot_id` 不同一律回全量。
+- **輪詢**：`GET /api/state?v=<boot_id>:<版本>`。版本沒變回 `{"changed":false}`；`boot_id` 不同一律回全量。版本是一個字串：一個只在「看得到的東西真的變了」時才加一的計數，加上每個 home 是否過期的旗標。輪詢讀到一模一樣的結果不算變；某個 home 跨過過期線算變（那一刻沒有任何讀取會回報它）。
 - **兩步確認**：第一個請求回 `{"confirm":"<碼>","expires_at":…}`，碼約 2 分鐘有效、只能用一次、只存在記憶體；第二個請求帶碼才執行。碼綁定當時的對象，對象變了就拒絕。哪些動作要兩步，見第 8 節。
 
 生命週期的操作（`status`、`stop`、`restart`）與 `summary`、`which` 只在 socket 提供。`reset-token` 也只在 socket 提供。
