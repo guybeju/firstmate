@@ -1,0 +1,143 @@
+# 第五段：瀏覽器通道與頁面
+
+做完之後：`bin/fm-topic.sh open` 印出的網址打得開看板，四塊功能（看板與更新、待決佇列、輸入框、拖曳優先級）都能用。
+
+版面的依據是原型的變體 C（規劃目錄裡的 `prototype/board-prototype.html`，用 `?variant=C` 開；它是單一 HTML、假資料）。實作這一段的 PR 把那個檔複製成 `topic-board/test/prototype-variant-c.html` 當對照，不被服務提供。
+
+## 先驗再做
+
+| # | 要驗的事 | 怎麼驗 | 假設不成立時 |
+| --- | --- | --- | --- |
+| 5-1 | 原生拖放在使用者實際用的瀏覽器上可用。原型只由使用者在 Firefox 試過 | 用 Chrome 與 Firefox 各開一次原型的變體 C，拖一張卡跨佇列、按 Esc 取消 | 某個瀏覽器不行就在頁面上對它顯示「上移／下移／移到…」的按鈕當後備；按鈕本來就要有（鍵盤可用） |
+| 5-2 | 議題很多時側欄的表現（原型只有五個議題） | 用 40 個假議題開原型 | 側欄各佇列內部可捲動，佇列標題固定 |
+| 5-3 | 「看板服務沒有回應」與「帳本未開」兩個情境的畫面（原型有做，沒人看過截圖） | 用 `?variant=C&scene=down` 與 `scene=noledger` 開原型，截圖貼進 PR | 版面有問題就在這一段調，不必回頭開票 |
+| 5-4 | 惡意網頁打不進來 | 驗收第 2 條的那組 `curl` | 任何一條沒被擋就是這一段的 bug，不能合併 |
+
+5-1 到 5-3 都是這一段開工時就能做的。
+
+## 要做的事
+
+### TCP 通道
+
+照 [contracts](contracts.markdown) 第 6.2 節的七項檢查實作，寫成每個請求最先經過的一層。第二段綁住的埠在這一段開始提供內容。
+
+靜態檔：`GET /` 回 `topic-board/public/index.html`；`GET /assets/<檔名>` 回 `public/` 的 CSS 與 `dist/page/` 的頁面腳本，檔名只接受 `[a-z0-9.-]+`，對照寫死的清單，不做路徑拼接。CSP 是 `default-src 'self'`，所以頁面沒有行內的 `<script>`、沒有 `<style>` 區塊、也不用 `style="…"` 屬性（這個 CSP 三種都會擋；原型大量使用 `style` 屬性，搬過來時要改成 class）。樣式全在 `board.css`；腳本需要動態改樣式時用 `element.style.x = …` 或切換 class，這不受 CSP 限制。不載入任何外部資源，不用任何前端函式庫。
+
+### API
+
+全部在 `/api/` 底下，都要 token。回應一律 JSON。
+
+| 方法與路徑 | body | 作用 |
+| --- | --- | --- |
+| `GET /api/state?v=<boot_id>:<n>` | — | 看板狀態。沒變回 `{"changed":false}`；`boot_id` 不同回全量。每次呼叫都算「有人在看」，維持輪詢 |
+| `POST /api/refresh` | `{}` | 立刻更新 |
+| `POST /api/topics/confirm` | `{id, queue?}` | 確認提議 |
+| `POST /api/topics/move` | `{id, queue, before?}` | 拖曳的落點；`before` 省略就是尾端 |
+| `POST /api/topics/rename`、`/goal` | `{id, value}` | 改名、改目標 |
+| `POST /api/topics/archive`、`/reopen` | `{id, queue?}` | 封存、重開 |
+| `POST /api/topics/keep` | `{id}` | 對提議關閉按「先不關」：清掉 `close_proposal` |
+| `POST /api/topics/merge` | `{from, into, confirm?}` | 議題併議題，兩步 |
+| `POST /api/agents/tag` | `{home, task, topic}` | 歸併 agent |
+| `POST /api/messages` | `{topic, text}` | 給主 first mate |
+| `POST /api/direct` | `{home, task, text}` | 直送 |
+| `POST /api/holds/answer` | 第一步 `{home, task, answer, label}`；第二步再加 `{confirm, mode}`，`mode` 是 `done` 或 `release` | 作答，兩步 |
+| `POST /api/writes/resend` | `{write_id, confirm?}` | 重送；結果不明的要兩步 |
+| `POST /api/writes/ignore` | `{write_id}` | 忽略 |
+
+議題操作和 socket 上的同名操作是同一套伺服器函式。`/api/topics/keep` 是頁面才有的（原型的「先不關」），它只清欄位。瀏覽器這條通道沒有 `propose`、`close-propose`、`summary`、`which`、`stop`、`restart`、`reset-token`。
+
+錯誤回應：`{"error":"<代碼>","message":"<給人看的一行>"}`。401 是 token 不對：頁面顯示「token 已重置或無效，請在終端機重新跑 `bin/fm-topic.sh open`」並停止輪詢。
+
+### 頁面
+
+單頁，原生的 DOM 操作。每 5 秒輪詢一次 `/api/state`（分頁在背景時停）。頁面腳本用 TypeScript 寫在 `topic-board/src/page/`，由同一個 `tsc` 編到 `dist/page/`，不打包。
+
+**首頁**，由上而下：
+
+1. 等你決定：所有 live 的待決事項，跨議題列在一起，照 [第三段](stage-3-data.markdown)的順序。每張卡標議題名稱與所在的 home。提議關閉的議題也列在這段。
+2. 最近的結果：里程碑摘要，四種都列，附議題名稱；`failed` 用卡住的顏色標出（採建議 C11）。
+3. 進行中：燈號是進行中、卡住、未知的 agent，一個一列，附議題與 home。
+4. 排定的：待辦佇列的議題，加上暫緩的待決事項與原因。
+5. 未分類區。
+
+**左側欄**「優先順序」：高、一般、待辦三個佇列由上而下，「待辦」標明不自動開工。最下面是「已封存」，預設收合，展開後每個議題有「重開」。
+
+**議題卡**：名稱、agent 數、各燈號的數量、待你決定的數量、「提議關閉」的標記、「沒送到」的紅點計數。不顯示目標。
+
+**拖曳**：
+
+- 拖的當下就更新順序：卡片跟著游標插到新位置，其他卡片即時讓開；放開才送 `/api/topics/move`；按 Esc 回到原位。
+- 用瀏覽器原生的拖放。拖曳中的卡片用虛線框與淡色標示。空的佇列在拖曳中顯示落點提示，拖曳結束就消失（原型的小瑕疵在這裡修掉）。
+- 每張卡另有鍵盤可用的「移到…」選單（高、一般、待辦，最前或最後）。
+- 放開後右下角出一則回饋，6 秒後自動消失，點一下也會關掉：
+  - 從待辦拖出：倒數 30 秒，寫明時間到會通知 first mate、拖回去就不通知；倒數結束前不消失。
+  - 其他順序調整：「first mate 下次重新評估派工時才會照新順序，不會馬上開工」。
+  - 拖進待辦：「已經在跑的 worker 不會停；還在排隊的項目要等 first mate 下次重新評估才會被停住」。
+- 不做卡片移動的滑動動畫。
+
+**議題頁**，單欄，由上而下：
+
+1. 標題列：名稱、所在佇列、右邊一個「⋯」選單。
+2. 一行目標。
+3. 待決佇列：提議關閉的卡在最上面（「關閉並封存」「先不關」），接著 live 的待決事項，「暫緩」收合在下面，最後是不能作答的 worker 提問。
+4. 更新：里程碑摘要用底色與左邊線標出、前面有 kind 的小標籤、有 PR 就接連結；系統紀錄用斜體；帳本事件是一般文字。新的在上。
+5. 關聯 agent：燈號、task id、home、最後更新時間、狀態原文、直送的輸入框與按鈕。按鈕上的字是「直送」或「經 <secondmate> 轉達」。
+6. 輸入框黏在視窗底部，送給主 first mate。
+
+**改名、改目標、手動封存、議題併議題放在哪**（這次補定的）：都在議題頁，不在側欄的卡片上。側欄的卡片是拖曳的對象，又窄，不放按鈕。
+
+- 改名、改目標：標題與目標旁各一個「編輯」鈕，按下後原地變成輸入框，Enter 儲存、Esc 取消。
+- 「⋯」選單有兩項：
+  - 「封存」：選單下方出現一次畫面內的確認，寫明「排隊中的項目會被停住，已經在跑的不會停；之後可以在『已封存』重開」。
+  - 「併入其他議題…」：選一個已確認的議題，走伺服器的兩步確認，第二步寫明「併入之後不能拆開，<舊名稱> 的 agent 與更新都會顯示在 <新名稱> 底下」。
+- 提議中的議題在未分類區，點名稱一樣進議題頁，改名與改目標相同；它的「⋯」選單沒有「封存」。
+
+**待決事項的卡**：問題原文保留換行；有選項就畫按鈕，文字框一律有（單行）。按下任何選項或送出文字，卡片裡出現第二步確認（文字與兩個送出鈕見 [contracts](contracts.markdown) 第 8 節），選了其中一個才送。暫緩的 hold 展開後一樣可以作答。
+
+**寫入的狀態**：顯示在它送出的地方（agent 列、hold 卡片、輸入框下方），一行：原文、狀態標籤、錯誤說明。失敗、未送達、結果不明三種有「重送」與「忽略」。結果不明按重送先出現一次警告「可能會重複送出」，再按才送。以 `/`、`$`、`-` 開頭的直送在送出前就在頁面上擋下並說明原因（伺服器也擋）。
+
+**未分類區**有四種東西：
+
+- 提議中的議題：「確認」按鈕標出會放進哪個佇列，旁邊可以改選佇列；另有「歸併到…」的下拉選單（走議題併議題的兩步）。
+- 沒有有效標記的 agent：寫出原因（沒有標記、id 對不上、議題還在提議中），附「歸併到…」。
+- 沒標記 task 的里程碑摘要。
+- 沒歸屬的待決事項，可以直接作答。
+
+**整頁的狀態**：
+
+- 看板服務沒有回應（輪詢連續失敗 3 次）：頁首下方一條紅色橫幅，說明畫面是最後拿到的資料、現在送不出東西，並給出 `bin/fm-topic.sh open`。這時送出類的按鈕只提示沒有送出。
+- `boot_id` 變了：整頁重拉資料；畫面上進行到一半的兩步確認作廢，提示重做。
+- 某個 home 過期：一條黃色橫幅；那個 home 的 agent 燈號變「未知」並寫出多久沒更新，它的待決事項標「可能已過時」。
+- 某個 home「還沒換到 fork」「版本不相容」「版本不同」：在 home 的標籤旁標出，前兩種附上要做的事。
+- 某個 home 的帳本未開：在相關議題的更新區塊上方說明，並給出要跑的指令。
+- 頁首右邊有輪詢的說明與「立刻更新」。
+
+## 驗收
+
+1. `<clone>/topic-board/test/run.sh 1 2 3 4 5` 回 0。
+2. 安全檢查的測試，對一個跑在暫存 `FM_HOME` 的服務用 `curl` 逐條打（`<p>` 是埠，`<t>` 是 token）。每條都要是指定的狀態碼，而且服務之後仍然回應 health：
+
+   | 請求 | 預期 |
+   | --- | --- |
+   | `curl -H 'Host: evil.example' http://127.0.0.1:<p>/` | 4xx |
+   | `curl -H 'Host: 127.0.0.1:1' http://127.0.0.1:<p>/` | 4xx |
+   | `curl http://127.0.0.1:<p>/api/state` | 401 |
+   | `curl -H 'Authorization: Bearer wrong' http://127.0.0.1:<p>/api/state` | 401 |
+   | `curl -H 'Authorization: Bearer <t>' http://127.0.0.1:<p>/api/state` | 200 |
+   | 帶對的 token、`Content-Type: application/json`、沒有 `Origin` 的 `POST /api/refresh` | 403 |
+   | 同上，`Origin: null` | 403 |
+   | 同上，`Origin: http://evil.example` | 403 |
+   | 同上，`Origin: http://127.0.0.1:<p>`、`Content-Type: text/plain` | 415 |
+   | 同上，`Content-Type: application/json`、body 是 `{` | 400 |
+   | 同上，body 超過 64 KiB | 413 |
+   | `curl -X OPTIONS -H 'Origin: http://evil.example' -H 'Access-Control-Request-Method: POST' …/api/refresh` | 405，沒有任何 `Access-Control-*` header |
+   | `curl -H 'Connection: Upgrade' -H 'Upgrade: websocket' …` | 400 |
+   | `curl 'http://127.0.0.1:<p>/assets/..%2f..%2fstate%2ftopic-board%2ftoken'` | 404 |
+   | 用原始 socket 送一個 `Host:` 值是亂碼的請求 | 4xx，服務沒當掉 |
+
+   另外確認：每個回應都有 CSP 與 `X-Frame-Options: DENY`；`ss -ltn` 顯示服務只聽 `127.0.0.1`；`index.html` 的原始碼裡沒有 token、沒有任何議題資料；每筆被拒的請求在 `audit.jsonl` 有一行，而且那一行沒有 token。
+3. 兩步確認：第二步沒帶 `mode` 或 `mode` 不是 `done`／`release`、沒有確認碼直接送作答、確認碼用第二次、確認碼過期、兩步之間 hold 的問題變了、服務重啟後用舊的確認碼，全部被拒。
+4. `reset-token` 之後，舊 token 的請求回 401。
+5. 手動走一遍（用假資料的暫存 `FM_HOME`，在 Chrome 與 Firefox 各一次），每項截圖貼進 PR：首頁五段、議題頁、拖曳跨佇列與 Esc 取消、從待辦拖出的倒數、改名、改目標、封存與重開、併入其他議題、確認提議、歸併 agent、作答一個有選項的 hold、送一則訊息給 first mate、直送、一筆失敗的寫入按重送與忽略、停掉服務後的紅色橫幅、再啟動後頁面自己恢復。
+6. 和 `topic-board/test/prototype-variant-c.html` 並排比對版面；有出入的地方在 PR 裡列出原因。
+7. 前四段的驗收再跑一次。
