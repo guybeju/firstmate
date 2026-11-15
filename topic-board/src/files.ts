@@ -80,3 +80,13 @@ export function stringField(record: Record<string, unknown>, name: string): stri
   const value = record[name];
   return typeof value === "string" ? value : null;
 }
+
+/** The string-valued members of a JSON object; anything else yields an empty record. */
+export function stringRecord(raw: unknown): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!isRecord(raw)) return result;
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === "string") result[key] = value;
+  }
+  return result;
+}

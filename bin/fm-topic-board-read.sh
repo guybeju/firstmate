@@ -192,6 +192,7 @@ main() {
                                | capture("^Captain hold origin: (?<origin>.*)$") | .origin ][0] // "")} ],
         status_decisions: [ $snap.tasks[] | .id as $id
                             | (.hints.open_decisions // [])[]
+                            | select(.verb == "needs-decision")
                             | {id: $id, key, summary} ],
         topics: $topics[0],
         ledger: $ledger[0]

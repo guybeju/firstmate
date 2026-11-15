@@ -9,19 +9,27 @@ import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
-import { appendLine, fileSize, isAlive, isRecord, readCompleteLines, readPidFile, removeStaleTemps, stringField, writeFileAtomic, } from "./files.js";
+import { fileSize, isAlive, isRecord, readCompleteLines, readPidFile, removeStaleTemps, stringField, writeFileAtomic, } from "./files.js";
+import { commandRunner } from "./commands.js";
+import { Journal, MAIN_HOME, Offsets, SUMMARY_KINDS, SUMMARY_MAX, Summaries } from "./journal.js";
 import { boardPaths, parseConfigArgs } from "./layout.js";
 import { MAX_REQUEST_BYTES } from "./protocol.js";
+import { DEFAULT_TIMINGS, Poller } from "./poller.js";
 import { loadTopicState, saveTopicState } from "./store.js";
 import * as topics from "./topics.js";
+import { buildView, placeTask } from "./view.js";
 const PRIVATE_FILE = 0o600;
-const SHARED_FILE = 0o644;
 const HEALTH_PROBE_MS = 3000;
+const LOOKUP_WAIT_MS = 10_000;
+const TEST_MODE = process.env["FM_TOPIC_BOARD_TEST"] === "1";
 // sizeof(sun_path) minus the terminating NUL. Node silently truncates a longer
 // path instead of failing, so the length is checked before listening.
 const SOCKET_PATH_MAX = os.platform() === "darwin" ? 103 : 107;
 function log(message) {
     process.stdout.write(`${new Date().toISOString()} ${process.pid} ${message}\n`);
+}
+function epochSeconds() {
+    return Math.floor(Date.now() / 1000);
 }
 function now() {
     return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -59,8 +67,9 @@ function commit(service, result) {
         saveTopicState(service.paths, service.state, result.state);
         service.state = result.state;
         for (const event of result.events) {
-            appendLine(service.paths.events, JSON.stringify({ src: "board", ts: now(), ...event }), SHARED_FILE);
+            service.journal.appendBoard({ ts: epochSeconds(), home: null, task: null, ...event });
         }
+        service.version += 1;
     }
     return { ok: true, line: result.line };
 }
@@ -154,7 +163,8 @@ function healthData(service) {
 function statusData(service) {
     return {
         ...healthData(service),
-        polling: false,
+        polling: service.poller.active,
+        homes: service.poller.snapshots().map((home) => ({ id: home.id, version: home.version })),
         events_bytes: fileSize(service.paths.events),
         summaries_bytes: fileSize(service.paths.summaries),
         audit_bytes: fileSize(service.paths.audit),
@@ -164,24 +174,124 @@ function resetToken(service) {
     writeFileAtomic(service.paths.token, `${crypto.randomBytes(32).toString("hex")}\n`, PRIVATE_FILE);
     return { ok: true, line: "ok reset-token 已重置，請重新跑 open" };
 }
-function handle(service, request) {
-    switch (request.op) {
-        case "health":
-            return { ok: true, line: "ok", data: { ...healthData(service) } };
-        case "status":
-            return { ok: true, line: "ok", data: statusData(service) };
-        case "stop":
-            return { ok: true, line: "ok stop 看板服務已停止" };
-        case "reset-token":
-            return resetToken(service);
-        default: {
-            const handler = TOPIC_HANDLERS[request.op];
-            if (handler === undefined)
-                return usage(`不認得的 op：${request.op}`);
-            const result = handler(service, request.args);
-            return "usage" in result ? usage(result.usage) : commit(service, result);
-        }
+function withTimeout(promise, ms, fallback) {
+    return new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(fallback), ms);
+        void promise.then((value) => {
+            clearTimeout(timer);
+            resolve(value);
+        });
+    });
+}
+/** The home a `--home` argument names, or a refusal when it is not a registered secondmate. */
+async function homeArg(service, args) {
+    const home = args["home"];
+    if (home === undefined)
+        return MAIN_HOME;
+    if (typeof home !== "string")
+        return usage("--home 要是 secondmate id。");
+    // A board started just now has never read the main home, so it does not know the secondmates yet.
+    if (!service.poller.hasMainReport())
+        await withTimeout(service.poller.readNow(MAIN_HOME), LOOKUP_WAIT_MS, false);
+    return service.poller.knows(home) && home !== MAIN_HOME
+        ? home
+        : refused(`--home ${home} 不是已註冊的 secondmate。`);
+}
+/**
+ * The line firstmate puts in front of a chat reminder about `task`. A home that
+ * cannot be read gives "議題不明", never "未分類": not knowing is not the same
+ * as knowing the task has no topic.
+ */
+async function reminderPrefix(service, home, task) {
+    const place = () => placeTask(service.state, service.poller.snapshots(), home, task);
+    let placement = place();
+    if (placement.reason === "no-tag") {
+        const read = await withTimeout(service.poller.readFresh(home), LOOKUP_WAIT_MS, false);
+        if (!read)
+            return `議題不明（${task}）：`;
+        placement = place();
     }
+    if (placement.topic === null)
+        return "未分類：";
+    const name = service.state.doc.topics[placement.topic]?.name ?? service.state.archive.topics[placement.topic]?.name;
+    return `${name ?? placement.topic}：`;
+}
+function taskArg(args) {
+    const task = stringField(args, "task");
+    return task !== null && /^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(task) ? task : null;
+}
+/** The text of a summary, or a refusal when it is empty or too long. */
+function summaryText(args) {
+    const text = stringField(args, "text")?.trim() ?? "";
+    const length = [...text].length;
+    return length === 0 || length > SUMMARY_MAX
+        ? refused(`摘要要有內容，而且最多 ${SUMMARY_MAX} 個字（這次是 ${length} 個）。`)
+        : text;
+}
+async function summary(service, args) {
+    const task = taskArg(args);
+    const kind = SUMMARY_KINDS.find((name) => name === args["kind"]);
+    if (task === null || kind === undefined)
+        return usage("summary 需要 task id 與 ready、report、failed、landed 其中一種。");
+    const text = summaryText(args);
+    if (typeof text !== "string")
+        return text;
+    const home = await homeArg(service, args);
+    if (typeof home !== "string")
+        return home;
+    if (service.summaries.add({ ts: epochSeconds(), home, task, kind, text }))
+        service.version += 1;
+    return { ok: true, line: await reminderPrefix(service, home, task) };
+}
+async function which(service, args) {
+    const task = taskArg(args);
+    if (task === null)
+        return usage("which 需要 task id。");
+    const home = await homeArg(service, args);
+    if (typeof home !== "string")
+        return home;
+    return { ok: true, line: await reminderPrefix(service, home, task) };
+}
+function boardView(service) {
+    return {
+        boot_id: service.bootId,
+        version: service.version,
+        polling: service.poller.active,
+        ...buildView({
+            topics: service.state,
+            homes: service.poller.snapshots(),
+            events: service.journal.events,
+            summaries: service.summaries.all,
+            nowMs: Date.now(),
+            staleMs: service.timings.staleMs,
+        }),
+    };
+}
+/** Test-only: the whole board state, as the page will get it. Counts as a viewer. */
+async function dump(service, args) {
+    service.poller.touch();
+    if (args["refresh"] === true)
+        await service.poller.refreshAll();
+    return { ok: true, line: "ok", data: boardView(service) };
+}
+const SERVICE_HANDLERS = {
+    health: async (service) => ({ ok: true, line: "ok", data: { ...healthData(service) } }),
+    status: async (service) => ({ ok: true, line: "ok", data: statusData(service) }),
+    stop: async () => ({ ok: true, line: "ok stop 看板服務已停止" }),
+    "reset-token": async (service) => resetToken(service),
+    summary,
+    which,
+    ...(TEST_MODE ? { dump } : {}),
+};
+async function handle(service, request) {
+    const serviceHandler = SERVICE_HANDLERS[request.op];
+    if (serviceHandler !== undefined)
+        return serviceHandler(service, request.args);
+    const topicHandler = TOPIC_HANDLERS[request.op];
+    if (topicHandler === undefined)
+        return usage(`不認得的 op：${request.op}`);
+    const result = topicHandler(service, request.args);
+    return "usage" in result ? usage(result.usage) : commit(service, result);
 }
 function parseRequest(line) {
     let raw;
@@ -200,6 +310,7 @@ function parseRequest(line) {
 }
 function shutdown(service) {
     log("stopping");
+    service.poller?.stop();
     service.ipc?.close();
     service.web.close();
     for (const file of [service.paths.socket, service.paths.pid]) {
@@ -207,11 +318,11 @@ function shutdown(service) {
     }
     process.exit(0);
 }
-function respond(service, connection, line) {
+async function respond(service, connection, line) {
     const request = parseRequest(line);
     let response;
     try {
-        response = request === null ? usage("要求不是合法的 JSON。") : handle(service, request);
+        response = request === null ? usage("要求不是合法的 JSON。") : await handle(service, request);
     }
     catch (error) {
         log(`request failed: ${error.stack ?? String(error)}`);
@@ -239,19 +350,49 @@ function serveConnection(service, connection) {
             connection.end(`${JSON.stringify(usage("要求太大。"))}\n`);
             return;
         }
-        respond(service, connection, buffered.slice(0, newline));
+        void respond(service, connection, buffered.slice(0, newline));
     });
 }
-function loadData(service) {
-    const { paths } = service;
+/** Test runs may shorten the poll timings through FM_TOPIC_BOARD_*_MS variables. */
+function pollTimings() {
+    if (!TEST_MODE)
+        return DEFAULT_TIMINGS;
+    const override = (name, fallback) => {
+        const value = Number(process.env[`FM_TOPIC_BOARD_${name}_MS`]);
+        return Number.isFinite(value) && value > 0 ? value : fallback;
+    };
+    return {
+        ...DEFAULT_TIMINGS,
+        localMs: override("LOCAL", DEFAULT_TIMINGS.localMs),
+        remoteMs: override("REMOTE", DEFAULT_TIMINGS.remoteMs),
+        idleMs: override("IDLE", DEFAULT_TIMINGS.idleMs),
+        staleMs: override("STALE", DEFAULT_TIMINGS.staleMs),
+    };
+}
+/** Loads everything the board keeps on disk and returns the running service's state. */
+function loadService(boot) {
+    const { paths } = boot;
     fs.mkdirSync(paths.boardDataDir, { recursive: true });
     for (const dir of [paths.runtimeDir, paths.dataDir, paths.boardDataDir]) {
         for (const name of removeStaleTemps(dir))
             log(`removed stale temp file ${name} in ${dir}`);
     }
-    service.state = loadTopicState(paths);
-    for (const file of [paths.events, paths.summaries, paths.audit])
-        readCompleteLines(file);
+    readCompleteLines(paths.audit);
+    const timings = pollTimings();
+    const journal = new Journal(paths.events);
+    const service = {
+        ...boot,
+        state: loadTopicState(paths),
+        journal,
+        summaries: new Summaries(paths.summaries),
+        timings,
+        version: 1,
+        ipc: null,
+        poller: new Poller(commandRunner(boot.config), journal, new Offsets(paths), timings, () => {
+            service.version += 1;
+        }),
+    };
+    return service;
 }
 function bindSocket(service) {
     const { paths } = service;
@@ -266,13 +407,14 @@ function bindSocket(service) {
         log(`ready on port ${service.config.port}, commit ${service.config.commit}`);
     });
 }
-function becomeTheBoard(service) {
-    const { paths, config } = service;
+function becomeTheBoard(boot) {
+    const { paths, config } = boot;
     // Claim the pid file before the slow part of startup: a second board started
     // meanwhile reads it to learn the port is held by a board, not a stranger.
     writeFileAtomic(paths.pid, `${process.pid}\n`, PRIVATE_FILE);
+    let service;
     try {
-        loadData(service);
+        service = loadService(boot);
     }
     catch (error) {
         failStartup(paths, error.message, "修好或移開那個檔之後再試");
@@ -281,11 +423,13 @@ function becomeTheBoard(service) {
         writeFileAtomic(paths.token, `${crypto.randomBytes(32).toString("hex")}\n`, PRIVATE_FILE);
     }
     writeFileAtomic(paths.port, `${config.port}\n`, PRIVATE_FILE);
+    process.removeAllListeners("SIGTERM").on("SIGTERM", () => shutdown(service));
+    process.removeAllListeners("SIGINT").on("SIGINT", () => shutdown(service));
     bindSocket(service);
 }
 /** The port is taken: exit quietly if a board already answers, else report who holds it. */
-function yieldOrFail(service) {
-    const { paths, config } = service;
+function yieldOrFail(boot) {
+    const { paths, config } = boot;
     const holderIsNotBoard = () => failStartup(paths, `埠 ${config.port} 被別的程式佔用`, "在 config/topic-board-port 寫另一個埠號");
     const holder = readPidFile(paths.pid);
     if (holder !== null && holder !== process.pid && isAlive(holder)) {
@@ -316,23 +460,15 @@ function main() {
         response.writeHead(404, { "Content-Type": "text/plain" });
         response.end("not found\n");
     });
-    const service = {
-        config,
-        paths,
-        bootId: crypto.randomBytes(8).toString("hex"),
-        startedAt: now(),
-        state: topics.emptyState(),
-        web,
-        ipc: null,
-    };
+    const boot = { config, paths, bootId: crypto.randomBytes(8).toString("hex"), startedAt: now(), web };
     web.once("error", (error) => {
         if (error.code === "EADDRINUSE")
-            yieldOrFail(service);
+            yieldOrFail(boot);
         else
             failStartup(paths, `埠 ${config.port} 綁不起來（${error.message}）`, "在 config/topic-board-port 寫另一個埠號");
     });
-    web.listen(config.port, "127.0.0.1", () => becomeTheBoard(service));
-    process.on("SIGTERM", () => shutdown(service));
-    process.on("SIGINT", () => shutdown(service));
+    web.listen(config.port, "127.0.0.1", () => becomeTheBoard(boot));
+    process.on("SIGTERM", () => shutdown(boot));
+    process.on("SIGINT", () => shutdown(boot));
 }
 main();

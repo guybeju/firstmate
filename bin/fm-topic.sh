@@ -19,6 +19,8 @@
 #   fm-topic.sh goal <topic-id> <one line>
 #   fm-topic.sh archive <topic-id>
 #   fm-topic.sh reopen <topic-id> [--queue <queue>]
+#   fm-topic.sh summary [--home <secondmate-id>] <task-id> <ready|report|failed|landed> -
+#   fm-topic.sh which [--home <secondmate-id>] <task-id>
 #   fm-topic.sh open | status | stop | restart | reset-token
 #
 # tag, list, order, setup, and --in-home only read and write files; they do not
@@ -29,6 +31,12 @@
 # unchanged is safe.
 #
 # open prints the board's URL. status and stop never start the service.
+#
+# summary stores a one-to-three sentence milestone summary read from stdin (at
+# most 600 characters) and prints the line to start the chat reminder with:
+# "<topic name>：", "未分類：" when the task has no topic, or "議題不明（<task-id>）："
+# when the task's home could not be read. which prints the same line without
+# storing anything. --home names the secondmate home the task lives in.
 #
 # tag    Appends "<topic-id> <UTC time>" to this home's data/<task-id>/topic.
 #        The last line is the task's current topic. In the main home the topic
@@ -412,7 +420,7 @@ main() {
     order) cmd_order "$@" ;;
     setup) cmd_setup "$@" ;;
     propose | confirm | merge | close-propose | move | rename | goal | archive | reopen | \
-      open | status | stop | restart | reset-token)
+      summary | which | open | status | stop | restart | reset-token)
       cmd_service "$sub" "$@"
       ;;
     *) usage_error "不認得的子命令：$sub" ;;

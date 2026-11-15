@@ -104,3 +104,21 @@ tb_stop_boards() {
 tb_mode() {
   stat -c '%A' "$1" 2>/dev/null || stat -f '%Sp' "$1"
 }
+
+# tb_op <home> <op> [json-args]: send one raw request to the board's socket and
+# print the response's "data" member. For ops fm-topic.sh does not expose.
+tb_op() {
+  node -e '
+    const [socket, op, args] = process.argv.slice(1);
+    const connection = require("node:net").connect(socket);
+    let received = "";
+    connection.on("connect", () => connection.write(JSON.stringify({ v: 1, op, args: JSON.parse(args) }) + "\n"));
+    connection.on("data", (chunk) => { received += chunk; });
+    connection.on("end", () => {
+      const response = JSON.parse(received);
+      if (!response.ok) { console.error(response.line); process.exit(1); }
+      console.log(JSON.stringify(response.data ?? {}));
+    });
+    connection.on("error", (error) => { console.error(error.message); process.exit(1); });
+  ' "$1/state/topic-board/board.sock" "$2" "${3:-{\}}"
+}

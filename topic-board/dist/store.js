@@ -1,6 +1,6 @@
 // Loads and saves the topic files. The service is their only writer.
 import fs from "node:fs";
-import { isRecord, readJsonFile, stringField, writeFileAtomic } from "./files.js";
+import { isRecord, readJsonFile, stringField, stringRecord, writeFileAtomic } from "./files.js";
 import { QUEUES, emptyState, isQueue } from "./topics.js";
 const FILE_MODE = 0o644;
 function parseCloseProposal(raw) {
@@ -39,16 +39,6 @@ function parseQueue(raw, topics) {
         return [];
     return [...new Set(raw)].filter((id) => typeof id === "string" && topics[id]?.status === "confirmed");
 }
-function parseMerged(raw) {
-    const merged = {};
-    if (!isRecord(raw))
-        return merged;
-    for (const [from, into] of Object.entries(raw)) {
-        if (typeof into === "string")
-            merged[from] = into;
-    }
-    return merged;
-}
 function parseNextSeq(raw) {
     return typeof raw === "number" && Number.isInteger(raw) && raw > 0 ? raw : 1;
 }
@@ -64,7 +54,7 @@ function parseDoc(raw) {
     const queues = isRecord(raw["queues"]) ? raw["queues"] : {};
     for (const queue of QUEUES)
         doc.queues[queue] = parseQueue(queues[queue], doc.topics);
-    doc.merged = parseMerged(raw["merged"]);
+    doc.merged = stringRecord(raw["merged"]);
     doc.next_seq = parseNextSeq(raw["next_seq"]);
     return doc;
 }

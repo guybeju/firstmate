@@ -272,6 +272,7 @@ const TOPIC_COMMANDS = {
     archive: { positional: ["id"] },
     reopen: { positional: ["id"], valued: ["queue"] },
     "reset-token": { positional: [] },
+    which: { positional: ["task"], valued: ["home"] },
 };
 function buildTopicRequest(sub, shape, args) {
     const parsed = parseArgs(args, shape.valued ?? [], shape.bare ?? []);
@@ -308,6 +309,19 @@ async function send(config, paths, message) {
     }
     throw unavailable("看板服務沒有回應", "跑 fm-topic.sh status 看狀況");
 }
+const VERSION_LABEL = {
+    same: "相同",
+    different: "版本不同",
+    incompatible: "版本不相容",
+    "not-on-fork": "還沒換到 fork",
+    unknown: "還沒讀到",
+};
+/** One line per home with how its code version compares to the main home's. */
+function homeLines(homes) {
+    if (!Array.isArray(homes))
+        return [];
+    return homes.map((home) => `home ${home.id}：${VERSION_LABEL[home.version] ?? home.version}`);
+}
 function describeFiles(paths) {
     return [
         `events.jsonl：${fileSize(paths.events)} 位元組`,
@@ -324,7 +338,7 @@ async function status(paths) {
     if (state.kind === "running") {
         const outcome = await exchange(paths.socket, request("status"), HEALTH_TIMEOUT_MS);
         const data = outcome.kind === "answer" ? (outcome.response.data ?? {}) : {};
-        lines.push("看板服務：在跑", `pid：${state.data.pid}`, `埠：${state.data.port}`, `程式版本：${state.data.code_commit}`, `啟動時間：${state.data.started_at}`, `輪詢：${data["polling"] === true ? "進行中" : "沒在跑"}`);
+        lines.push("看板服務：在跑", `pid：${state.data.pid}`, `埠：${state.data.port}`, `程式版本：${state.data.code_commit}`, `啟動時間：${state.data.started_at}`, `輪詢：${data["polling"] === true ? "進行中" : "沒在跑"}`, ...homeLines(data["homes"]));
     }
     else {
         lines.push(state.kind === "hung" ? "看板服務：沒有回應" : "看板服務：沒在跑", `上次的 pid：${readTrimmed(paths.pid)}`, `上次的埠：${readTrimmed(paths.port)}`);
@@ -351,6 +365,17 @@ async function open(config, paths) {
     const running = await ensureRunning(config, paths);
     return finish({ ok: true, line: `http://127.0.0.1:${running.port}/#t=${readTrimmed(paths.token)}` });
 }
+/** summary reads its text from stdin: `summary [--home <id>] <task-id> <kind> -`. */
+async function summaryCommand(config, paths, args) {
+    const parsed = parseArgs(args, ["home"]);
+    const [task, kind, dash] = parsed.positional;
+    if (parsed.positional.length !== 3 || dash !== "-") {
+        throw new Exit(EXIT_USAGE, "summary 的用法：fm-topic.sh summary [--home <id>] <task-id> <kind> -（本文走 stdin）");
+    }
+    const text = fs.readFileSync(0, "utf8");
+    await ensureRunning(config, paths);
+    return finish(await send(config, paths, request("summary", withFlags({ task, kind, text }, parsed))));
+}
 async function topicCommand(config, paths, sub, args) {
     const shape = TOPIC_COMMANDS[sub];
     if (shape === undefined)
@@ -369,6 +394,8 @@ async function run() {
     const { config, rest } = parseConfigArgs(process.argv.slice(2));
     const paths = boardPaths(config);
     const [sub = "", ...args] = rest;
+    if (sub === "summary")
+        return summaryCommand(config, paths, args);
     const lifecycle = LIFECYCLE[sub];
     return lifecycle === undefined ? topicCommand(config, paths, sub, args) : lifecycle(config, paths);
 }

@@ -11,7 +11,9 @@
 | 3-3 | 遠端 home 沒有彙整腳本時，`fm-on.sh` 的 stderr 含 `command is not tracked by the configured remote root` 或 `command is not a genuine executable in the configured remote root` | 對一台還沒換到 fork 的遠端跑 `bin/fm-on.sh <id> fm-topic-board-read.sh 0 -; echo $?` | 兩種字串都認；都對不上時把那個 home 標成「讀取失敗」並附 stderr 原文，不標「還沒換到 fork」 |
 | 3-4 | `events.jsonl` 的大小估計（一千個 task 約 10 MB、一秒內讀完） | 用腳本產生 30 000 行、每行約 300 位元組的假檔，量啟動到 socket 可連的時間 | 超過 5 秒就在這一段加啟動時的進度 log，並在 [open-issues](open-issues.markdown) 開一條整理檔案的後續工作 |
 
-3-1、3-2 需要 secondmate，這台沒有；不擋這一段的 PR。3-3 的兩個字串都來自讀原始碼（`bin/fm-remote-entrypoint.sh:134-145`），實作時兩個都認。3-4 這台就能做，做完把數字寫進 PR。
+3-1、3-2 需要 secondmate，這台沒有；不擋這一段的 PR。3-3 的兩個字串都來自讀原始碼（`bin/fm-remote-entrypoint.sh:134-145`），實作時兩個都認。3-4 已量（2026-11-16）：30 000 筆、9.9 MB 的 `events.jsonl`，從下指令到服務可連共 0.6 秒。
+
+實作時另外確認了 C1 的現象：主 home 每次讀取，上游的 snapshot 都會自己經 `fm-on.sh` 去抓一台遠端的 `home-summary.json`（測試裡假的 `fm-on.sh` 記到了這些呼叫）。
 
 ## 要做的事
 
@@ -59,8 +61,8 @@
 - **PR 連結**：`task.pr_ready`、`task.merged` 事件自己帶的網址。`ready` 與 `landed` 的摘要接上同一個 (home, task) 在摘要時間之前最近一筆 `task.pr_ready` 或 `task.merged` 的連結；`report` 與 `failed` 不接。
 - **燈號**：照 [contracts](contracts.markdown) 第 5 節。secondmate 自己（`kind` 是 secondmate 的 task）不列為 agent；只列它派出的 worker，並標明所在的 home。
 - **待決事項**：每個 hold 屬於哪個議題：先看被 hold 的 task 自己的標記，沒有就看 `origin` 那個 task 的標記，都沒有就是未分類。排序：`live` 在前，`aged`、`dated`、`blocked`（合稱暫緩）在後；同一組裡依議題的佇列順序（高、一般、待辦，同佇列照陣列順序），同一議題內最舊的在前，未分類排最後。暫緩的寫出原因：「已放超過 14 天」「延到 YYYY-MM-DD」「等 <id> 完成」。
-- **選項**：只有問題的最後一行完全符合 `選項：A | B | C`（全形冒號，選項以 ` | ` 分隔，至少兩個）才解析成按鈕；否則沒有按鈕。文字框一律有。
-- **worker 提問**：`status_decisions[]` 依 task 的議題歸位，標「first mate 處理中」，不能作答。
+- **選項**：問題最後一行裡最後一個 `選項：`（全形冒號）之後的文字，以 ` | ` 分隔，至少兩個、每個都不是空的，才解析成按鈕；否則沒有按鈕。文字框一律有。不要求 `選項：` 在行首：上游把 hold reason 存在 backlog 項目的標題行，寫成多行的 reason 到看板時可能已經是一行。
+- **worker 提問**：`status_decisions[]`（彙整腳本只收 `needs-decision`，不收 `blocked`）依 task 的議題歸位，標「first mate 處理中」，不能作答。
 - **提議關閉**：有 `close_proposal` 的議題。
 
 ### `summary` 與 `which`
@@ -81,7 +83,7 @@
 | 服務不認得這個 task 的標記 → 對那個 home 補跑一次讀取（R1、R2 或 R3），最多等 10 秒 → 讀到了、確實沒有標記 | `未分類：` |
 | 補讀失敗或逾時 | `議題不明（<task-id>）：`，並在 stderr 提醒改用 task id 開頭 |
 
-不能把連不上說成未分類。
+不能把連不上說成未分類。補讀必須是「在這個要求之後才開始」的讀取：已經有一次讀取在進行時，先等它結束再讀一次，不能直接沿用（它可能在 task 被標記之前就開始了）。
 
 ### 系統紀錄
 

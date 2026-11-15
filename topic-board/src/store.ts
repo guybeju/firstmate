@@ -1,6 +1,6 @@
 // Loads and saves the topic files. The service is their only writer.
 import fs from "node:fs";
-import { isRecord, readJsonFile, stringField, writeFileAtomic } from "./files.js";
+import { isRecord, readJsonFile, stringField, stringRecord, writeFileAtomic } from "./files.js";
 import type { BoardPaths } from "./layout.js";
 import { QUEUES, emptyState, isQueue } from "./topics.js";
 import type { ArchiveDoc, ArchivedTopic, Topic, TopicState, TopicsDoc } from "./topics.js";
@@ -42,15 +42,6 @@ function parseQueue(raw: unknown, topics: Record<string, Topic>): string[] {
   );
 }
 
-function parseMerged(raw: unknown): Record<string, string> {
-  const merged: Record<string, string> = {};
-  if (!isRecord(raw)) return merged;
-  for (const [from, into] of Object.entries(raw)) {
-    if (typeof into === "string") merged[from] = into;
-  }
-  return merged;
-}
-
 function parseNextSeq(raw: unknown): number {
   return typeof raw === "number" && Number.isInteger(raw) && raw > 0 ? raw : 1;
 }
@@ -63,7 +54,7 @@ function parseDoc(raw: unknown): TopicsDoc {
   for (const [id, topic] of Object.entries(topics)) doc.topics[id] = parseTopic(id, topic);
   const queues = isRecord(raw["queues"]) ? raw["queues"] : {};
   for (const queue of QUEUES) doc.queues[queue] = parseQueue(queues[queue], doc.topics);
-  doc.merged = parseMerged(raw["merged"]);
+  doc.merged = stringRecord(raw["merged"]);
   doc.next_seq = parseNextSeq(raw["next_seq"]);
   return doc;
 }

@@ -102,8 +102,8 @@
 
 每行一個 JSON：
 
-- 帳本事件：`{"src":"ledger","home":"<home>","line":<上游帳本的那一行，原樣的 JSON 物件>}`。上游的事件有 `v`、`ts`、`event`、`task`，五種 `event`：`task.dispatched`、`task.status`、`task.pr_ready`、`task.merged`、`task.cleaned_up`。
-- 系統紀錄：`{"src":"board","ts":…,"kind":"topic.confirmed|topic.merged|agent.tagged|hold.answered|topic.close_proposed|topic.archived|topic.reopened","topic":"<id>","home":…,"task":…,"text":"<顯示用的一行>"}`。議題層級的紀錄沒有 `home` 與 `task`。
+- 帳本事件：`{"src":"ledger","home":"<home>","raw":"<上游帳本的那一行，原樣的字串>"}`。存原始字串而不是解析後的物件，重啟後才能用同樣的位元組去重。上游的事件有 `v`、`ts`（epoch 秒）、`event`、`task`，五種 `event`：`task.dispatched`、`task.status`、`task.pr_ready`、`task.merged`、`task.cleaned_up`。
+- 系統紀錄（`ts` 也是 epoch 秒）：`{"src":"board","ts":…,"kind":"topic.confirmed|topic.merged|agent.tagged|hold.answered|topic.close_proposed|topic.archived|topic.reopened","topic":"<id>","home":…,"task":…,"text":"<顯示用的一行>"}`。議題層級的紀錄沒有 `home` 與 `task`。
 
 去重的鍵是 (home, 帳本那一行的原始位元組)。啟動時讀完整個檔重建去重集合；最後一行沒有換行字元就截掉。
 

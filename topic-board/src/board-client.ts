@@ -296,6 +296,7 @@ const TOPIC_COMMANDS: Record<string, CommandShape> = {
   archive: { positional: ["id"] },
   reopen: { positional: ["id"], valued: ["queue"] },
   "reset-token": { positional: [] },
+  which: { positional: ["task"], valued: ["home"] },
 };
 
 function buildTopicRequest(sub: string, shape: CommandShape, args: string[]): BoardRequest {
@@ -335,6 +336,20 @@ async function send(config: BoardConfig, paths: BoardPaths, message: BoardReques
   throw unavailable("看板服務沒有回應", "跑 fm-topic.sh status 看狀況");
 }
 
+const VERSION_LABEL: Record<string, string> = {
+  same: "相同",
+  different: "版本不同",
+  incompatible: "版本不相容",
+  "not-on-fork": "還沒換到 fork",
+  unknown: "還沒讀到",
+};
+
+/** One line per home with how its code version compares to the main home's. */
+function homeLines(homes: unknown): string[] {
+  if (!Array.isArray(homes)) return [];
+  return homes.map((home: { id: string; version: string }) => `home ${home.id}：${VERSION_LABEL[home.version] ?? home.version}`);
+}
+
 function describeFiles(paths: BoardPaths): string[] {
   return [
     `events.jsonl：${fileSize(paths.events)} 位元組`,
@@ -360,6 +375,7 @@ async function status(paths: BoardPaths): Promise<never> {
       `程式版本：${state.data.code_commit}`,
       `啟動時間：${state.data.started_at}`,
       `輪詢：${data["polling"] === true ? "進行中" : "沒在跑"}`,
+      ...homeLines(data["homes"]),
     );
   } else {
     lines.push(
@@ -391,6 +407,18 @@ async function open(config: BoardConfig, paths: BoardPaths): Promise<never> {
   return finish({ ok: true, line: `http://127.0.0.1:${running.port}/#t=${readTrimmed(paths.token)}` });
 }
 
+/** summary reads its text from stdin: `summary [--home <id>] <task-id> <kind> -`. */
+async function summaryCommand(config: BoardConfig, paths: BoardPaths, args: string[]): Promise<never> {
+  const parsed = parseArgs(args, ["home"]);
+  const [task, kind, dash] = parsed.positional;
+  if (parsed.positional.length !== 3 || dash !== "-") {
+    throw new Exit(EXIT_USAGE, "summary 的用法：fm-topic.sh summary [--home <id>] <task-id> <kind> -（本文走 stdin）");
+  }
+  const text = fs.readFileSync(0, "utf8");
+  await ensureRunning(config, paths);
+  return finish(await send(config, paths, request("summary", withFlags({ task, kind, text }, parsed))));
+}
+
 async function topicCommand(config: BoardConfig, paths: BoardPaths, sub: string, args: string[]): Promise<never> {
   const shape = TOPIC_COMMANDS[sub];
   if (shape === undefined) throw new Exit(EXIT_USAGE, `不認得的子命令：${sub}（fm-topic.sh --help 看用法）`);
@@ -410,6 +438,7 @@ async function run(): Promise<never> {
   const { config, rest } = parseConfigArgs(process.argv.slice(2));
   const paths = boardPaths(config);
   const [sub = "", ...args] = rest;
+  if (sub === "summary") return summaryCommand(config, paths, args);
   const lifecycle = LIFECYCLE[sub];
   return lifecycle === undefined ? topicCommand(config, paths, sub, args) : lifecycle(config, paths);
 }
