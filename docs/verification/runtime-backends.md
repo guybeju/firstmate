@@ -1518,7 +1518,7 @@ SSH-born herdr server (child of `herdr --session fm-remote remote-client-bridge`
 ```
 
 `XPC_SERVICE_NAME` identifies a launchd label but does not identify its domain, because the Background `user/501` job also carried that variable while lacking keychain access.
-The owner classifier therefore accepts that label only when `launchctl print gui/<uid>/<label>` identifies the owner pid or the label is loaded in `gui/<uid>` but not `user/<uid>`.
+The owner classifier therefore accepts that label only when `launchctl print gui/<uid>/<label>` identifies the owner pid or the owner's parent pid, or the label is loaded in `gui/<uid>` but not `user/<uid>`.
 `XPC_SERVICE_NAME=0`, including a value inherited by a herdr live-handoff child, remains unknown.
 `FM_REMOTE_JOB_ACTIVE=1` proves the Aqua worker only when `dev.firstmate.remote-job` is loaded in `gui/<uid>` but not `user/<uid>`.
 
@@ -1534,8 +1534,46 @@ No other herdr process existed for that session, and after 15 seconds the job re
 After a guarded `herdr session stop`, the job reported `state = not running` and `last exit code = 0`, and it stayed at rest through the throttle interval.
 A second `launchctl kickstart -k gui/501/dev.fm-rca.herdr-fg` started pid 45574, which was also the new socket owner.
 This proves that `herdr server` remains in the foreground as the launchd job, so the guard's final `exec` supplies the intended supervision and the earlier server that survived `launchctl bootout` was the unrelated SSH-bridge-born process.
+Since the session-leader change below, the guard's final `exec` is a Perl supervisor that waits on that foreground `herdr server` as its child.
 
-`bin/fm-test-run.sh tests/fm-remote-herdr-guard.test.sh` pins the resulting decision table against real marker-carrying processes, and `tests/fm-remote-doctor.test.sh` pins the doctor's verdicts on the same markers.
+#### Session leadership and `herdr machine add`
+
+Herdr 0.9.5 reports the server capability `detached_server_daemon` as true only for a server process that leads its own POSIX session, and `herdr machine add` offers to restart a remote server that reports false ("the remote server was started by a herdr build that may not survive SSH connection loss").
+The [guard's header](../../bin/fm-remote-herdr-guard.sh) owns how its supervisor starts the server as a session leader.
+
+Measured 2026-11-17 on Linux x86_64 with Herdr 0.9.5, on an isolated `fm-lab-` session prepared, stopped, and torn down through `bin/fm-herdr-lab.sh`: the guard was started as `env -u HERDR_SOCKET_PATH -u HERDR_PANE_ID -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID -u HERDR_SESSION -u HERDR_ENV bin/fm-remote-herdr-guard.sh "$(command -v herdr)" <lab-session> &`, then read with `fm-herdr-lab.sh run <lab-session> status --json | jq -c '{running: .server.running, detached_server_daemon: .server.capabilities.detached_server_daemon}'` and `ps -o pid,ppid,sid,pgid,tty,args -p <guard-pid>,<server-pid>`, then stopped with `fm-herdr-lab.sh stop <lab-session>` and `wait <guard-pid>`.
+With the guard from before this change (final `exec herdr server`):
+
+```text
+{"running":true,"detached_server_daemon":false}
+    PID    PPID     SID    PGID TT       COMMAND
+2224995 2224913 2224874 2224907 ?        ~/.local/bin/herdr server --session fm-lab-base-measure-2224918-29867
+launch-agent process exit=0
+```
+
+With the session-leader supervisor (Perl source elided):
+
+```text
+{"running":true,"detached_server_daemon":true}
+    PID    PPID     SID    PGID TT       COMMAND
+2216157 2216068 2216049 2216064 ?        /usr/bin/perl -MPOSIX -e ... ~/.local/bin/herdr server --session fm-lab-leader-measure-2216073-26352
+2216209 2216157 2216209 2216209 ?        ~/.local/bin/herdr server --session fm-lab-leader-measure-2216073-26352
+launch-agent process exit=0
+```
+
+In a second lab run, `kill -TERM <guard-pid>` against the same supervisor shape ended the real server: the guard's process exited 0, `kill -0 <server-pid>` reported it gone, and the session read `{"running":false}`.
+
+Measured 2026-11-17 on macOS with Herdr 0.9.5 by the operator:
+
+- A socket `ping` of the launchd-started `fm-remote` server (`herdr server --session fm-remote`, ppid 1) reported `detached_server_daemon=false`.
+- A throwaway `fm-lab-leadertest` server started over SSH through `/usr/bin/perl -MPOSIX` fork + `POSIX::setsid` + exec reported `detached_server_daemon=true`.
+- A `/usr/bin/perl` fork + `POSIX::setsid` child of a `gui/<uid>` Aqua launch agent kept login-keychain access: `launchctl managername` printed `Aqua` and `security find-generic-password` exited 0.
+- From the Linux host, `herdr machine add mac --label mac-leadertest --remote-session fm-lab-leadertest` against that session-leader lab server saved the profile with no restart or update prompt.
+
+Not yet verified on macOS: the real `dev.firstmate.herdr.fm-remote` launch agent running this guard, its server's `detached_server_daemon` reading, the doctor's Aqua verdict for it, and a prompt-free `herdr machine add` against the `fm-remote` session.
+macOS `ps -o sess=` prints 0 even for a session leader, so a macOS check reads `pgid == pid` together with Herdr's own `detached_server_daemon` rather than the `sess` column.
+
+`bin/fm-test-run.sh tests/fm-remote-herdr-guard.test.sh` pins the resulting decision table against real marker-carrying processes, the supervisor's session-leader shape, exit status, and signal forwarding, and, where herdr is installed, re-reads `detached_server_daemon` from a real lab server the guard starts; `tests/fm-remote-doctor.test.sh` pins the doctor's verdicts on the same markers.
 
 ### Client selection
 

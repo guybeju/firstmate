@@ -64,6 +64,29 @@ hold FM_REMOTE_JOB_ACTIVE=1
 WORKER_HOLDER_PID=$HOLDER_PID
 hold SSH_CONNECTION='100.102.217.78 51234 100.100.1.2 22' SSH_CLIENT='100.102.217.78 51234 22'
 SSH_HOLDER_PID=$HOLDER_PID
+# hold_child <marker-env...> -> HOLDER_PID, HOLDER_PARENT_PID: the guard's
+# process shape, a socket owner whose parent is the launchd job's own process.
+hold_child() {
+  local fifo="$TMP_ROOT/holder-$HOLDER_FD.fifo" pidfile="$TMP_ROOT/holder-$HOLDER_FD.pid" i=0
+  mkfifo "$fifo"
+  # shellcheck disable=SC2016 # the inner bash expands its own arguments
+  env FM_HOLDER_JQ="$HOLDER_JQ" FM_HOLDER_FIFO="$fifo" FM_HOLDER_PIDFILE="$pidfile" \
+    bash -c 'env -i "$@" "$FM_HOLDER_JQ" . "$FM_HOLDER_FIFO" & printf "%s\n" "$!" > "$FM_HOLDER_PIDFILE"; wait' bash "$@" &
+  HOLDER_PARENT_PID=$!
+  HOLDER_PIDS+=("$HOLDER_PARENT_PID")
+  eval "exec ${HOLDER_FD}>\"\$fifo\""
+  HOLDER_FD=$((HOLDER_FD + 1))
+  while [ ! -s "$pidfile" ] && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
+  [ -s "$pidfile" ] || fail "child holder did not report its pid"
+  HOLDER_PID=$(cat "$pidfile")
+  HOLDER_PIDS+=("$HOLDER_PID")
+}
+hold_child XPC_SERVICE_NAME=dev.firstmate.herdr.fm-remote
+SUPERVISED_HOLDER_PID=$HOLDER_PID
+SUPERVISOR_HOLDER_PID=$HOLDER_PARENT_PID
+hold_child SSH_CONNECTION='100.102.217.78 51234 100.100.1.2 22' XPC_SERVICE_NAME=dev.firstmate.herdr.fm-remote
+SUPERVISED_SSH_HOLDER_PID=$HOLDER_PID
+SUPERVISED_SSH_PARENT_PID=$HOLDER_PARENT_PID
 
 # new_case <Darwin|Linux> [with-herdr] [gui] [login-shell]
 # Builds one isolated account fixture and points the module-level CASE_*
@@ -909,6 +932,30 @@ doctor
 expect_code 1 "$DOCTOR_RC" "a label loaded in the user domain was reported Aqua-born"
 assert_contains "$DOCTOR_OUT" "check herdr-server=fixable: session fm-remote is served by pid $BACKGROUND_HOLDER_PID born outside the Aqua login session (unknown)" \
   "the user-domain owner was not tagged fixable"
+
+# The guard's shape: launchd's job pid is the supervisor and the socket owner
+# is its session-leader child. With the label also loaded in the user domain,
+# only that parent link can prove the Aqua birth.
+cp "$CASE_STATE/loaded-$LABEL" "$CASE_STATE/loaded-$LABEL.contract"
+printf 'pid = %s\n' "$SUPERVISOR_HOLDER_PID" >> "$CASE_STATE/loaded-$LABEL"
+printf '%s\n' "$SUPERVISED_HOLDER_PID" > "$CASE_STATE/socket-owner"
+doctor
+expect_code 0 "$DOCTOR_RC" "a server whose parent is the launchd job was not reported ready"
+assert_contains "$DOCTOR_OUT" "check herdr-server=ok: session fm-remote is running in the Aqua login session (pid $SUPERVISED_HOLDER_PID, launchd)" \
+  "a child of the launchd job was not proven Aqua-born"
+printf '%s\n' "$BACKGROUND_HOLDER_PID" > "$CASE_STATE/socket-owner"
+doctor
+expect_code 1 "$DOCTOR_RC" "a server that is not the launchd job's child was reported Aqua-born"
+assert_contains "$DOCTOR_OUT" "check herdr-server=fixable: session fm-remote is served by pid $BACKGROUND_HOLDER_PID born outside the Aqua login session (unknown)" \
+  "an owner outside the launchd job was not tagged fixable"
+cp "$CASE_STATE/loaded-$LABEL.contract" "$CASE_STATE/loaded-$LABEL"
+printf 'pid = %s\n' "$SUPERVISED_SSH_PARENT_PID" >> "$CASE_STATE/loaded-$LABEL"
+printf '%s\n' "$SUPERVISED_SSH_HOLDER_PID" > "$CASE_STATE/socket-owner"
+doctor
+expect_code 1 "$DOCTOR_RC" "an SSH-marked child of the launchd job was reported ready"
+assert_contains "$DOCTOR_OUT" "check herdr-server=fixable: session fm-remote is served by pid $SUPERVISED_SSH_HOLDER_PID born outside the Aqua login session (ssh)" \
+  "an SSH-marked server was trusted because its parent is the launchd job"
+mv "$CASE_STATE/loaded-$LABEL.contract" "$CASE_STATE/loaded-$LABEL"
 rm -f "$CASE_STATE/user-loaded-$LABEL"
 
 printf '%s\n' "$XPC_ZERO_HOLDER_PID" > "$CASE_STATE/socket-owner"

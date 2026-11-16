@@ -14,21 +14,32 @@
 # the login shell, is what gives this process and every server it execs the
 # Aqua audit session and login-keychain access; the login shell only gives the
 # server the account's own environment.
-# `herdr server` stays in the foreground under launchd, as verified in
-# docs/verification/runtime-backends.md under "fm-remote server birth and login-keychain access", so the final exec provides the complete supervision lifecycle.
+# The guard's final exec keeps a foreground process under launchd, as verified
+# in docs/verification/runtime-backends.md under "fm-remote server birth and
+# login-keychain access", so that pid carries the whole supervision lifecycle.
+# That process is a small perl supervisor (perl from the launch agent's PATH;
+# macOS ships /usr/bin/perl): it starts `herdr server --session <s>` as a child
+# that calls setsid() before exec, forwards TERM, INT, and HUP to it, and exits
+# with its status, 128+n when a signal killed it. herdr reports the server
+# capability detached_server_daemon only for a session leader, and without it
+# `herdr machine add` offers to restart the server. A launchd job is normally a
+# process-group leader, which cannot call setsid() itself, hence the fork.
+# A host where perl does not resolve is refused with exit 1 before any server
+# is stopped or started.
 #
 # Decision, made once per launch (exit codes matter under SuccessfulExit=false:
 # 0 tells launchd the job is done until something restarts it, non-zero asks
 # for a retry after the throttle interval):
-#   no server owns the session socket  -> exec `herdr server --session <s>`
-#                                          (foreground, launchd-supervised)
+#   no server owns the session socket  -> start `herdr server --session <s>`
+#                                          under the supervisor and exit with
+#                                          the server's status
 #   the owner was born in the Aqua session (launchd or the Aqua remote-job
 #   worker)                            -> exit 0, leave it alone
 #   the owner was born anywhere else (an SSH remote attach, a shell over
 #   ssh/mosh, or a birth it cannot prove), and the operator's
 #   fm-remote-doctor.sh --fix authorized this start
 #                                       -> `herdr server stop`, wait until the
-#                                          socket is released, then exec
+#                                          socket is released, then start
 #                                          `herdr server --session <s>` at once
 #                                          so the socket is rebound before a
 #                                          reconnecting SSH attach can start
@@ -62,6 +73,7 @@ SESSION=$2
 [ -n "$HERDR_BIN" ] && [ -x "$HERDR_BIN" ] || { printf 'fm-remote-herdr-guard: herdr is not executable: %s\n' "$HERDR_BIN" >&2; exit 1; }
 [ -n "$SESSION" ] || usage
 command -v jq >/dev/null 2>&1 || { printf 'fm-remote-herdr-guard: jq does not resolve on the launch agent PATH\n' >&2; exit 1; }
+PERL=$(command -v perl 2>/dev/null) || { printf 'fm-remote-herdr-guard: perl does not resolve on the launch agent PATH, so the herdr server cannot be started as a session leader; restore /usr/bin/perl, which macOS ships\n' >&2; exit 1; }
 STOP_WAIT_TENTHS=${FM_REMOTE_HERDR_GUARD_STOP_WAIT_TENTHS:-50}
 
 log() { printf 'fm-remote-herdr-guard: %s\n' "$*"; }
@@ -74,9 +86,34 @@ status_running() { # <status-json>
   [ "$(printf '%s' "$1" | jq -r '.server.running // false' 2>/dev/null)" = true ]
 }
 
+# The supervisor keeps this pid, the one launchd tracks, and runs the server
+# as a child that leads its own POSIX session.
+# shellcheck disable=SC2016 # Perl source; perl, not this shell, expands it
+SUPERVISOR='
+my ($child, $pending);
+for my $sig (qw(TERM INT HUP)) {
+  $SIG{$sig} = sub { if ($child) { kill $sig, $child } else { $pending = $sig } };
+}
+$child = fork;
+defined $child or die "fm-remote-herdr-guard: fork failed: $!\n";
+if ($child == 0) {
+  $SIG{$_} = "DEFAULT" for qw(TERM INT HUP);
+  my $sid = POSIX::setsid();
+  unless (defined $sid && $sid > 0) { print STDERR "fm-remote-herdr-guard: setsid failed: $!\n"; POSIX::_exit(126) }
+  exec { $ARGV[0] } @ARGV;
+  print STDERR "fm-remote-herdr-guard: exec $ARGV[0] failed: $!\n";
+  POSIX::_exit(127);
+}
+kill $pending, $child if $pending;
+my $done;
+do { $done = waitpid($child, 0) } until $done == $child || ($done == -1 && !$!{EINTR});
+$done == $child or die "fm-remote-herdr-guard: lost the herdr server (pid $child): $!\n";
+exit(($? & 127) ? 128 + ($? & 127) : $? >> 8);
+'
+
 start_server() {
-  log "starting the herdr server for session $SESSION inside this launch agent (pid $$)"
-  exec "$HERDR_BIN" server --session "$SESSION"
+  log "starting the herdr server for session $SESSION as a session leader inside this launch agent (pid $$)"
+  exec "$PERL" -MPOSIX -e "$SUPERVISOR" "$HERDR_BIN" server --session "$SESSION"
 }
 
 STATUS=$(herdr_status)

@@ -299,6 +299,9 @@ It resolves that shell in this order, so the server inherits the account's own e
 2. An executable `$SHELL`.
 3. `/bin/sh`.
 
+The guard stays in the foreground as the launchd job and runs `herdr server` as a child that leads its own POSIX session.
+Herdr treats only a session-leader server as a detached daemon; for any other server, `herdr machine add` offers to restart it, which would stop every pane in the session.
+The guard needs `perl` on the launch agent's `PATH` for that, which macOS provides as `/usr/bin/perl`.
 The `gui/<uid>` domain, not the login shell, is what gives that server and every pane it spawns the Aqua audit session and login-keychain access.
 A server born in any other session cannot read the login keychain.
 Every claude pane under such a server falls back to a stale plaintext credentials file and reports "Login expired".

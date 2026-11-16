@@ -7,10 +7,16 @@
 # environment and ancestry carry the birth markers the guard reads. It pins
 # the decision table: no server -> start; an Aqua-born owner -> leave it; an
 # SSH-born or unprovable owner -> stop it, wait for the socket, and start, but
-# only on a start the operator's --fix authorized, else leave it. Nothing
-# here touches the runner's own herdr servers, launch agents, or login
-# session, and no live harness guard applies: the verdict comes from process
-# environment and ancestry, which are kernel facts rather than vendor output.
+# only on a start the operator's --fix authorized, else leave it. It also pins
+# the start shape: the server leads its own session as a child of the guard's
+# process, whose exit status is the server's and which forwards TERM to it.
+# Where herdr is installed, a final case starts one real server through the
+# guard on an isolated fm-lab- session that bin/fm-herdr-lab.sh prepares,
+# stops, and tears down, and reads its detached_server_daemon capability.
+# Nothing here touches the runner's own fleet herdr session, launch agents, or
+# login session, and no live harness guard applies: the birth verdict comes
+# from process environment and ancestry, which are kernel facts rather than
+# vendor output.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -23,7 +29,17 @@ mkdir -p "$TMP_ROOT"
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
 HOLDER_PIDS=()
 HOLDER_FD=5
-trap 'if [ "${#HOLDER_PIDS[@]}" -gt 0 ]; then kill "${HOLDER_PIDS[@]}" 2>/dev/null || true; fi; fm_test_cleanup || true' EXIT
+LAB_HELPER="$ROOT/bin/fm-herdr-lab.sh"
+LAB_SESSION=
+LAB_AGENT_PID=
+cleanup() {
+  [ -z "$LAB_AGENT_PID" ] || kill -TERM "$LAB_AGENT_PID" 2>/dev/null || true
+  [ -z "$LAB_SESSION" ] || "$LAB_HELPER" teardown "$LAB_SESSION" >/dev/null 2>&1 \
+    || printf 'warning: lab session %s needs a manual teardown through %s\n' "$LAB_SESSION" "$LAB_HELPER" >&2
+  if [ "${#HOLDER_PIDS[@]}" -gt 0 ]; then kill "${HOLDER_PIDS[@]}" 2>/dev/null || true; fi
+  fm_test_cleanup || true
+}
+trap cleanup EXIT
 
 GUARD="$ROOT/bin/fm-remote-herdr-guard.sh"
 JQ=$(command -v jq)
@@ -35,7 +51,7 @@ SESSION=fm-remote
 # so a case can also present a host with NO lsof.
 TOOLS="$TMP_ROOT/tools"
 mkdir -p "$TOOLS"
-for tool in ps awk sed grep tr dirname basename sleep cat cp mv rm env bash sh id head; do
+for tool in ps awk sed grep tr dirname basename sleep cat cp mv rm env bash sh id head uname perl; do
   real=$(command -v "$tool") || fail "test host lacks $tool"
   ln -sf "$real" "$TOOLS/$tool"
 done
@@ -93,7 +109,18 @@ case "$*" in
     fi
     ;;
   "server --session "*)
-    printf 'pid=%s session=%s\n' "$$" "${3:-}" > "$FM_FAKE_STATE/started"
+    # Records the process shape the guard gave the server (ps sid is Linux
+    # only; macOS prints no session id), then behaves as the case asks.
+    sid=$(ps -o sid= -p "$$" 2>/dev/null | tr -d ' ')
+    pgid=$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')
+    printf 'pid=%s ppid=%s sid=%s pgid=%s session=%s\n' "$$" "$PPID" "$sid" "$pgid" "${3:-}" > "$FM_FAKE_STATE/started.tmp"
+    mv "$FM_FAKE_STATE/started.tmp" "$FM_FAKE_STATE/started"
+    if [ -f "$FM_FAKE_STATE/server-runs" ]; then
+      trap 'printf "terminated\n" > "$FM_FAKE_STATE/server-terminated"; exit 0' TERM
+      while :; do sleep 0.1; done
+    fi
+    [ ! -f "$FM_FAKE_STATE/server-killed" ] || kill -KILL "$$"
+    exit "$(cat "$FM_FAKE_STATE/server-exit" 2>/dev/null || printf 0)"
     ;;
 esac
 exit 0
@@ -133,6 +160,42 @@ hold_under() {
   [ -s "$pidfile" ] || fail "holder under $argv0 did not report its pid"
   HOLDER_PID=$(cat "$pidfile")
   HOLDER_PIDS+=("$HOLDER_PID")
+}
+
+# hold_child <marker-env...> -> HOLDER_PID, HOLDER_PARENT_PID: a holder with
+# exactly the markers whose parent is a separate live process, the shape the
+# launch agent's supervisor gives its session-leader server.
+hold_child() {
+  local fifo="$TMP_ROOT/holder-$HOLDER_FD.fifo" pidfile="$TMP_ROOT/holder-$HOLDER_FD.pid"
+  rm -f "$fifo" "$pidfile"
+  mkfifo "$fifo"
+  eval "exec ${HOLDER_FD}<>\"\$fifo\""
+  # shellcheck disable=SC2016 # the inner bash expands its own arguments
+  env FM_HOLDER_JQ="$HOLDER_JQ" FM_HOLDER_FIFO="$fifo" FM_HOLDER_PIDFILE="$pidfile" \
+    bash -c 'env -i "$@" "$FM_HOLDER_JQ" . "$FM_HOLDER_FIFO" & printf "%s\n" "$!" > "$FM_HOLDER_PIDFILE"; wait' bash "$@" &
+  HOLDER_PARENT_PID=$!
+  HOLDER_PIDS+=("$HOLDER_PARENT_PID")
+  HOLDER_FD=$((HOLDER_FD + 1))
+  local i=0
+  while [ ! -s "$pidfile" ] && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
+  [ -s "$pidfile" ] || fail "child holder did not report its pid"
+  HOLDER_PID=$(cat "$pidfile")
+  HOLDER_PIDS+=("$HOLDER_PID")
+}
+
+# wait_exit <pid> <what> -> WAIT_RC: the exit status of a background child,
+# failing instead of hanging when it does not exit within ten seconds.
+wait_exit() {
+  local i=0
+  while kill -0 "$1" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+  if kill -0 "$1" 2>/dev/null; then
+    kill -KILL "$1" 2>/dev/null || true
+    fail "$2 did not exit within ten seconds"
+  fi
+  set +e
+  wait "$1"
+  WAIT_RC=$?
+  set -e
 }
 
 CASE_N=0
@@ -221,6 +284,85 @@ assert_not_contains "$(herdr_calls)" 'server stop' "the guard stopped something 
 assert_contains "$GUARD_OUT" "no server owns session $SESSION" "the guard did not report the empty session"
 pass "an empty session is started inside the launch agent"
 
+# --- the server is a session leader under the launch agent's own process ----
+
+started_field() { # <name> -> the value recorded by the fake server
+  sed -n "s/.* $1=\([^ ]*\).*/\1/p; s/^$1=\([^ ]*\).*/\1/p" "$CASE_STATE/started" | head -1
+}
+
+assert_session_leader_child() { # <guard-pid>
+  local pid
+  pid=$(started_field pid)
+  [ -n "$pid" ] || fail "the fake server did not record its pid"
+  assert_equals "$1" "$(started_field ppid)" "the server's parent is not the launch agent's process (pid $1)"
+  assert_equals "$pid" "$(started_field pgid)" "the server does not lead its own process group"
+  if [ "$(uname -s)" = Linux ]; then
+    assert_equals "$pid" "$(started_field sid)" "the server is not a session leader"
+  fi
+}
+
+new_case stopped
+guard
+expect_code 0 "$GUARD_RC" "the guard failed to start a server that exited cleanly"
+agent_pid=$(printf '%s\n' "$GUARD_OUT" | sed -n 's/.*inside this launch agent (pid \([0-9]*\)).*/\1/p' | head -1)
+[ -n "$agent_pid" ] || fail "the guard did not name its own pid when it started the server: $GUARD_OUT"
+assert_session_leader_child "$agent_pid"
+pass "the server leads its own session while the launch agent's process stays its parent"
+
+# --- the launch agent's exit status is the server's --------------------------
+
+new_case stopped
+printf '3\n' > "$CASE_STATE/server-exit"
+guard
+assert_started "the guard did not start the failing server"
+expect_code 3 "$GUARD_RC" "a server that failed did not make the launch agent fail, so launchd would not retry"
+
+new_case stopped
+touch "$CASE_STATE/server-killed"
+guard
+assert_started "the guard did not start the crashing server"
+expect_code 137 "$GUARD_RC" "a server killed by a signal did not make the launch agent exit 128+signal"
+pass "a clean server exit rests the job, and a failure or crash exits non-zero for a launchd retry"
+
+# --- a termination signal to the launch agent stops the server ---------------
+
+new_case stopped
+touch "$CASE_STATE/server-runs"
+env -i PATH="$CASE_PATH" HOME="$TMP_ROOT" \
+  FM_FAKE_STATE="$CASE_STATE" FM_FAKE_HERDR_LOG="$CASE_LOG" FM_FAKE_HERDR_RUNNING="$CASE_RUNNING" \
+  FM_FAKE_SOCKET_OWNER="$CASE_OWNER" FM_FAKE_HERDR_SOCKET="$CASE_SOCKET" \
+  "$GUARD" "$FAKE/herdr" "$SESSION" > "$CASE_STATE/guard.out" 2>&1 &
+agent_pid=$!
+HOLDER_PIDS+=("$agent_pid")
+i=0
+while [ ! -f "$CASE_STATE/started" ] && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
+assert_started "the guard did not start the long-running server"
+assert_session_leader_child "$agent_pid"
+server_pid=$(started_field pid)
+kill -TERM "$agent_pid"
+wait_exit "$agent_pid" "the launch agent sent TERM"
+expect_code 0 "$WAIT_RC" "the launch agent did not exit with the server's clean-shutdown status after a forwarded TERM"
+assert_present "$CASE_STATE/server-terminated" "the TERM sent to the launch agent never reached the server"
+i=0
+while kill -0 "$server_pid" 2>/dev/null && [ "$i" -lt 40 ]; do sleep 0.05; i=$((i + 1)); done
+kill -0 "$server_pid" 2>/dev/null && fail "the server (pid $server_pid) outlived the launch agent's TERM"
+pass "a termination signal to the launch agent is forwarded to the server, which stops"
+
+# --- without perl the guard refuses rather than start a non-leader server ---
+
+TOOLS_NO_PERL="$TMP_ROOT/tools-no-perl"
+mkdir -p "$TOOLS_NO_PERL"
+for tool in "$TOOLS"/*; do
+  [ "${tool##*/}" = perl ] || ln -sf "$(readlink "$tool")" "$TOOLS_NO_PERL/${tool##*/}"
+done
+new_case stopped
+CASE_PATH="$FAKE:$TOOLS_NO_PERL"
+guard
+expect_code 1 "$GUARD_RC" "the guard did not fail when perl was missing"
+assert_not_started "the guard started a server it could not make a session leader"
+assert_contains "$GUARD_OUT" 'perl does not resolve' "the guard did not name the missing perl"
+pass "a host without perl is refused before any server starts"
+
 # --- an Aqua-born owner is left alone ----------------------------------------
 
 hold XPC_SERVICE_NAME=dev.firstmate.herdr.fm-remote
@@ -239,6 +381,12 @@ hold_under herdr --session "$SESSION" remote-client-bridge
 BRIDGE_CHILD_PID=$HOLDER_PID
 hold_under 'sshd-session:' kunchen@notty
 SSHD_CHILD_PID=$HOLDER_PID
+hold_child XPC_SERVICE_NAME=dev.firstmate.herdr.fm-remote
+SUPERVISED_PID=$HOLDER_PID
+SUPERVISOR_PID=$HOLDER_PARENT_PID
+hold_child SSH_CONNECTION='100.102.217.78 51234 100.100.1.2 22' XPC_SERVICE_NAME=dev.firstmate.herdr.fm-remote
+SUPERVISED_SSH_PID=$HOLDER_PID
+SUPERVISED_SSH_PARENT_PID=$HOLDER_PARENT_PID
 sleep 0.3
 
 new_case running
@@ -261,6 +409,38 @@ assert_not_contains "$(herdr_calls)" 'server stop' "the guard stopped a gui-doma
 assert_contains "$GUARD_OUT" "pid $WORKER_PID born in the Aqua login session (worker)" \
   "the guard did not name the worker owner"
 pass "launchd and worker markers require gui-domain launchctl proof"
+
+# The label is also loaded in the user domain in these cases, so only the
+# gui job's own pid can prove the birth: the job is the supervisor and the
+# socket owner is its session-leader child.
+new_case running
+printf '%s\n' "$SUPERVISED_PID" > "$CASE_OWNER"
+load_job gui dev.firstmate.herdr.fm-remote "$SUPERVISOR_PID"
+load_job user dev.firstmate.herdr.fm-remote
+guard
+expect_code 0 "$GUARD_RC" "the guard did not exit 0 for a child of the gui-domain launchd job"
+assert_not_started "the guard started a second server over a child of the launchd job"
+assert_not_contains "$(herdr_calls)" 'server stop' "the guard stopped a child of the launchd job"
+assert_contains "$GUARD_OUT" "pid $SUPERVISED_PID born in the Aqua login session (launchd)" \
+  "a server whose parent is the launchd job was not proven Aqua-born"
+
+new_case running
+printf '%s\n' "$SUPERVISED_PID" > "$CASE_OWNER"
+load_job gui dev.firstmate.herdr.fm-remote "$LAUNCHD_PID"
+load_job user dev.firstmate.herdr.fm-remote
+guard
+expect_code 0 "$GUARD_RC" "the guard failed for a server whose parent is not the launchd job"
+assert_contains "$GUARD_OUT" "pid $SUPERVISED_PID born outside the Aqua login session (unknown)" \
+  "a server whose parent is not the launchd job was trusted as Aqua"
+
+new_case running
+printf '%s\n' "$SUPERVISED_SSH_PID" > "$CASE_OWNER"
+load_job gui dev.firstmate.herdr.fm-remote "$SUPERVISED_SSH_PARENT_PID"
+guard
+expect_code 0 "$GUARD_RC" "the guard failed for an SSH-marked child of the launchd job"
+assert_contains "$GUARD_OUT" "pid $SUPERVISED_SSH_PID born outside the Aqua login session (ssh)" \
+  "an SSH-marked server was trusted because its parent is the launchd job"
+pass "a server whose parent is the gui-domain launchd job is Aqua-born unless it carries SSH markers"
 
 # --- a foreign owner is stopped, then the guard becomes the server -----------
 
@@ -348,6 +528,17 @@ guard
 assert_not_contains "$(herdr_calls)" 'server stop' "one authorization took over the session twice"
 pass "a login, KeepAlive, or automatic start never takes over a foreign server, and an authorization is honored once"
 
+new_case running
+printf '%s\n' "$SSH_PID" > "$CASE_OWNER"
+CASE_PATH="$FAKE:$TOOLS_NO_PERL"
+authorize
+guard
+expect_code 1 "$GUARD_RC" "an authorized takeover without perl did not fail"
+assert_not_contains "$(herdr_calls)" 'server stop' "an authorized takeover without perl stopped the foreign server it could not replace"
+assert_not_started "an authorized takeover without perl started a server"
+rm -f "$TAKEOVER_MARKER"
+pass "an authorized takeover without perl leaves the foreign server running"
+
 # --- an owner nobody can prove is treated as foreign -------------------------
 
 new_case running
@@ -412,3 +603,47 @@ set -e
 expect_code 1 "$rc" "a non-executable herdr path was not refused"
 [ ! -s "$CASE_LOG" ] || fail "a refused invocation still called herdr"
 pass "argument errors are refused before any herdr call"
+
+# --- a real herdr server started by the guard reports a detached daemon ------
+#
+# Herdr derives its detached_server_daemon capability from the server process
+# itself, so only a real server can prove the shape is the one herdr accepts.
+# The guard starts it on an isolated fm-lab- session that bin/fm-herdr-lab.sh
+# prepares, reads, stops, and tears down; the fleet session is never named.
+
+lab_status() {
+  "$LAB_HELPER" run "$LAB_SESSION" status --json 2>/dev/null || true
+}
+
+if ! command -v herdr >/dev/null 2>&1; then
+  pass "real herdr: not installed, so the detached-daemon check did not run"
+else
+  LAB_SESSION=$("$LAB_HELPER" name guard-leader) || fail "could not name an isolated Herdr lab session"
+  "$LAB_HELPER" prepare "$LAB_SESSION" || fail "could not prepare isolated Herdr lab session $LAB_SESSION"
+  env -u HERDR_SOCKET_PATH -u HERDR_PANE_ID -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID -u HERDR_SESSION -u HERDR_ENV \
+    "$GUARD" "$(command -v herdr)" "$LAB_SESSION" > "$TMP_ROOT/lab-guard.out" 2>&1 &
+  LAB_AGENT_PID=$!
+  i=0
+  while [ "$(lab_status | jq -r '.server.running // false' 2>/dev/null)" != true ] && [ "$i" -lt 100 ]; do
+    kill -0 "$LAB_AGENT_PID" 2>/dev/null || fail "the guard exited before the lab server ran: $(cat "$TMP_ROOT/lab-guard.out")"
+    sleep 0.1
+    i=$((i + 1))
+  done
+  LAB_STATUS=$(lab_status)
+  assert_equals true "$(printf '%s' "$LAB_STATUS" | jq -r '.server.running // false')" \
+    "the lab server started by the guard never reported running"
+  assert_equals true "$(printf '%s' "$LAB_STATUS" | jq -r '.server.capabilities.detached_server_daemon // false')" \
+    "herdr does not report the guard-started server as a detached daemon"
+  LAB_OWNER=$(fm_remote_herdr_socket_owner "$(printf '%s' "$LAB_STATUS" | jq -r '.server.socket // empty')")
+  if [ -n "$LAB_OWNER" ]; then
+    assert_equals "$LAB_AGENT_PID" "$(ps -o ppid= -p "$LAB_OWNER" | tr -d ' ')" \
+      "the real lab server's parent is not the guard's process"
+  fi
+  "$LAB_HELPER" stop "$LAB_SESSION" >/dev/null 2>&1 || fail "the guarded lab stop failed for $LAB_SESSION"
+  wait_exit "$LAB_AGENT_PID" "the launch agent of the stopped lab server"
+  LAB_AGENT_PID=
+  expect_code 0 "$WAIT_RC" "a clean stop of the real server did not end the launch agent with exit 0"
+  "$LAB_HELPER" teardown "$LAB_SESSION" || fail "the isolated lab teardown failed for $LAB_SESSION"
+  LAB_SESSION=
+  pass "real herdr: the guard-started server reports detached_server_daemon, and a clean stop exits 0"
+fi
