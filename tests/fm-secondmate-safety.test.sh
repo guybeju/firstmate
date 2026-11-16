@@ -1613,12 +1613,18 @@ test_fm_send_refuses_bare_window_without_home_meta() {
 test_secondmate_teardown_retires_empty_home() {
   local home subhome subhome_abs fakebin log lease fmroot
   home="$TMP_ROOT/teardown-home"
-  subhome="$TMP_ROOT/teardown-subhome"
+  subhome="$TMP_ROOT/teardown-pool/1/firstmate"
   fmroot="$TMP_ROOT/teardown-fmroot"
   make_firstmate_git_root "$fmroot"
+  cp "$ROOT/.gitignore" "$fmroot/.gitignore"
+  git -C "$fmroot" add .gitignore
+  git -C "$fmroot" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm ignore
+  mkdir -p "$TMP_ROOT/teardown-pool/1"
+  printf '{}\n' > "$TMP_ROOT/teardown-pool/treehouse-state.json"
   git -C "$fmroot" worktree add --quiet --detach "$subhome" HEAD
   mkdir -p "$home/state" "$home/data" "$subhome/state"
   printf 'domain\n' > "$subhome/.fm-secondmate-home"
+  printf 'kept\n' > "$subhome/state/record"
   subhome_abs=$(cd "$subhome" && pwd -P)
   cat > "$home/state/domain.meta" <<EOF
 window=firstmate:fm-domain
@@ -1642,10 +1648,62 @@ EOF
     || fail "teardown failed for empty secondmate home"
   grep -F "treehouse return --force $subhome_abs" "$log" >/dev/null || fail "teardown did not release the secondmate home lease via treehouse return"
   [ ! -e "$lease" ] || fail "teardown left the secondmate home lease held after retirement"
-  [ ! -d "$subhome" ] || fail "teardown did not remove the retired secondmate home"
+  [ -f "$subhome/AGENTS.md" ] || fail "the returned pool slot lost its checkout"
+  [ ! -e "$subhome/.fm-secondmate-home" ] || fail "teardown left the retired home's marker in the returned pool slot"
+  [ ! -e "$subhome/state" ] || fail "teardown left the retired home's state in the returned pool slot"
+  [ -z "$(find "$TMP_ROOT/teardown-pool/1" -maxdepth 1 -name '.fm-home-retire.*' -print -quit)" ] \
+    || fail "teardown left the staged private paths behind after a successful return"
   [ ! -e "$home/state/domain.meta" ] || fail "teardown did not clear parent meta"
   grep -F -- '- domain ' "$home/data/secondmates.md" >/dev/null && fail "teardown did not remove secondmate registry route"
   pass "secondmate teardown retires empty homes and releases routing"
+}
+
+# The pool keeps a returned slot and its ignored files, so a retired mate's
+# marker and private records must not reach the next holder of the same slot.
+test_secondmate_retire_frees_leased_slot_for_next_seed() {
+  local home slot fmroot fakebin log err out residue
+  home="$TMP_ROOT/reseed-home"
+  slot="$TMP_ROOT/reseed-pool/1/firstmate"
+  fmroot="$TMP_ROOT/reseed-fmroot"
+  err="$TMP_ROOT/reseed.err"
+  git clone --quiet "$ROOT" "$fmroot"
+  mkdir -p "$TMP_ROOT/reseed-pool/1"
+  printf '{}\n' > "$TMP_ROOT/reseed-pool/treehouse-state.json"
+  git -C "$fmroot" worktree add --quiet --detach "$slot" HEAD
+  mkdir -p "$home/state" "$home/data"
+  fakebin=$(make_fake_tmux "$TMP_ROOT/reseed-fake")
+  log="$TMP_ROOT/reseed-fake/tmux.log"
+
+  PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$fmroot" FM_HOME="$home" FM_FAKE_TREEHOUSE_HOME="$slot" \
+    FM_FAKE_TMUX_LOG="$log" FM_SECONDMATE_CHARTER='first scope' FM_SECONDMATE_SCOPE='first scope' \
+    "$ROOT/bin/fm-home-seed.sh" first - --no-projects >/dev/null 2>"$err" \
+    || fail "first seed of the leased slot failed: $(cat "$err")"
+  [ "$(cat "$slot/.fm-secondmate-home")" = first ] || fail "first seed did not mark the leased slot"
+  printf 'private backlog\n' > "$slot/data/backlog.md"
+  printf 'pinned\n' > "$slot/config/claude-account"
+  mkdir -p "$slot/.no-mistakes"
+  printf 'run\n' > "$slot/.no-mistakes/run.log"
+  printf 'TOKEN=secret\n' > "$slot/.env"
+  fm_write_secondmate_meta "$home/state/first.meta" "$slot"
+
+  PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$fmroot" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
+    FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/reseed-fake/pane.txt" \
+    "$ROOT/bin/fm-teardown.sh" first >/dev/null 2>"$err" \
+    || fail "retiring the first mate failed: $(cat "$err")"
+  [ -f "$slot/AGENTS.md" ] || fail "the returned pool slot lost its checkout"
+  residue=$(git -C "$slot" status --porcelain --ignored --untracked-files=all)
+  [ -z "$residue" ] || fail "retirement left private paths in the returned pool slot: $residue"
+
+  out=$(PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$fmroot" FM_HOME="$home" FM_FAKE_TREEHOUSE_HOME="$slot" \
+    FM_FAKE_TMUX_LOG="$log" FM_SECONDMATE_CHARTER='second scope' FM_SECONDMATE_SCOPE='second scope' \
+    "$ROOT/bin/fm-home-seed.sh" second - --no-projects 2>"$err") \
+    || fail "seeding a new mate on the retired mate's slot failed: $(cat "$err")"
+  printf '%s\n' "$out" | grep -F "home=$(cd "$slot" && pwd -P)" >/dev/null \
+    || fail "second seed did not land on the returned slot"
+  [ "$(cat "$slot/.fm-secondmate-home")" = second ] || fail "second seed did not mark the reused slot"
+  [ ! -e "$slot/data/backlog.md" ] && [ ! -e "$slot/.env" ] \
+    || fail "the reused slot still holds the retired mate's private records"
+  pass "a retired mate's leased slot seeds a new mate with none of its private paths"
 }
 
 # A second mate's status log relays child outcomes, so a merged child PR there
@@ -1953,6 +2011,10 @@ EOF
   grep -F "treehouse return --force $subhome_abs" "$log" >/dev/null || fail "teardown did not try to return the leased home"
   grep -F 'treehouse return failed for secondmate home' "$err" >/dev/null || fail "teardown did not report failed leased home return"
   [ -d "$subhome" ] || fail "teardown removed a leased home after return failed"
+  [ "$(cat "$subhome/.fm-secondmate-home" 2>/dev/null)" = domain ] \
+    || fail "failed leased-home return did not restore the home's marker"
+  [ -z "$(find "$TMP_ROOT" -maxdepth 1 -name '.fm-home-retire.*' -print -quit)" ] \
+    || fail "failed leased-home return left a private-path stage behind"
   [ -e "$subhome/state/procevent/source.source" ] || fail "failed leased-home return did not restore the source registration"
   grep -Fx "$subhome_abs" "$rearm_log" >/dev/null || fail "failed leased-home return did not rearm restored process-event sources"
   [ -e "$home/state/domain.meta" ] || fail "teardown cleared meta after leased home return failed"
@@ -3163,6 +3225,7 @@ test_secondmate_spawn_requires_seeded_matching_home
 test_secondmate_spawn_refuses_operational_dirs_outside_subhome
 test_fm_send_refuses_bare_window_without_home_meta
 test_secondmate_teardown_retires_empty_home
+test_secondmate_retire_frees_leased_slot_for_next_seed
 test_branch_actor_cannot_retire_secondmate
 test_secondmate_teardown_refuses_ambiguous_and_mismatched_registry_bindings
 test_secondmate_teardown_sweeps_process_events_before_removal

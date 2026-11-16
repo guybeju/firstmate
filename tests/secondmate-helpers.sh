@@ -13,8 +13,11 @@
 # A fake tmux (window ops are logged to FM_FAKE_TMUX_LOG, list-windows returns
 # FM_FAKE_TMUX_WINDOW, capture-pane echoes FM_FAKE_TMUX_CAPTURE) plus a fake
 # treehouse (durable lease of FM_FAKE_TREEHOUSE_HOME, recording the lease holder
-# to FM_FAKE_TREEHOUSE_LEASE_FILE; `return` removes the target and lease unless
-# FM_FAKE_TREEHOUSE_RETURN_FAIL is set). Echoes the fakebin dir.
+# to FM_FAKE_TREEHOUSE_LEASE_FILE; `return` releases the lease unless
+# FM_FAKE_TREEHOUSE_RETURN_FAIL is set). Like the real pool, `return` keeps a
+# slot in the <pool>/<slot>/<repo> layout beside <pool>/treehouse-state.json,
+# with its ignored files, cleaning only untracked files with `git clean -fd`;
+# any other target is removed. Echoes the fakebin dir.
 make_fake_tmux() {
   local dir=$1 fakebin capture
   fakebin=$(fm_fakebin "$dir")
@@ -162,7 +165,12 @@ case "${1:-}" in
     done
     [ -z "${FM_FAKE_TREEHOUSE_RETURN_FAIL:-}" ] || exit 17
     [ -n "${FM_FAKE_TREEHOUSE_LEASE_FILE:-}" ] && rm -f "$FM_FAKE_TREEHOUSE_LEASE_FILE"
-    [ -n "$target" ] && rm -rf -- "$target"
+    [ -n "$target" ] || exit 0
+    if [ -f "$(dirname "$(dirname "$target")")/treehouse-state.json" ]; then
+      git -C "$target" clean -fdq
+    else
+      rm -rf -- "$target"
+    fi
     exit 0
     ;;
 esac

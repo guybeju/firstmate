@@ -205,10 +205,16 @@
 # leftovers included) and its delivery confirmation is removed so retired mates
 # cannot leave durable reply expectations behind. Non-forced retirement refuses
 # while any of those records is still unresolved. Teardown then discards child
-# work, kills child runtime endpoints, and removes the retired home. Removing a
-# leased home releases its durable treehouse lease so the pool slot is freed,
-# never left leased forever. If the treehouse return fails, teardown leaves the
-# leased home and state in place instead of hiding a still-held lease.
+# work, kills child runtime endpoints, and removes the retired home. A home that
+# is not a pool slot is deleted. A leased home is a pool slot whose return keeps
+# ignored files, so teardown first moves its two secondmate markers and its
+# captain-private paths (.env, config/, data/, state/, projects/, .no-mistakes/)
+# into a stage directory beside the home, then releases the durable treehouse
+# lease so the pool slot is freed, never left leased forever, and the next
+# holder starts without the retired home's identity or records. The stage is
+# deleted once the return succeeds. If the treehouse return fails, teardown moves
+# those paths back and leaves the leased home and state in place instead of
+# hiding a still-held lease.
 # Usage: fm-teardown.sh <task-id> [--force] [--legacy-record]
 #   --force skips ordinary-task dirty and landed-work checks, skips scout report
 #   checks and closes the scout as discarded with no report recorded, and
@@ -2976,8 +2982,42 @@ t3code_secondmate_home_shutdown_barrier() {  # <home> <task-id>
   reap_task_worktree_processes "secondmate home" "$1"
 }
 
+# A pool slot keeps ignored files across `treehouse return`, so a retired home's
+# markers and captain-private paths are staged out beside the home before the
+# return, restored when it fails, and deleted once it succeeds. See the script
+# header.
+FIRSTMATE_HOME_PRIVATE_PATHS=("$SUB_HOME_MARKER" "$SUB_HOME_PARENT_MARKER" .env config data state projects .no-mistakes)
+
+stage_firstmate_home_private_paths() {  # <home> <label>; prints the stage dir
+  local home=$1 label=$2 stage name
+  stage=$(umask 077; mktemp -d "${home%/*}/.fm-home-retire.XXXXXX") || {
+    echo "REFUSED: cannot stage the private paths of $label $home before returning its pool slot" >&2
+    return 1
+  }
+  for name in "${FIRSTMATE_HOME_PRIVATE_PATHS[@]}"; do
+    [ -e "$home/$name" ] || [ -L "$home/$name" ] || continue
+    mv -- "$home/$name" "$stage/$name" && continue
+    echo "REFUSED: cannot move $home/$name out of $label before returning its pool slot" >&2
+    unstage_firstmate_home_private_paths "$home" "$label" "$stage" || true
+    return 1
+  done
+  printf '%s\n' "$stage"
+}
+
+unstage_firstmate_home_private_paths() {  # <home> <label> <stage>
+  local home=$1 label=$2 stage=$3 name
+  for name in "${FIRSTMATE_HOME_PRIVATE_PATHS[@]}"; do
+    [ -e "$stage/$name" ] || [ -L "$stage/$name" ] || continue
+    if [ -e "$home/$name" ] || [ -L "$home/$name" ] || ! mv -- "$stage/$name" "$home/$name"; then
+      echo "error: could not restore $home/$name for $label; recover it from $stage" >&2
+      return 1
+    fi
+  done
+  rmdir -- "$stage"
+}
+
 remove_firstmate_home() {  # <home> <label> <task-id> <backend>
-  local home=$1 label=$2 expected_id=${3:-} backend=${4:-} abs_home_path process_event_backup
+  local home=$1 label=$2 expected_id=${3:-} backend=${4:-} abs_home_path process_event_backup private_stage
   [ -n "$home" ] || return 0
   [ -e "$home" ] || return 0
   abs_home_path=$(validate_firstmate_home_for_removal "$home" "$label" "$expected_id") || return 1
@@ -3006,11 +3046,18 @@ remove_firstmate_home() {  # <home> <label> <task-id> <backend>
       restore_firstmate_home_process_events "$abs_home_path" "$label" "$process_event_backup" || return $?
       return 1
     }
+    if ! private_stage=$(stage_firstmate_home_private_paths "$abs_home_path" "$label"); then
+      restore_firstmate_home_process_events "$abs_home_path" "$label" "$process_event_backup" || return $?
+      return 1
+    fi
     teardown_treehouse_return "$abs_home_path" "$FM_ROOT" "$label" || {
       echo "error: treehouse return failed for $label $abs_home_path; lease may still be held" >&2
+      unstage_firstmate_home_private_paths "$abs_home_path" "$label" "$private_stage" || return 1
       restore_firstmate_home_process_events "$abs_home_path" "$label" "$process_event_backup" || return $?
       return 1
     }
+    safe_rm_rf "$private_stage" "$label private-path stage" \
+      || echo "warning: $label $abs_home_path was returned, but its private paths remain in $private_stage; remove that directory" >&2
     [ -z "$process_event_backup" ] || rm -rf -- "$process_event_backup"
     return 0
   fi
