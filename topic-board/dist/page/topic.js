@@ -109,6 +109,16 @@ function agentCard(page, actions, agent) {
         write.home === agent.home &&
         write.task === agent.task));
 }
+function queuedRow(item) {
+    return h("div", { class: "meta" }, h("b", {}, item.task), h("span", {}, item.title), h("span", { class: "pill" }, item.home), h("span", { class: "note" }, item.waiting === null ? "可以派" : item.waiting));
+}
+/** Backlog items of this topic that no worker has been dispatched for, folded by default. */
+function queued(view, id) {
+    const items = view.queued.filter((item) => item.topic === id);
+    if (items.length === 0)
+        return null;
+    return h("section", {}, h("details", { "data-key": `queued:${id}` }, h("summary", {}, `排隊中 ${items.length}`), items.map(queuedRow)));
+}
 export function topicPage(page, view, actions, id) {
     if (view.topics[id] === undefined) {
         return h("p", {}, "沒有這個議題。", h("button", { class: "link", onclick: () => actions.open(null) }, "回首頁"));
@@ -118,7 +128,7 @@ export function topicPage(page, view, actions, id) {
     return [
         h("div", { class: "narrow" }, h("p", {}, h("button", { class: "link", onclick: () => actions.open(null) }, "← 回首頁")), header(page, view, actions, id), decisions(page, view, actions, id), updates(view, actions, id), h("section", {}, h("h2", {}, "關聯 agent"), view.agents
             .filter((agent) => agent.topic === id)
-            .map((agent) => agentCard(page, actions, agent)))),
+            .map((agent) => agentCard(page, actions, agent))), queued(view, id)),
         h("div", { class: "composer" }, h("div", { class: "inner" }, h("div", { class: "btns" }, draftInput(page, actions, key, `給 first mate 的訊息（會附上議題「${view.topics[id]?.name ?? id}」）`, send), h("button", { class: "primary", onclick: send }, "送給 first mate")), writeRows(page, actions, (write) => write.kind === "note" && write.topic === id))),
     ];
 }

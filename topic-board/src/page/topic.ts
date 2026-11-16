@@ -1,5 +1,5 @@
 // One topic's page: pending decisions, updates, its agents, and the message box.
-import type { AgentView, SummaryView, UpdateView } from "#board/view.js";
+import type { AgentView, QueuedView, SummaryView, UpdateView } from "#board/view.js";
 import { h } from "./dom.js";
 import type { Child } from "./dom.js";
 import { mergeConfirm, mergeMenu } from "./home.js";
@@ -246,6 +246,33 @@ function agentCard(page: Page, actions: Actions, agent: AgentView): Child {
   );
 }
 
+function queuedRow(item: QueuedView): Child {
+  return h(
+    "div",
+    { class: "meta" },
+    h("b", {}, item.task),
+    h("span", {}, item.title),
+    h("span", { class: "pill" }, item.home),
+    h("span", { class: "note" }, item.waiting === null ? "可以派" : item.waiting),
+  );
+}
+
+/** Backlog items of this topic that no worker has been dispatched for, folded by default. */
+function queued(view: View, id: string): Child {
+  const items = view.queued.filter((item) => item.topic === id);
+  if (items.length === 0) return null;
+  return h(
+    "section",
+    {},
+    h(
+      "details",
+      { "data-key": `queued:${id}` },
+      h("summary", {}, `排隊中 ${items.length}`),
+      items.map(queuedRow),
+    ),
+  );
+}
+
 export function topicPage(page: Page, view: View, actions: Actions, id: string): Child {
   if (view.topics[id] === undefined) {
     return h(
@@ -273,6 +300,7 @@ export function topicPage(page: Page, view: View, actions: Actions, id: string):
           .filter((agent) => agent.topic === id)
           .map((agent) => agentCard(page, actions, agent)),
       ),
+      queued(view, id),
     ),
     h(
       "div",

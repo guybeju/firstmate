@@ -71,8 +71,15 @@ export default async function run(page) {
   await page.waitFor("the cancelled drag to snap back", queueHas("high", "Parked"));
 
   // The topic page: rename, message firstmate, direct message.
+  // Work that is queued but not dispatched yet: counted on the card, listed on the topic page.
+  await page.waitFor("the queued count on the topic card", `[...document.querySelectorAll(".topic")].some((card) => card.innerText.includes("Billing") && card.innerText.includes("排隊 3"))`);
   await page.click(".topic button", "Billing");
   await page.waitFor("the topic page", has("關聯 agent"));
+  await page.waitFor("the folded queued section", `[...document.querySelectorAll("details:not([open]) > summary")].some((entry) => entry.textContent === "排隊中 3")`);
+  await page.click("summary", "排隊中 3");
+  for (const text of ["Next step", "可以派", "停著：waiting for a vendor", "等你決定"]) {
+    await page.waitFor(`queued row text ${text}`, `[...document.querySelectorAll("details[open]")].some((box) => box.innerText.includes(${JSON.stringify(text)}))`);
+  }
   await page.click("button", "編輯");
   await page.type('[data-key="name:billing"]', "Billing X");
   await page.click("button", "儲存");

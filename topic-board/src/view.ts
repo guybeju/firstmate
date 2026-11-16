@@ -1,7 +1,7 @@
 // Computes what the board shows from what the service knows. Pure: the same
 // inputs always give the same view.
 import type { JournalEvent, LedgerEvent, Summary } from "./journal.js";
-import type { HomeReport, ReportHold, ReportTask } from "./report.js";
+import type { HomeReport, ReportHold, ReportQueued, ReportTask } from "./report.js";
 import { orNull } from "./files.js";
 import { QUEUES, resolveTopicId } from "./topics.js";
 import type { Queue, TopicState } from "./topics.js";
@@ -56,6 +56,17 @@ export interface AgentView {
   stale: boolean;
   /** True for a worker whose harness has not taken its first turn since it was spawned. */
   unstarted: boolean;
+}
+
+/** A backlog item that no worker has been dispatched for yet. */
+export interface QueuedView {
+  home: string;
+  task: string;
+  kind: string;
+  title: string;
+  topic: string | null;
+  /** What keeps the item from being dispatched, or null when nothing does. */
+  waiting: string | null;
 }
 
 export interface HoldView {
@@ -115,6 +126,7 @@ export interface BoardView {
   queues: Record<Queue, string[]>;
   topics: Record<string, TopicView>;
   agents: AgentView[];
+  queued: QueuedView[];
   holds: HoldView[];
   questions: QuestionView[];
   updates: UpdateView[];
@@ -184,6 +196,13 @@ function deferredReason(hold: ReportHold): string | null {
     case "blocked":
       return `等 ${hold.unresolved_blocker_ids.join("、")} 完成`;
   }
+}
+
+function waitingFor(item: ReportQueued): string | null {
+  if (item.captain) return "等你決定";
+  if (item.hold !== null) return `停著：${item.hold}`;
+  if (item.blockers.length > 0) return `等 ${item.blockers.join("、")} 完成`;
+  return null;
 }
 
 /** Looks up topics for tasks across every home's tag files. */
@@ -502,6 +521,7 @@ export function buildView(input: ViewInput): BoardView {
     queues: structuredClone(input.topics.doc.queues),
     topics: topicViews(input.topics),
     agents: [],
+    queued: [],
     holds: [],
     questions: [],
     updates: updatesOf(input, placer),
@@ -519,6 +539,16 @@ export function buildView(input: ViewInput): BoardView {
     view.agents.push(...agentsOf(home, stale, placer, last, runs));
     ranked.push(...holdsOf(home, stale, placer));
     if (home.report === null) return;
+    for (const item of home.report.queued) {
+      view.queued.push({
+        home: home.id,
+        task: item.id,
+        kind: item.kind,
+        title: item.title,
+        topic: placer.current(home.id, item.id).topic,
+        waiting: waitingFor(item),
+      });
+    }
     for (const question of home.report.status_decisions) {
       view.questions.push({
         home: home.id,

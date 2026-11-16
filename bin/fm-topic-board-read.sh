@@ -6,7 +6,8 @@
 #   fm-topic-board-read.sh --in-home <secondmate-id> <ledger-offset> <prefix-sha256>
 #
 # Prints one JSON object describing this home: its tasks and their current
-# state, its captain holds, worker needs-decision questions, every topic tag
+# state, its queued backlog items, its captain holds, worker needs-decision
+# questions, every topic tag
 # file, and the fleet-ledger lines written since <ledger-offset>. The first call
 # passes "0 -"; each later call passes the previous output's ledger.to_offset
 # and ledger.to_prefix_sha256. The main home's output also lists the registered
@@ -204,6 +205,11 @@ main() {
                     hold_age_days,
                     origin: ([ (.body_lines // [])[]
                                | capture("^Captain hold origin: (?<origin>.*)$") | .origin ][0] // "")} ],
+        queued: [ $snap.backlog.records[]
+                  | select(.structured == true and .state == "queued")
+                  | {id, kind: (.kind // ""), title: (.title // ""), hold: .hold_reason,
+                     captain: (.hold_kind == "captain"),
+                     blockers: (.unresolved_blocker_ids // [])} ],
         status_decisions: [ $snap.tasks[] | .id as $id
                             | (.hints.open_decisions // [])[]
                             | select(.verb == "needs-decision")

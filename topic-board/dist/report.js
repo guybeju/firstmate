@@ -66,6 +66,16 @@ function parseTask(raw) {
         unstarted: raw["unstarted"] === true,
     }));
 }
+function parseQueued(raw) {
+    return withId(raw, (id) => ({
+        id,
+        kind: textField(raw, "kind"),
+        title: textField(raw, "title"),
+        hold: stringField(raw, "hold"),
+        captain: raw["captain"] === true,
+        blockers: strings(raw["blockers"]),
+    }));
+}
 function parseSecondmate(raw) {
     return withId(raw, (id) => ({
         id,
@@ -104,6 +114,7 @@ export function parseReport(stdout) {
             code_commit: textField(raw, "code_commit"),
             ledger_enabled: raw["ledger_enabled"] === true,
             tasks: records(raw["tasks"]).map(parseTask).filter(present),
+            queued: records(raw["queued"]).map(parseQueued).filter(present),
             holds: records(raw["holds"]).map(parseHold).filter(present),
             status_decisions: records(raw["status_decisions"]).map(parseQuestion).filter(present),
             topics: stringRecord(raw["topics"]),

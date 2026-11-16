@@ -15,6 +15,19 @@ export interface ReportTask {
   unstarted: boolean;
 }
 
+/** A backlog item that has not been dispatched yet. */
+export interface ReportQueued {
+  id: string;
+  kind: string;
+  title: string;
+  /** Why the item is held, or null when nothing holds it. */
+  hold: string | null;
+  /** True when the hold is a question for the captain. */
+  captain: boolean;
+  /** Ids of unfinished items this one waits for. */
+  blockers: string[];
+}
+
 export interface ReportHold {
   id: string;
   title: string;
@@ -44,6 +57,8 @@ export interface HomeReport {
   code_commit: string;
   ledger_enabled: boolean;
   tasks: ReportTask[];
+  /** Empty for a home whose code does not report queued items yet. */
+  queued: ReportQueued[];
   holds: ReportHold[];
   status_decisions: ReportQuestion[];
   /** Task id to the raw text of its tag file. */
@@ -125,6 +140,17 @@ function parseTask(raw: Record<string, unknown>): ReportTask | null {
   }));
 }
 
+function parseQueued(raw: Record<string, unknown>): ReportQueued | null {
+  return withId(raw, (id) => ({
+    id,
+    kind: textField(raw, "kind"),
+    title: textField(raw, "title"),
+    hold: stringField(raw, "hold"),
+    captain: raw["captain"] === true,
+    blockers: strings(raw["blockers"]),
+  }));
+}
+
 function parseSecondmate(raw: Record<string, unknown>): Secondmate | null {
   return withId(raw, (id) => ({
     id,
@@ -162,6 +188,7 @@ export function parseReport(stdout: string): ParsedReport {
       code_commit: textField(raw, "code_commit"),
       ledger_enabled: raw["ledger_enabled"] === true,
       tasks: records(raw["tasks"]).map(parseTask).filter(present),
+      queued: records(raw["queued"]).map(parseQueued).filter(present),
       holds: records(raw["holds"]).map(parseHold).filter(present),
       status_decisions: records(raw["status_decisions"]).map(parseQuestion).filter(present),
       topics: stringRecord(raw["topics"]),

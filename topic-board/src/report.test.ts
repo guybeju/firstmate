@@ -43,6 +43,34 @@ function ok(raw: unknown) {
 }
 
 describe("parseReport", () => {
+  it("reads queued backlog items and tolerates a home that does not report them", () => {
+    const queued = ok({
+      ...FULL,
+      queued: [
+        { id: "plain", kind: "ship", title: "Plain" },
+        { id: "held", kind: "ship", title: "Held", hold: "waiting", captain: false, blockers: [] },
+        { id: "call", kind: "captain", title: "Call", hold: "pick", captain: true },
+        { id: "after", kind: "ship", title: "After", hold: null, blockers: ["plain", 7] },
+        { title: "no id" },
+        "junk",
+      ],
+    }).queued;
+    expect(queued).toEqual([
+      { id: "plain", kind: "ship", title: "Plain", hold: null, captain: false, blockers: [] },
+      { id: "held", kind: "ship", title: "Held", hold: "waiting", captain: false, blockers: [] },
+      { id: "call", kind: "captain", title: "Call", hold: "pick", captain: true, blockers: [] },
+      {
+        id: "after",
+        kind: "ship",
+        title: "After",
+        hold: null,
+        captain: false,
+        blockers: ["plain"],
+      },
+    ]);
+    expect(ok(FULL).queued).toEqual([]);
+  });
+
   it("takes a task as unstarted only when the report says so", () => {
     const tasks = ok({
       ...FULL,
@@ -60,6 +88,7 @@ describe("parseReport", () => {
     expect(ok(FULL)).toEqual({
       code_commit: "abc",
       ledger_enabled: true,
+      queued: [],
       tasks: [
         {
           id: "t1",
@@ -109,6 +138,7 @@ describe("parseReport", () => {
     expect(report).toEqual({
       code_commit: "",
       ledger_enabled: false,
+      queued: [],
       tasks: [{ id: "t", kind: "", state: "unknown", source: "", detail: "", unstarted: false }],
       holds: [
         {
