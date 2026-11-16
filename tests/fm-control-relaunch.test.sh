@@ -2776,6 +2776,18 @@ test_mode_switch_refusals_change_nothing() {
   perl -pi -e 's/^kind=ship$/kind=secondmate/' "$dir/home/state/rl64.meta"
   assert_switch_refused "$dir" rl64 "has no delivery mode to switch" --mode direct-PR
 
+  # A promoted scout's contract lives in its promotion section, which the
+  # switch does not rewrite.
+  dir=$(new_case switch-promoted)
+  add_ship_task "$dir" rl69 claude
+  rm -f "$dir/home/data/rl69/brief.md"
+  FM_HOME="$dir/home" "$BRIEF" rl69 firstmate --scout >/dev/null || fail "could not scaffold the scout brief"
+  fill_switch_brief "$dir/home/data/rl69/brief.md"
+  perl -pi -e 's/^kind=ship$/kind=scout/; s/^mode=.*\n//; s/^yolo=.*\n//' "$dir/home/state/rl69.meta"
+  out=$(FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$dir/home" FM_STATE_OVERRIDE="$dir/home/state" \
+    "$PROMOTE" rl69 --mode no-mistakes --yolo off 2>&1) || fail "scout promotion should succeed: $out"
+  assert_switch_refused "$dir" rl69 "is a promoted scout's brief" --mode direct-PR
+
   # A ship on firstmate's own repository may switch only under the same
   # publication authority a spawn would need; this home holds none.
   dir=$(new_case switch-self-repo)

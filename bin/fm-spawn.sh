@@ -80,8 +80,7 @@
 #   delivery mode: --mode is accepted only from bin/fm-control.sh relaunch
 #   --mode, which owns that switch's refusals and rewrites the brief first, and
 #   the republished record carries it; the brief agreement check below then
-#   proves the brief and record name the same mode, and a brief with no
-#   Delivery contract line refuses instead of warning. It refuses unless the
+#   proves the brief and record name the same mode. It refuses unless the
 #   recorded endpoint is positively agent-free on a backend with both a
 #   recovery-grade agent-state classifier and replacement-agent support
 #   (tmux or herdr), and clears the previous harness's per-task wiring
@@ -4464,10 +4463,7 @@ if [ "$KIND" = ship ]; then
   else
     echo "warning: $BRIEF records no ship branch; defaulting to legacy branch $BRANCH" >&2
   fi
-  if [ -z "$BRIEF_MODE" ] && [ "$RELAUNCH" -eq 1 ] && [ "$MODE_SET" -eq 1 ]; then
-    echo "error: $BRIEF records no delivery contract line, so a delivery-mode switch cannot prove the instructions match mode=$MODE" >&2
-    exit 1
-  elif [ -z "$BRIEF_MODE" ]; then
+  if [ -z "$BRIEF_MODE" ]; then
     echo "warning: $BRIEF records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode $MODE - confirm its definition of done matches" >&2
   elif [ "$BRIEF_MODE" != "$MODE" ]; then
     echo "error: delivery mismatch for $ID: the brief says mode=$BRIEF_MODE but this spawn passed --mode $MODE; correct the flag or re-scaffold the brief so the worker's instructions and the task record agree" >&2
