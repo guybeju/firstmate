@@ -17,6 +17,7 @@ TMP_ROOT=$(fm_test_tmproot topic-board-stage-1-order)
 #   l2 (parked/later, held by the board)  r1 (billing/high, held by the board)
 #   a1 (gone/archived, not held)       o1 (billing/high, held by something else)
 #   b1 (billing/high, blocked by n1)   c1 (billing/high, a captain hold)
+#   d1 (untagged, a captain decision that was answered and released)
 write_backlog() {
   local home=$1
   cat > "$home/data/backlog.md" <<'EOF'
@@ -37,6 +38,7 @@ write_backlog() {
 - [ ] b1 - Blocked blocked-by: n1 (repo: sample) (kind: ship)
 - [ ] c1 - Captain call (repo: sample) (kind: captain) (hold: choose a route) (hold-kind: captain)
   Captain hold set: 2026-07-20T00:00:00Z
+- [ ] d1 - Decided call (repo: sample) (kind: captain)
 
 ## Done
 EOF
@@ -69,7 +71,7 @@ test_sections() {
   write_backlog "$home"
   write_tags "$home"
   out=$(tb_run "$home" "$TOPIC" order)
-  assert_equals "h1 h2 r1 n1 u1 p1 " "$(section "$out" "可派：")" \
+  assert_equals "h1 h2 r1 n1 u1 p1 d1 " "$(section "$out" "可派：")" \
     "dispatch order must be high, normal, then untagged, in backlog order within a topic"
   assert_equals "l1 a1 " "$(section "$out" "該 hold：")" "items of parked or archived topics must be listed to hold"
   assert_equals "r1 " "$(section "$out" "該解除：")" "a board hold on a non-parked topic must be listed to release"
@@ -83,6 +85,10 @@ test_sections() {
     fail "a dispatchable item still under the board's hold must say so"
   printf '%s\n' "$out" | awk '/^可派：/ { on = 1; next } /^[^ ]/ { on = 0 } on' | grep '^  h1	' | grep -q '解除' &&
     fail "an item that is not held must not be marked as held"
+  printf '%s\n' "$out" | grep '^  d1	' | grep -q '決定事項' ||
+    fail "a released captain decision must be marked as a decision, not as work to dispatch"
+  printf '%s\n' "$out" | grep '^  u1	' | grep -q '決定事項' &&
+    fail "ordinary work must not be marked as a decision"
   assert_contains "$out" "$(printf 'h1\t帳務重構\t高')" "lines must show the topic name and queue"
   assert_not_contains "$out" "running" "in-flight items must never be listed"
   assert_not_contains "$(section "$out" "可派：")" "o1" "an item held by something else must not be dispatchable"
@@ -98,7 +104,7 @@ test_falls_open_without_a_usable_topic_file() {
   write_tags "$home"
   out=$(tb_run "$home" "$TOPIC" order) || fail "order failed without a topic file"
   assert_contains "$out" "還沒有議題檔" "order did not explain the missing topic file"
-  assert_equals "n1 h1 h2 u1 p1 l1 a1 " "$(section "$out" "可派：")" \
+  assert_equals "n1 h1 h2 u1 p1 l1 a1 d1 " "$(section "$out" "可派：")" \
     "without a topic file every unheld, unblocked item is dispatchable in backlog order"
   assert_equals "" "$(section "$out" "該 hold：")" "without a topic file nothing may be listed to hold"
   assert_equals "" "$(section "$out" "該解除：")" "without a topic file nothing may be listed to release"

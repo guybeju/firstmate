@@ -106,7 +106,13 @@ test_replaces_the_board_when_code_or_port_changes() {
   root=$(make_code_root replace-root)
   FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-topic.sh" propose "V1" --goal "old code" >/dev/null
   pid=$(tb_board_pid "$home")
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-topic.sh" status | grep -q "restart" &&
+    fail "status must not ask for a restart while the board runs the checked-out code"
   git -C "$root" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m "new code"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-topic.sh" status |
+    grep -q "目前的程式是 $(git -C "$root" rev-parse HEAD)" ||
+    fail "status must say the board runs older code than the checkout"
+  assert_equals "$pid" "$(tb_board_pid "$home")" "status must not replace the board"
   FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-topic.sh" propose "V2" --goal "new code" >/dev/null
   assert_not_equals "$pid" "$(tb_board_pid "$home")" "a new code commit must replace the running board"
   FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-topic.sh" status | grep -q "$(git -C "$root" rev-parse HEAD)" ||

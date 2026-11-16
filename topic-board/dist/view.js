@@ -143,7 +143,7 @@ function agentMaker(home, stale, placer, last) {
             unsorted_reason: placement.reason,
             updated_at: lastEvent === undefined ? null : lastEvent.ts,
             stale,
-            reported: task.reported,
+            unstarted: task.unstarted,
         };
     };
 }
@@ -163,7 +163,7 @@ function agentsOf(home, stale, placer, last) {
         .map((event) => {
         const outcome = event.event === "task.merged" || event.event === "task.cleaned_up" ? "done" : "unknown";
         const gone = { id: event.task, kind: "", state: outcome, source: "", detail: "" };
-        return agent({ ...gone, reported: true }, outcome);
+        return agent({ ...gone, unstarted: false }, outcome);
     });
     return [...running, ...ended];
 }

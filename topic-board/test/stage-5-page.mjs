@@ -41,9 +41,9 @@ export default async function run(page) {
   await page.waitFor("the agent", has("ship-a"));
   const rowOf = (task) =>
     `[...document.querySelectorAll(".row")].find((row) => row.innerText.includes("${task}")).innerText`;
-  await page.waitFor("the worker that never reported", `${rowOf("quiet-b")}.includes("還沒有任何回報")`);
-  if (await page.evaluate(`${rowOf("ship-a")}.includes("還沒有任何回報")`))
-    throw new Error("a worker that has reported must not be marked as silent");
+  await page.waitFor("the worker that never started", `${rowOf("quiet-b")}.includes("還沒開始第一輪")`);
+  if (await page.evaluate(`${rowOf("ship-a")}.includes("還沒開始第一輪")`))
+    throw new Error("a worker that has started must not be marked as unstarted");
 
   // Answer the pending decision: option, then the second step with a mode.
   await page.click(".card button", "合併");

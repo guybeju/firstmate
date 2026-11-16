@@ -79,12 +79,13 @@ function idArg(value: string, what: string): string {
 /**
  * Text handed to fm-send.sh as one argument. fm-send.sh treats a leading '-'
  * as an option and has no "--" terminator, and types text starting with '/' or
- * '$' into the pane as a command, so none of the three may lead.
+ * '$' into the pane as a command; '!' is the harness composer's shell escape.
+ * None of the four may lead, with or without whitespace in front.
  */
 export function directTextProblem(text: string): string | null {
   if (text.trim() === "") return "訊息不能是空的。";
-  if (/^[/$-]/.test(text)) {
-    return "以 / 或 $ 開頭會被當成指令。要跑指令請到終端機，要傳文字請在開頭加字。";
+  if (/^\s*[/$!-]/.test(text)) {
+    return "以 /、$、! 或 - 開頭會被當成指令。要跑指令請到終端機，要傳文字請在開頭加字。";
   }
   return null;
 }

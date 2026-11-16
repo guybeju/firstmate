@@ -69,6 +69,21 @@ tb_write_registry() {
 EOF
 }
 
+# tb_seed_unstarted <code-root> <task>: make <code-root>'s snapshot report <task>
+# the way upstream does for a harness that has not taken its first turn since
+# spawn (the busy record is still fm-spawn's seed). A real one needs a live pane.
+tb_seed_unstarted() {
+  rm -f "$1/bin/fm-fleet-snapshot.sh"
+  cat > "$1/bin/fm-fleet-snapshot.sh" <<SH
+#!/usr/bin/env bash
+set -euo pipefail
+"$ROOT/bin/fm-fleet-snapshot.sh" "\$@" | jq -c --arg task "$2" '
+  (.tasks[] | select(.id == \$task) | .current_state) =
+    {state: "working", source: "pane", detail: "harness busy (fm-spawn)", freshness: "fresh"}'
+SH
+  chmod +x "$1/bin/fm-fleet-snapshot.sh"
+}
+
 # --- board service fixtures ---------------------------------------------------
 
 # tb_free_port: print a TCP port nothing is listening on right now.

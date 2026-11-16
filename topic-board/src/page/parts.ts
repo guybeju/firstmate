@@ -229,10 +229,10 @@ export function light(agent: AgentView): Child {
   return [h("span", { class: `dot l-${agent.light}` }), LIGHT_LABEL[agent.light] ?? agent.light];
 }
 
-/** What to say about a running worker that has never written a status line. */
-function silentNote(agent: AgentView): string {
+/** What to say about a worker whose harness has not taken its first turn. */
+function unstartedNote(agent: AgentView): string {
   const since = agent.updated_at === null ? "" : `${when(agent.updated_at)} 派出後`;
-  return `${since}還沒有任何回報，可能卡在啟動畫面`;
+  return `${since}還沒開始第一輪，停太久就是卡在啟動畫面`;
 }
 
 export function agentRow(view: View, actions: Actions, agent: AgentView): Child {
@@ -246,7 +246,7 @@ export function agentRow(view: View, actions: Actions, agent: AgentView): Child 
       h("b", {}, agent.task),
       " ",
       h("span", { class: "note" }, `${agent.state} ${agent.detail}`),
-      agent.reported ? null : [" ", h("span", { class: "pill warn" }, silentNote(agent))],
+      agent.unstarted ? [" ", h("span", { class: "pill warn" }, unstartedNote(agent))] : null,
     ),
     h("span", { class: "pill" }, agent.home),
     agent.stale ? h("span", { class: "pill warn" }, "資料過期") : null,

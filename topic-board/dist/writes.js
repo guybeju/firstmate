@@ -46,13 +46,15 @@ function noteOutcome(result) {
         ? { kind: "retry", error: errorText(result) }
         : { kind: "failed", error: errorText(result) };
 }
+// fm-captain-hold.sh's reasons for skipping a hold that someone already answered.
+const ANSWERED_ELSEWHERE = ["(already closed)", "records a different captain decision"];
 /** Reads fm-captain-hold.sh answers output for the line about `task`. */
 function answerOutcome(result, task, remote) {
     const lines = result.stdout.split("\n").map((line) => line.trim());
     if (lines.includes(`closed: ${task}`))
         return "closed";
     const verdict = lines.find((line) => line.startsWith(`skipped: ${task} `) || line.startsWith(`refused: ${task} `));
-    if (verdict === `skipped: ${task} (already closed)`)
+    if (verdict !== undefined && ANSWERED_ELSEWHERE.some((mark) => verdict.includes(mark)))
         return { kind: "handled_elsewhere" };
     if (verdict !== undefined)
         return { kind: "failed", error: verdict };

@@ -49,7 +49,8 @@ mkdir -p "$MAIN/projects/ship-a" "$MAIN/data/ship-a" "$MAIN/data/call-1"
 fm_write_meta "$MAIN/state/ship-a.meta" "window=firstmate:fm-ship-a" "worktree=$MAIN/projects/ship-a" \
   "project=sample" "harness=claude" "kind=ship" "mode=ship" "yolo=off"
 printf 'working: on it\n' > "$MAIN/state/ship-a.status"
-# A second worker that was spawned and never wrote a status line.
+# A second worker whose harness never took its first turn.
+tb_seed_unstarted "$CODE_ROOT" quiet-b
 mkdir -p "$MAIN/projects/quiet-b"
 fm_write_meta "$MAIN/state/quiet-b.meta" "window=firstmate:fm-quiet-b" "worktree=$MAIN/projects/quiet-b" \
   "project=sample" "harness=claude" "kind=ship" "mode=ship" "yolo=off"
