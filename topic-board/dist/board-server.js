@@ -324,9 +324,9 @@ function taskTags(service, task) {
  * afresh first, like `which`; other homes answer from their last read.
  */
 async function find(service, args) {
-    const query = stringField(args, "query")?.trim() ?? "";
-    if (query === "" || [...query].length > topics.NAME_MAX)
-        return usage(`find 需要一個關鍵字，最多 ${topics.NAME_MAX} 個字。`);
+    const query = topics.oneLine(stringField(args, "query") ?? "", topics.NAME_MAX);
+    if (query === null)
+        return usage(`find 需要一行關鍵字，最多 ${topics.NAME_MAX} 個字。`);
     const isTask = taskArg({ task: query }) !== null;
     if (isTask)
         await withTimeout(service.poller.readFresh(MAIN_HOME), LOOKUP_WAIT_MS, false);
