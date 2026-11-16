@@ -138,6 +138,8 @@
   "generated": "<UTC 時間>",
   "ledger_enabled": true,
   "tasks": [ { "id": "…", "kind": "ship|scout|…", "state": "working", "source": "…", "detail": "…" } ],
+  "queued": [ { "id": "…", "kind": "…", "title": "<backlog 項目的標題>", "hold": "<hold reason 原文或 null>",
+                "captain": false, "blockers": [] } ],
   "holds": [ { "id": "…", "title": "<backlog 項目的標題>", "question": "<hold reason 原文>",
                "hold_bucket": "live|aged|dated|blocked", "hold_until": null,
                "unresolved_blocker_ids": [], "hold_age_days": 0, "origin": "<origin task id 或空字串>" } ],

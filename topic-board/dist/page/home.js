@@ -31,8 +31,9 @@ function topicCard(view, actions, id) {
         return null;
     const agents = view.agents.filter((agent) => agent.topic === id);
     const deciding = view.holds.filter((hold) => hold.topic === id && hold.live).length;
+    const waiting = view.queued.filter((item) => item.topic === id).length;
     const unsent = view.writes.filter((write) => write.topic === id && BAD_WRITES.includes(write.state)).length;
-    return h("div", { class: "card topic", draggable: "true", "data-topic": id }, h("button", { class: "link name", onclick: () => actions.open(id) }, topic.name), h("div", { class: "meta" }, h("span", {}, `${agents.length} 個 agent`), lightCounts(agents), deciding > 0 ? h("span", { class: "pill red" }, `待你決定 ${deciding}`) : null, topic.close_reason === null ? null : h("span", { class: "pill warn" }, "提議關閉"), unsent > 0 ? h("span", { class: "pill red" }, `沒送到 ${unsent}`) : null), moveMenu(actions, id));
+    return h("div", { class: "card topic", draggable: "true", "data-topic": id }, h("button", { class: "link name", onclick: () => actions.open(id) }, topic.name), h("div", { class: "meta" }, h("span", {}, `${agents.length} 個 agent`), lightCounts(agents), waiting > 0 ? h("span", {}, `排隊 ${waiting}`) : null, deciding > 0 ? h("span", { class: "pill red" }, `待你決定 ${deciding}`) : null, topic.close_reason === null ? null : h("span", { class: "pill warn" }, "提議關閉"), unsent > 0 ? h("span", { class: "pill red" }, `沒送到 ${unsent}`) : null), moveMenu(actions, id));
 }
 function queueBox(view, actions, queue) {
     return h("div", { class: "queue", "data-queue": queue }, h("h3", {}, queue === "later" ? "待辦（不自動開工）" : QUEUE_LABEL[queue]), h("div", { class: "list" }, view.queues[queue].map((id) => topicCard(view, actions, id)), h("div", { class: "empty" }, "拖到這裡")));

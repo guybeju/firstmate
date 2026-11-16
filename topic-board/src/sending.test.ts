@@ -71,6 +71,7 @@ function report(extra: Partial<HomeReport>): HomeReport {
     code_commit: "c",
     ledger_enabled: true,
     tasks: [],
+    queued: [],
     holds: [],
     status_decisions: [],
     topics: {},

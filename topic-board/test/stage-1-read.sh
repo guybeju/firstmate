@@ -64,6 +64,10 @@ test_first_read_reports_the_whole_home() {
     "$(printf '%s' "$out" | jq -r '.holds[] | select(.id == "dated-hold") | "\(.hold_bucket)|\(.hold_until)|\(.origin)"')" \
     "a dated captain hold must carry its date and an empty origin"
   assert_equals 2 "$(printf '%s' "$out" | jq -r '.holds | length')" "only captain holds belong in holds[]"
+  assert_equals 'live-hold|captain|Live call|choose a route|true dated-hold|captain|Dated call|revisit later|true plain-hold|ship|Not a captain hold|waiting for a vendor|false queued|ship|Plain queued||false ' \
+    "$(printf '%s' "$out" | jq -r '.queued[] | "\(.id)|\(.kind)|\(.title)|\(.hold // "")|\(.captain)"' | tr '\n' ' ')" \
+    "queued[] must list every queued backlog item with its title, hold reason, and whether the hold is the captain's"
+  assert_equals '[]' "$(printf '%s' "$out" | jq -c '[.queued[] | select(.id == "run-a")]')" "an in-flight item is not queued"
   assert_equals 'run-a|default|choose an API shape' \
     "$(printf '%s' "$out" | jq -r '.status_decisions[] | "\(.id)|\(.key)|\(.summary)"')" \
     "a worker needs-decision must be listed"

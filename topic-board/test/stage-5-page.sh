@@ -42,6 +42,8 @@ cat > "$MAIN/data/backlog.md" <<'EOF'
 ## Queued
 - [ ] call-1 - A call (repo: sample) (kind: captain) (hold: 要合併嗎？ 選項：合併 | 先不要) (hold-kind: captain)
   Captain hold set: 2026-07-24T00:00:00Z
+- [ ] next-1 - Next step (repo: sample) (kind: ship)
+- [ ] wait-1 - Vendor reply (repo: sample) (kind: ship) (hold: waiting for a vendor)
 
 ## Done
 EOF
@@ -56,6 +58,10 @@ fm_write_meta "$MAIN/state/quiet-b.meta" "window=firstmate:fm-quiet-b" "worktree
   "project=sample" "harness=claude" "kind=ship" "mode=ship" "yolo=off"
 printf 'billing 2026-07-01T00:00:00Z\n' > "$MAIN/data/ship-a/topic"
 printf 'billing 2026-07-01T00:00:00Z\n' > "$MAIN/data/call-1/topic"
+for queued in next-1 wait-1; do
+  mkdir -p "$MAIN/data/$queued"
+  printf 'billing 2026-07-01T00:00:00Z\n' > "$MAIN/data/$queued/topic"
+done
 mkdir -p "$MAIN/data/quiet-b"
 printf 'parked 2026-07-01T00:00:00Z\n' > "$MAIN/data/quiet-b/topic"
 : > "$MAIN/config/fleet-ledger"

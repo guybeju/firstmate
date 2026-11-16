@@ -47,6 +47,7 @@ function topicCard(view: View, actions: Actions, id: string): Child {
   if (topic === undefined) return null;
   const agents = view.agents.filter((agent) => agent.topic === id);
   const deciding = view.holds.filter((hold) => hold.topic === id && hold.live).length;
+  const waiting = view.queued.filter((item) => item.topic === id).length;
   const unsent = view.writes.filter(
     (write) => write.topic === id && BAD_WRITES.includes(write.state),
   ).length;
@@ -59,6 +60,7 @@ function topicCard(view: View, actions: Actions, id: string): Child {
       { class: "meta" },
       h("span", {}, `${agents.length} 個 agent`),
       lightCounts(agents),
+      waiting > 0 ? h("span", {}, `排隊 ${waiting}`) : null,
       deciding > 0 ? h("span", { class: "pill red" }, `待你決定 ${deciding}`) : null,
       topic.close_reason === null ? null : h("span", { class: "pill warn" }, "提議關閉"),
       unsent > 0 ? h("span", { class: "pill red" }, `沒送到 ${unsent}`) : null,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { JournalEvent, Summary } from "./journal.js";
-import type { HomeReport, ReportHold } from "./report.js";
+import type { HomeReport, ReportHold, ReportQueued } from "./report.js";
 import { emptyState } from "./topics.js";
 import type { TopicState } from "./topics.js";
 import { buildView, parseOptions, parseTags, placeTask } from "./view.js";
@@ -47,6 +47,7 @@ function hold(id: string, extra: Partial<ReportHold> = {}): ReportHold {
 
 function report(extra: Partial<HomeReport> = {}): HomeReport {
   return {
+    queued: [],
     code_commit: "c",
     ledger_enabled: true,
     tasks: [],
@@ -185,6 +186,114 @@ describe("homes", () => {
         error: null,
       },
     ]);
+  });
+});
+
+describe("queued", () => {
+  const item = (id: string, extra: Partial<ReportQueued> = {}): ReportQueued => ({
+    id,
+    kind: "ship",
+    title: `title ${id}`,
+    hold: null,
+    captain: false,
+    blockers: [],
+    ...extra,
+  });
+
+  it("lists every home's queued items under their topics with what each waits for", () => {
+    const view = buildView(
+      input({
+        homes: [
+          home("main", {
+            report: report({
+              queued: [
+                item("ready"),
+                item("held", { hold: "waiting for a vendor" }),
+                item("call", { kind: "captain", hold: "pick one", captain: true }),
+                item("after", { blockers: ["ready", "held"] }),
+                item("loose"),
+                item("merged-away"),
+              ],
+              topics: {
+                ready: "hi 2026-07-01T00:00:00Z",
+                held: "hi 2026-07-01T00:00:00Z",
+                call: "n1 2026-07-01T00:00:00Z",
+                after: "lt 2026-07-01T00:00:00Z",
+                "merged-away": "old 2026-07-01T00:00:00Z",
+              },
+            }),
+          }),
+          home("sm1", {
+            report: report({ queued: [item("far")], topics: { far: "hi 2026-07-01T00:00:00Z" } }),
+          }),
+          home("down", { report: null }),
+        ],
+      }),
+    );
+    expect(view.queued).toEqual([
+      {
+        home: "main",
+        task: "ready",
+        kind: "ship",
+        title: "title ready",
+        topic: "hi",
+        waiting: null,
+      },
+      {
+        home: "main",
+        task: "held",
+        kind: "ship",
+        title: "title held",
+        topic: "hi",
+        waiting: "停著：waiting for a vendor",
+      },
+      {
+        home: "main",
+        task: "call",
+        kind: "captain",
+        title: "title call",
+        topic: "n1",
+        waiting: "等你決定",
+      },
+      {
+        home: "main",
+        task: "after",
+        kind: "ship",
+        title: "title after",
+        topic: "lt",
+        waiting: "等 ready、held 完成",
+      },
+      {
+        home: "main",
+        task: "loose",
+        kind: "ship",
+        title: "title loose",
+        topic: null,
+        waiting: null,
+      },
+      {
+        home: "main",
+        task: "merged-away",
+        kind: "ship",
+        title: "title merged-away",
+        topic: "n1",
+        waiting: null,
+      },
+      { home: "sm1", task: "far", kind: "ship", title: "title far", topic: "hi", waiting: null },
+    ]);
+  });
+
+  it("says a hold comes before blockers when an item has both", () => {
+    const view = buildView(
+      input({
+        homes: [
+          home("main", {
+            report: report({ queued: [item("both", { hold: "later", blockers: ["x"] })] }),
+          }),
+        ],
+      }),
+    );
+    expect(view.queued.map((entry) => entry.waiting)).toEqual(["停著：later"]);
   });
 });
 

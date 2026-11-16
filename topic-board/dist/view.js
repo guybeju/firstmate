@@ -57,6 +57,15 @@ function deferredReason(hold) {
             return `等 ${hold.unresolved_blocker_ids.join("、")} 完成`;
     }
 }
+function waitingFor(item) {
+    if (item.captain)
+        return "等你決定";
+    if (item.hold !== null)
+        return `停著：${item.hold}`;
+    if (item.blockers.length > 0)
+        return `等 ${item.blockers.join("、")} 完成`;
+    return null;
+}
 /** Looks up topics for tasks across every home's tag files. */
 class Placer {
     topics;
@@ -324,6 +333,7 @@ export function buildView(input) {
         queues: structuredClone(input.topics.doc.queues),
         topics: topicViews(input.topics),
         agents: [],
+        queued: [],
         holds: [],
         questions: [],
         updates: updatesOf(input, placer),
@@ -342,6 +352,16 @@ export function buildView(input) {
         ranked.push(...holdsOf(home, stale, placer));
         if (home.report === null)
             return;
+        for (const item of home.report.queued) {
+            view.queued.push({
+                home: home.id,
+                task: item.id,
+                kind: item.kind,
+                title: item.title,
+                topic: placer.current(home.id, item.id).topic,
+                waiting: waitingFor(item),
+            });
+        }
         for (const question of home.report.status_decisions) {
             view.questions.push({
                 home: home.id,
