@@ -424,6 +424,38 @@ describe("journal", () => {
     expect(reloaded.all).toHaveLength(5);
   });
 
+  it("retracts the latest summary of a kind and lets the same text be stored again", () => {
+    const summaries = new Summaries(paths.summaries);
+    const landed = { ts: 5, home: "main", task: "t", kind: "landed" as const, text: "landed" };
+    summaries.add({ ...landed, ts: 1, kind: "ready", text: "first PR" });
+    summaries.add({ ...landed, ts: 2, kind: "ready", text: "second PR" });
+    summaries.add(landed);
+    summaries.add({ ...landed, task: "other" });
+    const reason = { ts: 9, home: "main", task: "t", text: "the merge had failed" };
+    expect(summaries.retract({ ...reason, kind: "landed" })).toEqual(landed);
+    expect(summaries.retract({ ...reason, kind: "landed" })).toBeNull();
+    expect(summaries.retract({ ...reason, kind: "failed" })).toBeNull();
+    expect(summaries.retract({ ...reason, home: "sm", kind: "ready" })).toBeNull();
+    const shown = (from: Summaries): string[] =>
+      from.all.map((entry) => `${entry.task}:${entry.kind}:${entry.text}`);
+    expect(shown(summaries)).toEqual([
+      "t:ready:first PR",
+      "t:ready:second PR",
+      "other:landed:landed",
+    ]);
+    expect(summaries.retract({ ...reason, kind: "ready" })?.text).toBe("second PR");
+    expect(shown(new Summaries(paths.summaries))).toEqual([
+      "t:ready:first PR",
+      "other:landed:landed",
+    ]);
+    expect(summaries.add({ ...landed, ts: 20 })).toBe(true);
+    expect(shown(new Summaries(paths.summaries))).toEqual([
+      "t:ready:first PR",
+      "other:landed:landed",
+      "t:landed:landed",
+    ]);
+  });
+
   it("keeps a ledger cursor per home across restarts", () => {
     const offsets = new Offsets(paths);
     expect(offsets.get("main")).toEqual({ offset: 0, sha: "-" });

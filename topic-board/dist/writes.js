@@ -17,6 +17,11 @@ export const NEEDS_ATTENTION = ["failed", "undelivered", "unknown"];
 function errorText(result) {
     return (result.stderr.trim() || result.stdout.trim() || `exit ${result.code ?? "?"}`).slice(0, 600);
 }
+/** Why fm-send.sh could not deliver, in words for the board; its own text when the cause is not known. */
+function sendError(result) {
+    const text = errorText(result);
+    return text.includes("is not resolvable") ? "這個 worker 已經結束或找不到，訊息沒有送出。" : text;
+}
 function lastLine(text) {
     const lines = text.trimEnd().split("\n");
     return lines[lines.length - 1];
@@ -228,7 +233,7 @@ export class WriteEngine {
                 const result = await this.run({ kind: "send", task: plan.task, text: record.text });
                 return result.code === 0
                     ? { kind: "delivered" }
-                    : { kind: "failed", error: errorText(result) };
+                    : { kind: "failed", error: sendError(result) };
             }
             case "relay":
                 return this.attemptRelay(record, plan);

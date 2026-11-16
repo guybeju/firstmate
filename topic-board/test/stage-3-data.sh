@@ -332,8 +332,29 @@ test_which_follows_a_retag_nobody_is_watching() {
   pass "which and summary read the task's topic afresh"
 }
 
+test_a_wrong_summary_can_be_retracted() {
+  local out
+  printf '已落地。' | t summary ship-a landed - >/dev/null
+  assert_equals 1 "$(view '[.summaries[] | select(.task == "ship-a" and .kind == "landed")] | length')" \
+    "the summary to retract must be on the board first"
+  out=$(printf '合併其實失敗了。' | t retract ship-a landed -) || fail "retract failed"
+  assert_contains "$out" "已落地。" "retract must say which summary it removed"
+  assert_equals 0 "$(view '[.summaries[] | select(.task == "ship-a" and .kind == "landed")] | length')" \
+    "a retracted summary must leave the board"
+  grep -q '合併其實失敗了' "$MAIN/data/topic-board/summaries.jsonl" || fail "the reason must be kept on file"
+  expect_code 1 "$(printf 'again' | tb_code "$MAIN" "$CODE_ROOT/bin/fm-topic.sh" retract ship-a landed -)" "nothing left to retract"
+  expect_code 1 "$(printf '  ' | tb_code "$MAIN" "$CODE_ROOT/bin/fm-topic.sh" retract ship-a ready -)" "a retraction without a reason"
+  expect_code 2 "$(printf 'x' | tb_code "$MAIN" "$CODE_ROOT/bin/fm-topic.sh" retract ship-a shipped -)" "an unknown kind to retract"
+  expect_code 2 "$(tb_code "$MAIN" "$CODE_ROOT/bin/fm-topic.sh" retract ship-a landed)" "retract without the stdin marker"
+  printf '已落地。' | t summary ship-a landed - >/dev/null
+  assert_equals 1 "$(view '[.summaries[] | select(.task == "ship-a" and .kind == "landed")] | length')" \
+    "the same summary must be storable again once it is true"
+  pass "a wrong summary can be retracted with a reason, and stated again later"
+}
+
 setup_fleet
 fm_test_run test_agents_lights_and_placement test_holds_are_placed_and_ordered test_updates_and_topics \
   test_event_follows_the_tag_in_effect test_ledger_is_stored_once_and_survives_rewrites test_home_status \
   test_polling_follows_viewers test_summary_and_which test_summary_on_a_cold_board_reads_the_main_home_first \
-  test_dump_is_test_only test_which_follows_a_retag_nobody_is_watching
+  test_dump_is_test_only test_which_follows_a_retag_nobody_is_watching \
+  test_a_wrong_summary_can_be_retracted
