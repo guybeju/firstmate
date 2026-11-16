@@ -161,17 +161,66 @@ function parseSummary(text: string): Summary | null {
   return { ts, home, task, kind, text: body };
 }
 
+/** A stored line that takes one earlier summary off the board; `text` is the reason. */
+interface Retraction {
+  ts: number;
+  home: string;
+  task: string;
+  kind: "retract";
+  text: string;
+  target: { kind: SummaryKind; ts: number; text: string };
+}
+
+function parseRetraction(text: string): Retraction | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!isRecord(raw) || raw["kind"] !== "retract" || !isRecord(raw["target"])) return null;
+  // A retraction's target has the shape of a summary of the same home and task.
+  const target = parseSummary(JSON.stringify({ ...raw, ...raw["target"] }));
+  const reason = stringField(raw, "text");
+  const ts = raw["ts"];
+  if (target === null || reason === null || typeof ts !== "number") return null;
+  return {
+    ts,
+    home: target.home,
+    task: target.task,
+    kind: "retract",
+    text: reason,
+    target: { kind: target.kind, ts: target.ts, text: target.text },
+  };
+}
+
 export class Summaries {
+  /** The summaries in effect: every stored one that was not retracted later. */
   readonly all: Summary[] = [];
 
   constructor(private readonly file: string) {
     for (const line of readCompleteLines(file)) {
       const summary = parseSummary(line);
       if (summary !== null) this.all.push(summary);
+      else this.drop(parseRetraction(line));
     }
   }
 
-  /** Stores `summary` unless an identical one exists; returns whether it was new. */
+  private drop(retraction: Retraction | null): void {
+    if (retraction === null) return;
+    const { target } = retraction;
+    const at = this.all.findLastIndex(
+      (known) =>
+        known.home === retraction.home &&
+        known.task === retraction.task &&
+        known.kind === target.kind &&
+        known.ts === target.ts &&
+        known.text === target.text,
+    );
+    if (at !== -1) this.all.splice(at, 1);
+  }
+
+  /** Stores `summary` unless an identical one is in effect; returns whether it was new. */
   add(summary: Summary): boolean {
     const duplicate = this.all.some(
       (known) =>
@@ -184,6 +233,30 @@ export class Summaries {
     appendLine(this.file, JSON.stringify(summary), FILE_MODE);
     this.all.push(summary);
     return true;
+  }
+
+  /**
+   * Takes the latest summary of `wanted.kind` for the task off the board and
+   * returns it, or null when there is none. The line stays on file; the
+   * retraction, with `wanted.text` as its reason, is appended after it.
+   */
+  retract(wanted: Summary): Summary | null {
+    const gone = this.all.findLast(
+      (known) =>
+        known.home === wanted.home && known.task === wanted.task && known.kind === wanted.kind,
+    );
+    if (gone === undefined) return null;
+    const retraction: Retraction = {
+      ts: wanted.ts,
+      home: wanted.home,
+      task: wanted.task,
+      kind: "retract",
+      text: wanted.text,
+      target: { kind: gone.kind, ts: gone.ts, text: gone.text },
+    };
+    appendLine(this.file, JSON.stringify(retraction), FILE_MODE);
+    this.drop(retraction);
+    return gone;
   }
 }
 

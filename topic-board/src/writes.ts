@@ -93,6 +93,12 @@ function errorText(result: CommandResult): string {
   );
 }
 
+/** Why fm-send.sh could not deliver, in words for the board; its own text when the cause is not known. */
+function sendError(result: CommandResult): string {
+  const text = errorText(result);
+  return text.includes("is not resolvable") ? "這個 worker 已經結束或找不到，訊息沒有送出。" : text;
+}
+
 function lastLine(text: string): string {
   const lines = text.trimEnd().split("\n");
   return lines[lines.length - 1] as string;
@@ -329,7 +335,7 @@ export class WriteEngine {
         const result = await this.run({ kind: "send", task: plan.task, text: record.text });
         return result.code === 0
           ? { kind: "delivered" }
-          : { kind: "failed", error: errorText(result) };
+          : { kind: "failed", error: sendError(result) };
       }
       case "relay":
         return this.attemptRelay(record, plan);

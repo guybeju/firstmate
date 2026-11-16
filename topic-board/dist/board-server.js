@@ -250,20 +250,38 @@ function summaryText(args) {
         ? refused(`摘要要有內容，而且最多 ${SUMMARY_MAX} 個字（這次是 ${length} 個）。`)
         : text;
 }
-async function summary(service, args) {
+/** The summary a `summary` or `retract` request describes, or the response that turns it down. */
+async function summaryArg(service, op, args) {
     const task = taskArg(args);
     const kind = SUMMARY_KINDS.find((name) => name === args["kind"]);
     if (task === null || kind === undefined)
-        return usage("summary 需要 task id 與 ready、report、failed、landed 其中一種。");
+        return usage(`${op} 需要 task id 與 ready、report、failed、landed 其中一種。`);
     const text = summaryText(args);
     if (typeof text !== "string")
         return text;
     const home = await homeArg(service, args);
     if (typeof home !== "string")
         return home;
-    if (service.summaries.add({ ts: epochSeconds(), home, task, kind, text }))
+    return { ts: epochSeconds(), home, task, kind, text };
+}
+async function summary(service, args) {
+    const wanted = await summaryArg(service, "summary", args);
+    if ("ok" in wanted)
+        return wanted;
+    if (service.summaries.add(wanted))
         service.version += 1;
-    return { ok: true, line: await reminderPrefix(service, home, task) };
+    return { ok: true, line: await reminderPrefix(service, wanted.home, wanted.task) };
+}
+/** Takes a summary that turned out wrong off the board; the request's text is the reason. */
+async function retract(service, args) {
+    const wanted = await summaryArg(service, "retract", args);
+    if ("ok" in wanted)
+        return wanted;
+    const gone = service.summaries.retract(wanted);
+    if (gone === null)
+        return refused(`${wanted.task} 沒有可以撤回的 ${wanted.kind} 摘要。`);
+    service.version += 1;
+    return { ok: true, line: `ok 已撤回 ${wanted.task} 的 ${wanted.kind} 摘要：${gone.text}` };
 }
 async function which(service, args) {
     const task = taskArg(args);
@@ -386,6 +404,7 @@ const SERVICE_HANDLERS = {
     stop: async () => ({ ok: true, line: "ok stop 看板服務已停止" }),
     "reset-token": async (service) => resetToken(service),
     summary,
+    retract,
     which,
     ...(TEST_MODE
         ? { dump, "test-write": testWrite, "test-resend": testResend, "test-ignore": testIgnore }

@@ -367,16 +367,16 @@ async function open(config, paths) {
         line: `http://127.0.0.1:${running.port}/#t=${readTrimmed(paths.token)}`,
     });
 }
-/** summary reads its text from stdin: `summary [--home <id>] <task-id> <kind> -`. */
-async function summaryCommand(config, paths, args) {
+/** summary and retract read their text from stdin: `<op> [--home <id>] <task-id> <kind> -`. */
+async function summaryCommand(config, paths, [op, ...args]) {
     const parsed = parseArgs(args, ["home"]);
     const [task, kind, dash] = parsed.positional;
     if (parsed.positional.length !== 3 || dash !== "-") {
-        throw new Exit(EXIT_USAGE, "summary 的用法：fm-topic.sh summary [--home <id>] <task-id> <kind> -（本文走 stdin）");
+        throw new Exit(EXIT_USAGE, `${op} 的用法：fm-topic.sh ${op} [--home <id>] <task-id> <kind> -（本文走 stdin）`);
     }
     const text = fs.readFileSync(0, "utf8");
     await ensureRunning(config, paths);
-    return finish(await send(config, paths, request("summary", withFlags({ task, kind, text }, parsed))));
+    return finish(await send(config, paths, request(String(op), withFlags({ task, kind, text }, parsed))));
 }
 async function topicCommand(config, paths, sub, args) {
     const shape = TOPIC_COMMANDS[sub];
@@ -396,8 +396,8 @@ async function run() {
     const { config, rest } = parseConfigArgs(process.argv.slice(2));
     const paths = boardPaths(config);
     const [sub = "", ...args] = rest;
-    if (sub === "summary")
-        return summaryCommand(config, paths, args);
+    if (sub === "summary" || sub === "retract")
+        return summaryCommand(config, paths, [sub, ...args]);
     const lifecycle = LIFECYCLE[sub];
     return lifecycle === undefined
         ? topicCommand(config, paths, sub, args)

@@ -349,6 +349,12 @@ describe("direct", () => {
     const plain = sent(actions.direct(h.context, "main", "w", "d", "browser"));
     await settled(plain, "failed");
     expect(plain.error).toBe("typed, unconfirmed");
+    const upstream =
+      "error: target 'w' is not resolvable (tried meta=/h/state/w.meta; backend=none). Use fm-w";
+    h.script("send", exit(1, "", upstream));
+    const ended = sent(actions.direct(h.context, "main", "w", "e", "browser"));
+    await settled(ended, "failed");
+    expect(ended.error).toBe("這個 worker 已經結束或找不到，訊息沒有送出。");
   });
 });
 

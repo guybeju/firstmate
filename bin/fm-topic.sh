@@ -20,6 +20,7 @@
 #   fm-topic.sh archive <topic-id>
 #   fm-topic.sh reopen <topic-id> [--queue <queue>]
 #   fm-topic.sh summary [--home <secondmate-id>] <task-id> <ready|report|failed|landed> -
+#   fm-topic.sh retract [--home <secondmate-id>] <task-id> <ready|report|failed|landed> -
 #   fm-topic.sh which [--home <secondmate-id>] <task-id>
 #   fm-topic.sh open | status | stop | restart | reset-token
 #   fm-topic.sh install-rules
@@ -38,6 +39,9 @@
 # "<topic name>：", "未分類：" when the task has no topic, or "議題不明（<task-id>）："
 # when the task's home could not be read. which prints the same line without
 # storing anything. --home names the secondmate home the task lives in.
+#
+# retract takes the task's latest summary of that kind off the board when it
+# turned out to be wrong; stdin is the reason. The line stays in the file.
 #
 # tag    Appends "<topic-id> <UTC time>" to this home's data/<task-id>/topic.
 #        The last line is the task's current topic. In the main home the topic
@@ -599,7 +603,7 @@ main() {
     setup) cmd_setup "$@" ;;
     install-rules) cmd_install_rules "$@" ;;
     propose | confirm | merge | close-propose | move | rename | goal | archive | reopen | \
-      summary | which | open | status | stop | restart | reset-token)
+      summary | retract | which | open | status | stop | restart | reset-token)
       cmd_service "$sub" "$@"
       ;;
     *) usage_error "不認得的子命令：$sub" ;;
