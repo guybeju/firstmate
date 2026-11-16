@@ -190,5 +190,20 @@ test_startup_failures_exit_69() {
   pass "each startup failure exits 69 with its one-line reason and writes nothing"
 }
 
+test_survives_ops_named_after_object_builtins() {
+  local home pid op out
+  home=$(tb_make_service_home builtins)
+  tb_run "$home" "$TOPIC" open >/dev/null || fail "the board did not start"
+  pid=$(tb_board_pid "$home")
+  for op in constructor __proto__ toString valueOf hasOwnProperty; do
+    out=$(tb_op "$home" "$op" 2>&1) && fail "op $op must be refused, got: $out"
+    assert_contains "$out" "不認得的 op" "op $op must be answered as an unknown op"
+  done
+  assert_equals "$pid" "$(tb_board_pid "$home")" "the board must not be replaced"
+  kill -0 "$pid" 2>/dev/null || fail "the board died on an op named after an Object builtin"
+  pass "an op named after an Object builtin is an unknown op, not a crash"
+}
+
 fm_test_run test_starts_on_demand_and_stays_single test_recovers_from_a_crash test_replaces_a_hung_board \
-  test_replaces_the_board_when_code_or_port_changes test_startup_failures_exit_69
+  test_replaces_the_board_when_code_or_port_changes test_startup_failures_exit_69 \
+  test_survives_ops_named_after_object_builtins

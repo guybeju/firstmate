@@ -235,7 +235,7 @@ cmd_list() {
       elif ($rows | length) == 0 then "還沒有議題。"
       else $rows[] | "\(.id)\t\(.status)\t\(.queue // "-")\t\(.position // "-")\t\(.name)"
       end
-  ' || tb_die 1 "讀不懂 $TOPICS_FILE 或 $ARCHIVE_FILE。"
+  ' 2>/dev/null || tb_die 1 "讀不懂 $TOPICS_FILE 或 $ARCHIVE_FILE。"
 }
 
 cmd_setup() {

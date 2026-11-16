@@ -323,8 +323,17 @@ test_dump_is_test_only() {
   pass "the dump op is registered only in test mode"
 }
 
+test_which_follows_a_retag_nobody_is_watching() {
+  t restart >/dev/null || fail "the board did not restart"
+  assert_equals "Login：" "$(t which ship-a)" "the task starts in its first topic"
+  t tag ship-a billing >/dev/null || fail "retagging failed"
+  assert_equals "Billing：" "$(t which ship-a)" "which must follow a retag even when no page keeps the board polling"
+  assert_equals "Billing：" "$(printf 'retagged' | t summary ship-a report -)" "summary must follow the retag too"
+  pass "which and summary read the task's topic afresh"
+}
+
 setup_fleet
 fm_test_run test_agents_lights_and_placement test_holds_are_placed_and_ordered test_updates_and_topics \
   test_event_follows_the_tag_in_effect test_ledger_is_stored_once_and_survives_rewrites test_home_status \
   test_polling_follows_viewers test_summary_and_which test_summary_on_a_cold_board_reads_the_main_home_first \
-  test_dump_is_test_only
+  test_dump_is_test_only test_which_follows_a_retag_nobody_is_watching

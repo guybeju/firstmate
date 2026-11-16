@@ -14,8 +14,9 @@ export function emptyState() {
 export function isQueue(value) {
     return typeof value === "string" && QUEUES.includes(value);
 }
+/** A usable topic id: the id grammar, and not the name of something every object inherits. */
 export function isValidTopicId(id) {
-    return id.length <= ID_MAX && /^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(id);
+    return (id.length <= ID_MAX && /^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(id) && !(id in Object.prototype));
 }
 /** Follows the merged table from `id` to the id that currently owns it. */
 export function resolveTopicId(doc, id) {
@@ -43,10 +44,13 @@ function clone(state) {
 function codePoints(text) {
     return [...text].length;
 }
-/** Trims `text` and returns it when it is one non-empty line within `max` code points. */
+// Control characters (line breaks, tabs, terminal escapes) and the characters
+// that reorder the text around them: a name is printed in terminals and tables.
+const NOT_PLAIN_TEXT = /[\p{Cc}\u202A-\u202E\u2066-\u2069]/u;
+/** Trims `text` and returns it when it is one non-empty line of plain text within `max` code points. */
 function oneLine(text, max) {
     const trimmed = text.trim();
-    if (trimmed === "" || /[\r\n]/.test(trimmed) || codePoints(trimmed) > max)
+    if (trimmed === "" || NOT_PLAIN_TEXT.test(trimmed) || codePoints(trimmed) > max)
         return null;
     return trimmed;
 }
