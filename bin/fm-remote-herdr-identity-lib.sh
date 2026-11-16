@@ -5,7 +5,9 @@
 # Source this file; it defines functions only. It is the single owner of that
 # identity: bin/fm-remote-doctor.sh prepares the service under it, and
 # bin/fm-remote-secondmate-control.sh launches, relaunches, and validates
-# endpoints under it, so readiness and launch always name the same service.
+# endpoints under it, so readiness and launch always name the same service;
+# bin/fm-remote-herdr-guard.sh derives the launch-agent label it proves a
+# server's birth against from its session name here.
 # bin/fm-spawn.sh validates a remote route's reported session against the
 # names this library can produce.
 #

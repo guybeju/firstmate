@@ -1571,18 +1571,17 @@ Measured 2026-11-17 on macOS with Herdr 0.9.5 by the operator:
 - A `/usr/bin/perl` fork + `POSIX::setsid` child of a `gui/<uid>` Aqua launch agent kept login-keychain access: `launchctl managername` printed `Aqua` and `security find-generic-password` exited 0.
 - From the Linux host, `herdr machine add mac --label mac-leadertest --remote-session fm-lab-leadertest` against that session-leader lab server saved the profile with no restart or update prompt.
 
-Measured 2026-11-17 on macOS with Herdr 0.9.5 on the real `dev.firstmate.herdr.fm-remote` launch agent running this guard, read with `launchctl print gui/501/dev.firstmate.herdr.fm-remote` and `ps eww`:
+Measured 2026-11-17 on macOS with Herdr 0.9.5 on the real `dev.firstmate.herdr.fm-remote` launch agent running this guard:
 
-- `launchctl print` reported `state = running`, `pid = 10778`, domain `gui/501`.
+- `launchctl print gui/501/dev.firstmate.herdr.fm-remote` reported `state = running`, `pid = 10778`, domain `gui/501`.
 - Supervisor pid 10778 had ppid 1 and ran `/usr/bin/perl -MPOSIX -e ...`; server pid 10794 had ppid 10778 and pgid 10794, and reported `detached_server_daemon=true`.
-- The server's environment carried `XPC_SERVICE_NAME=0`, and the doctor before this fix classified it born `unknown`.
 
 Measured 2026-11-17 on macOS with Herdr 0.9.5 by the operator with throwaway Aqua launch agents in `gui/501`, each printing its `XPC_SERVICE_NAME`:
 
 - A job running `/bin/sh -c` directly saw `XPC_SERVICE_NAME=<label>`.
 - A job running `/bin/zsh -l -c 'exec /bin/sh -c ...'` saw `XPC_SERVICE_NAME=<label>`.
 - A `/usr/bin/perl -MPOSIX` job's perl process saw `XPC_SERVICE_NAME=<label>`, while its child after fork + `POSIX::setsid()` + exec printed `XPC_SERVICE_NAME=0`.
-- After `launchctl bootout` and `bootstrap` of the real agent, the shape reproduced: supervisor ppid 1, server its child with `XPC_SERVICE_NAME=0`, and the doctor before this fix reported it born `unknown`.
+- After `launchctl bootout` and `bootstrap` of the real agent, the shape reproduced: supervisor ppid 1, and the server its child with `XPC_SERVICE_NAME=0`, which the environment-label route classifies born `unknown`.
 
 So a forked child of a launchd job sees `XPC_SERVICE_NAME=0`, and only launchd's job record can prove the session-leader server's birth.
 Not yet verified on macOS: the doctor's Aqua verdict for that server through the expected-label route, and a prompt-free `herdr machine add` against the `fm-remote` session.
