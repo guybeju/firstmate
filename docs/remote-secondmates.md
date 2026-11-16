@@ -313,6 +313,7 @@ At boot, that server can win the configured session's socket, because sshd accep
 The [guard's header](../bin/fm-remote-herdr-guard.sh) owns the startup decision table and one-shot operator authorization mechanism; the [repair safety rules above](#repair-with---fix) explain when takeover is allowed and its concurrency risk.
 `KeepAlive={SuccessfulExit=false}` lets a successful guard exit rest instead of respawning against a held socket.
 [`bin/fm-remote-herdr-owner-lib.sh`](../bin/fm-remote-herdr-owner-lib.sh) owns the birth markers it reads.
+The guard's server is a forked child of the launchd job and sees `XPC_SERVICE_NAME=0`, so its Aqua birth is proven by launchd's own record rather than its environment: `launchctl print gui/<uid>/<label>` for the session's expected label must report the server or its parent as the job's pid.
 
 ### Other repairs and limits
 

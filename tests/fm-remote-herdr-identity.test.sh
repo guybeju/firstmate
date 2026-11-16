@@ -127,7 +127,15 @@ session_valid "$SECOND_SESSION" || fail "the parent refused a code-root-derived 
 for bad in default fm-remote- "fm-remote-${ROOT_ID:0:15}" "fm-remote-${ROOT_ID}0" fm-remote-0123456789ABCDEF "x$SECOND_SESSION"; do
   if session_valid "$bad"; then fail "the parent accepted foreign Herdr session '$bad'"; fi
 done
-pass "D the parent accepts only the primary or a code-root-derived session"
+session_label() {
+  bash -c '. "$1/bin/fm-remote-herdr-identity-lib.sh"; fm_remote_herdr_session_label "$2"' _ "$ROOT" "$1"
+}
+assert_equals dev.firstmate.herdr.fm-remote "$(session_label fm-remote)" "the primary session's launch-agent label is wrong"
+assert_equals "dev.firstmate.herdr.$SECOND_SESSION" "$(session_label "$SECOND_SESSION")" \
+  "a code-root-derived session's launch-agent label is wrong"
+if label=$(session_label default); then fail "a foreign session name got launch-agent label '$label'"; fi
+[ -z "$label" ] || fail "a foreign session name printed launch-agent label '$label'"
+pass "D the parent accepts only the primary or a code-root-derived session, and only those name a launch agent"
 
 # --- E) legacy shell quoting preserves exact ownership -----------------------
 # The legacy plist command is serialized public configuration. Use Python's

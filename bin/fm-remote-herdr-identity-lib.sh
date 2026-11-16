@@ -5,7 +5,9 @@
 # Source this file; it defines functions only. It is the single owner of that
 # identity: bin/fm-remote-doctor.sh prepares the service under it, and
 # bin/fm-remote-secondmate-control.sh launches, relaunches, and validates
-# endpoints under it, so readiness and launch always name the same service.
+# endpoints under it, so readiness and launch always name the same service;
+# bin/fm-remote-herdr-guard.sh derives the launch-agent label it proves a
+# server's birth against from its session name here.
 # bin/fm-spawn.sh validates a remote route's reported session against the
 # names this library can produce.
 #
@@ -30,6 +32,10 @@
 #     not a plain file in a plain directory.
 #   fm_remote_herdr_session_name_valid <session>
 #     Succeeds for fm-remote and fm-remote-<root-id> only.
+#   fm_remote_herdr_session_label <session>
+#     Prints the launch-agent label that owns a valid <session>
+#     (dev.firstmate.herdr.<session>); returns 1, printing nothing, for any
+#     other name.
 
 fm_remote_herdr_recorded_owner() { # <owner-file>
   local file=$1 dir owner=
@@ -83,7 +89,7 @@ fm_remote_herdr_identity() { # <fm-root>
   local root=$1 owner plist guard id
   FM_REMOTE_HERDR_OWNER_DIR="${HOME:-}/.firstmate"
   FM_REMOTE_HERDR_SESSION=fm-remote
-  FM_REMOTE_HERDR_LABEL=dev.firstmate.herdr.fm-remote
+  FM_REMOTE_HERDR_LABEL=$(fm_remote_herdr_session_label "$FM_REMOTE_HERDR_SESSION")
   FM_REMOTE_HERDR_OWNER_FILE="$FM_REMOTE_HERDR_OWNER_DIR/remote-herdr-owner"
   owner=$(fm_remote_herdr_recorded_owner "$FM_REMOTE_HERDR_OWNER_FILE")
   plist="${HOME:-}/Library/LaunchAgents/$FM_REMOTE_HERDR_LABEL.plist"
@@ -99,7 +105,7 @@ fm_remote_herdr_identity() { # <fm-root>
   [ -n "$owner" ] && [ "$owner" != "$root" ] || return 0
   id=$(fm_remote_herdr_root_id "$root") || return 1
   FM_REMOTE_HERDR_SESSION="fm-remote-$id"
-  FM_REMOTE_HERDR_LABEL="dev.firstmate.herdr.fm-remote-$id"
+  FM_REMOTE_HERDR_LABEL=$(fm_remote_herdr_session_label "$FM_REMOTE_HERDR_SESSION")
   FM_REMOTE_HERDR_OWNER_FILE="$FM_REMOTE_HERDR_OWNER_DIR/remote-herdr-owner-$id"
   FM_REMOTE_HERDR_OWNER_ROOT=$(fm_remote_herdr_recorded_owner "$FM_REMOTE_HERDR_OWNER_FILE")
 }
@@ -111,4 +117,9 @@ fm_remote_herdr_session_name_valid() { # <session>
   id=${1#fm-remote-}
   [ "${#id}" -eq 16 ] || return 1
   case "$id" in *[!0-9a-f]*) return 1 ;; esac
+}
+
+fm_remote_herdr_session_label() { # <session>
+  fm_remote_herdr_session_name_valid "$1" || return 1
+  printf 'dev.firstmate.herdr.%s\n' "$1"
 }

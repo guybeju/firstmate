@@ -1519,7 +1519,8 @@ SSH-born herdr server (child of `herdr --session fm-remote remote-client-bridge`
 
 `XPC_SERVICE_NAME` identifies a launchd label but does not identify its domain, because the Background `user/501` job also carried that variable while lacking keychain access.
 The owner classifier therefore accepts that label only when `launchctl print gui/<uid>/<label>` identifies the owner pid or the owner's parent pid, or the label is loaded in `gui/<uid>` but not `user/<uid>`.
-`XPC_SERVICE_NAME=0`, including a value inherited by a herdr live-handoff child, remains unknown.
+`XPC_SERVICE_NAME=0`, including a value inherited by a herdr live-handoff child, proves nothing by itself.
+A forked child of a launchd job sees that value (measured below under "Session leadership"), so the classifier also takes the session's expected label from its caller and accepts the owner when `launchctl print gui/<uid>/<expected-label>` reports the owner or the owner's parent as the job's `pid`, with no domain-exclusivity fallback.
 `FM_REMOTE_JOB_ACTIVE=1` proves the Aqua worker only when `dev.firstmate.remote-job` is loaded in `gui/<uid>` but not `user/<uid>`.
 
 The SSH-born row was read on the remote host whose `dev.firstmate.herdr.fm-remote` job showed `state = spawn scheduled`, `runs = 239`, `last exit code = 1` and a log repeating `error: herdr server is already running`: herdr's remote attach had started the session's server as its own child before the login session existed, and launchd's copy lost the socket on every retry.
@@ -1570,7 +1571,20 @@ Measured 2026-11-17 on macOS with Herdr 0.9.5 by the operator:
 - A `/usr/bin/perl` fork + `POSIX::setsid` child of a `gui/<uid>` Aqua launch agent kept login-keychain access: `launchctl managername` printed `Aqua` and `security find-generic-password` exited 0.
 - From the Linux host, `herdr machine add mac --label mac-leadertest --remote-session fm-lab-leadertest` against that session-leader lab server saved the profile with no restart or update prompt.
 
-Not yet verified on macOS: the real `dev.firstmate.herdr.fm-remote` launch agent running this guard, its server's `detached_server_daemon` reading, the doctor's Aqua verdict for it, and a prompt-free `herdr machine add` against the `fm-remote` session.
+Measured 2026-11-17 on macOS with Herdr 0.9.5 on the real `dev.firstmate.herdr.fm-remote` launch agent running this guard:
+
+- `launchctl print gui/501/dev.firstmate.herdr.fm-remote` reported `state = running`, `pid = 10778`, domain `gui/501`.
+- Supervisor pid 10778 had ppid 1 and ran `/usr/bin/perl -MPOSIX -e ...`; server pid 10794 had ppid 10778 and pgid 10794, and reported `detached_server_daemon=true`.
+
+Measured 2026-11-17 on macOS with Herdr 0.9.5 by the operator with throwaway Aqua launch agents in `gui/501`, each printing its `XPC_SERVICE_NAME`:
+
+- A job running `/bin/sh -c` directly saw `XPC_SERVICE_NAME=<label>`.
+- A job running `/bin/zsh -l -c 'exec /bin/sh -c ...'` saw `XPC_SERVICE_NAME=<label>`.
+- A `/usr/bin/perl -MPOSIX` job's perl process saw `XPC_SERVICE_NAME=<label>`, while its child after fork + `POSIX::setsid()` + exec printed `XPC_SERVICE_NAME=0`.
+- After `launchctl bootout` and `bootstrap` of the real agent, the shape reproduced: supervisor ppid 1, and the server its child with `XPC_SERVICE_NAME=0`, which the environment-label route classifies born `unknown`.
+
+So a forked child of a launchd job sees `XPC_SERVICE_NAME=0`, and only launchd's job record can prove the session-leader server's birth.
+Not yet verified on macOS: the doctor's Aqua verdict for that server through the expected-label route, and a prompt-free `herdr machine add` against the `fm-remote` session.
 macOS `ps -o sess=` prints 0 even for a session leader, so a macOS check reads `pgid == pid` together with Herdr's own `detached_server_daemon` rather than the `sess` column.
 
 `bin/fm-test-run.sh tests/fm-remote-herdr-guard.test.sh` pins the resulting decision table against real marker-carrying processes, the supervisor's session-leader shape, exit status, and signal forwarding, and, where herdr is installed, re-reads `detached_server_daemon` from a real lab server the guard starts; `tests/fm-remote-doctor.test.sh` pins the doctor's verdicts on the same markers.

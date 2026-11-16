@@ -52,8 +52,11 @@
 # ~/.firstmate/remote-herdr-takeover-<s>, and this guard consumes that one-shot
 # marker and honors it only while the authorizing doctor is still running.
 # bin/fm-remote-herdr-owner-lib.sh owns the owner discovery and the birth
-# markers; FM_REMOTE_HERDR_GUARD_STOP_WAIT_TENTHS (default 50) bounds the
-# release wait in tenths of a second. Every decision prints one line to
+# markers; the guard proves a launchd birth against the label
+# bin/fm-remote-herdr-identity-lib.sh derives from <session>, so a session
+# with any other name gets no label route.
+# FM_REMOTE_HERDR_GUARD_STOP_WAIT_TENTHS (default 50) bounds the release wait
+# in tenths of a second. Every decision prints one line to
 # stdout, which launchd routes to the agent's log.
 set -u
 
@@ -65,6 +68,8 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$SCRIPT_DIR" && pwd -P)
 . "$SCRIPT_DIR/fm-remote-herdr-owner-lib.sh"
 # shellcheck source=bin/fm-remote-job-lib.sh
 . "$SCRIPT_DIR/fm-remote-job-lib.sh"
+# shellcheck source=bin/fm-remote-herdr-identity-lib.sh
+. "$SCRIPT_DIR/fm-remote-herdr-identity-lib.sh"
 
 usage() { sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 [ "$#" -eq 2 ] || usage
@@ -72,6 +77,7 @@ HERDR_BIN=$1
 SESSION=$2
 [ -n "$HERDR_BIN" ] && [ -x "$HERDR_BIN" ] || { printf 'fm-remote-herdr-guard: herdr is not executable: %s\n' "$HERDR_BIN" >&2; exit 1; }
 [ -n "$SESSION" ] || usage
+LABEL=$(fm_remote_herdr_session_label "$SESSION") || LABEL=
 command -v jq >/dev/null 2>&1 || { printf 'fm-remote-herdr-guard: jq does not resolve on the launch agent PATH\n' >&2; exit 1; }
 PERL=$(command -v perl 2>/dev/null) || { printf 'fm-remote-herdr-guard: perl does not resolve on the launch agent PATH, so the herdr server cannot be started as a session leader; restore /usr/bin/perl, which macOS ships\n' >&2; exit 1; }
 STOP_WAIT_TENTHS=${FM_REMOTE_HERDR_GUARD_STOP_WAIT_TENTHS:-50}
@@ -131,7 +137,7 @@ elif [ -z "$OWNER" ]; then
   log "session $SESSION is running but no herdr process could be proven to own ${SOCKET:-its socket}"
   BIRTH=unknown
 else
-  BIRTH=$(fm_remote_herdr_owner_birth "$OWNER")
+  BIRTH=$(fm_remote_herdr_owner_birth "$OWNER" "$LABEL")
 fi
 
 if fm_remote_herdr_birth_is_aqua "$BIRTH"; then
