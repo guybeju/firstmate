@@ -14,21 +14,32 @@
 # the login shell, is what gives this process and every server it execs the
 # Aqua audit session and login-keychain access; the login shell only gives the
 # server the account's own environment.
-# `herdr server` stays in the foreground under launchd, as verified in
-# docs/verification/runtime-backends.md under "fm-remote server birth and login-keychain access", so the final exec provides the complete supervision lifecycle.
+# The guard's final exec keeps a foreground process under launchd, as verified
+# in docs/verification/runtime-backends.md under "fm-remote server birth and
+# login-keychain access", so that pid carries the whole supervision lifecycle.
+# That process is a small perl supervisor (perl from the launch agent's PATH;
+# macOS ships /usr/bin/perl): it starts `herdr server --session <s>` as a child
+# that calls setsid() before exec, forwards TERM, INT, and HUP to it, and exits
+# with its status, 128+n when a signal killed it. herdr reports the server
+# capability detached_server_daemon only for a session leader, and without it
+# `herdr machine add` offers to restart the server. A launchd job is normally a
+# process-group leader, which cannot call setsid() itself, hence the fork.
+# A host where perl does not resolve is refused with exit 1 before any server
+# is stopped or started.
 #
 # Decision, made once per launch (exit codes matter under SuccessfulExit=false:
 # 0 tells launchd the job is done until something restarts it, non-zero asks
 # for a retry after the throttle interval):
-#   no server owns the session socket  -> exec `herdr server --session <s>`
-#                                          (foreground, launchd-supervised)
+#   no server owns the session socket  -> start `herdr server --session <s>`
+#                                          under the supervisor and exit with
+#                                          the server's status
 #   the owner was born in the Aqua session (launchd or the Aqua remote-job
 #   worker)                            -> exit 0, leave it alone
 #   the owner was born anywhere else (an SSH remote attach, a shell over
 #   ssh/mosh, or a birth it cannot prove), and the operator's
 #   fm-remote-doctor.sh --fix authorized this start
 #                                       -> `herdr server stop`, wait until the
-#                                          socket is released, then exec
+#                                          socket is released, then start
 #                                          `herdr server --session <s>` at once
 #                                          so the socket is rebound before a
 #                                          reconnecting SSH attach can start
