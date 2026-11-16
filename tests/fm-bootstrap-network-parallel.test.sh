@@ -66,6 +66,12 @@ command_name=$(printf '%s\n' "$cmd" | sed -n '1p')
 subcommand=$(printf '%s\n' "$cmd" | sed -n '2p')
 item_rel=$(printf '%s\n' "$cmd" | sed -n '3p')
 slow=0
+# Like the real doctor, an argument it does not know is refused at once with
+# the usage status; readiness sends one to prove the transport carries it.
+case "$command_name:$subcommand" in
+  fm-remote-doctor.sh:|fm-remote-doctor.sh:--fix|fm-remote-doctor.sh:--backend*) ;;
+  fm-remote-doctor.sh:*) printf 'QUICK %s %s %s\n' "$host" "$command_name" "$subcommand" >> "$log"; exit 2 ;;
+esac
 case "$command_name" in
   fm-remote-doctor.sh) slow=1 ;;
   fm-remote-secondmate-control.sh)

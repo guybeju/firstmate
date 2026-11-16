@@ -107,6 +107,13 @@ case "${FM_FAKE_SSH_MODE:-normal}" in
     "$FM_FAKE_REMOTE_ENTRYPOINT" "$@"
     exit 255
     ;;
+  drops-status)
+    # A server that reports exit 0 for every command: the remote command's own
+    # status is recorded for the test, then discarded.
+    "$FM_FAKE_REMOTE_ENTRYPOINT" "$@"
+    printf '%s\n' "$?" > "$FM_FAKE_SSH_REMOTE_RC"
+    exit 0
+    ;;
   *) exec "$FM_FAKE_REMOTE_ENTRYPOINT" "$@" ;;
 esac
 SH
@@ -490,6 +497,58 @@ assert_contains "$out" 'doctor does not match the trusted bootstrap identity' \
 cp "$ROOT/bin/fm-remote-doctor.sh" "$REMOTE_ROOT/bin/fm-remote-doctor.sh"
 chmod +x "$REMOTE_ROOT/bin/fm-remote-doctor.sh"
 pass "doctor bootstrap remains authenticated when git is unavailable"
+
+# Readiness trusts only exit statuses carried back by fm-on.sh, so it first
+# sends the real doctor an argument it refuses and requires a non-zero return.
+readiness_transport() { # <fake-ssh-mode> <ensure|transport>
+  (
+    export FM_HOME="$LOCAL_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_SSH_BIN="$FAKEBIN/fake-ssh"
+    export FM_FAKE_SSH_COUNT="$SSH_COUNT" FM_FAKE_SSH_LOG="$SSH_LOG" FM_FAKE_SSH_MODE=$1
+    export FM_FAKE_SSH_REMOTE_RC="$TMP_ROOT/remote-rc"
+    export FM_FAKE_REMOTE_ENTRYPOINT="$REMOTE_ROOT/bin/fm-remote-entrypoint.sh"
+    export FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux FM_REMOTE_JOB_STATE_ROOT="$TMP_ROOT/remote-jobs"
+    # shellcheck source=bin/fm-remote-readiness-lib.sh
+    . "$ROOT/bin/fm-remote-readiness-lib.sh"
+    rc=0
+    if [ "$2" = ensure ]; then
+      fm_remote_readiness_ensure "$ROOT/bin" ios || rc=$?
+    else
+      fm_remote_readiness_transport "$ROOT/bin" ios || rc=$?
+    fi
+    printf '%s\n' "$FM_REMOTE_READINESS_OUT"
+    exit "$rc"
+  )
+}
+
+set +e
+out=$(readiness_transport normal transport)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "a transport that carries exit status failed the readiness transport check ($rc): $out"
+pass "readiness accepts a transport that returns the refused doctor call's exit status"
+
+: > "$SSH_COUNT"
+rm -f "$TMP_ROOT/remote-rc"
+set +e
+out=$(readiness_transport drops-status ensure)
+rc=$?
+set -e
+remote_rc=$(cat "$TMP_ROOT/remote-rc" 2>/dev/null || echo missing)
+case "$remote_rc" in 0|missing) fail "the refused doctor call did not fail on the remote side ($remote_rc)" ;; esac
+[ "$rc" -eq 1 ] || fail "readiness accepted a transport that drops exit status (got $rc)"
+assert_contains "$out" 'check transport-exit-status=human:' "readiness did not name the dropped exit status"
+assert_contains "$out" "action: transport-exit-status:" "readiness did not name the operator step"
+[ "$(cat "$SSH_COUNT")" -eq 1 ] || fail "readiness requested a doctor verdict over a transport that drops exit status"
+pass "readiness refuses a transport that reports a failed remote command as exit 0, before any doctor verdict"
+
+: > "$SSH_COUNT"
+set +e
+readiness_transport unreachable ensure >/dev/null
+rc=$?
+set -e
+[ "$rc" -eq 255 ] || fail "an unreachable transport did not report unknown readiness completion (got $rc)"
+[ "$(cat "$SSH_COUNT")" -eq 1 ] || fail "readiness continued after the transport check could not complete"
+pass "readiness reports unknown completion when the transport check cannot complete"
 
 if FM_HOME="$LOCAL_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_SSH_BIN="$FAKEBIN/fake-ssh" \
   "$ROOT/bin/fm-on.sh" '-oProxyCommand=bad' fm-probe-two.sh >/dev/null 2>&1; then

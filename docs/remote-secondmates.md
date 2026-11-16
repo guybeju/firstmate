@@ -42,6 +42,10 @@ Provisioning checks any available supported backend; launch checks the selected 
 1. Configure an SSH alias in the primary account's normal OpenSSH configuration.
 2. Use ordinary public-key authentication, strict host-key verification, and a dedicated remote account where practical.
 3. Do not enable agent forwarding for Firstmate.
+4. Use an SSH server that returns the remote command's exit status, because every `fm-on.sh` caller reads success or failure from it.
+   `ssh <alias> 'exit 3'; echo $?` must print `3`.
+
+Remote readiness checks the exit-status requirement before it trusts any doctor verdict: it sends a command that must fail through `fm-on.sh` and refuses the host with the `transport-exit-status` human gap when that command comes back as exit 0 ([`bin/fm-remote-readiness-lib.sh`](../bin/fm-remote-readiness-lib.sh) owns the check).
 
 `fm-on.sh` adds its own protections:
 
@@ -221,7 +225,8 @@ chmod +x ~/.local/bin/tasks-axi
 
 ## Readiness, repair, and the human steps
 
-`bin/fm-remote-doctor.sh` is the single owner of what "ready for a remote second mate" means.
+`bin/fm-remote-doctor.sh` is the single owner of what "ready for a remote second mate" means on the host.
+The one requirement it cannot see from the host, that the SSH server returns exit status, is checked from the primary as described under [SSH access from the primary](#ssh-access-from-the-primary).
 
 ### Check a host
 

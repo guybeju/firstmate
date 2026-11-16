@@ -112,7 +112,11 @@ cd "$FM_FAKE_REMOTE_CWD" || exit 93
 # The readiness gate is answered here rather than by the real doctor, which
 # would inspect the RUNNER's own account; tests/fm-remote-doctor.test.sh owns
 # the doctor's behavior against controlled account fixtures.
-if printf '%s' "$4" | base64 --decode 2>/dev/null | tr '\0' '\n' | head -1 | grep -q '^fm-remote-doctor.sh$'; then
+remote_argv=$(printf '%s' "$4" | base64 --decode 2>/dev/null | tr '\0' '\n')
+if [ "$(printf '%s\n' "$remote_argv" | head -1)" = fm-remote-doctor.sh ]; then
+  # Like the real doctor, an argument it does not know gets the usage status
+  # before any check; readiness sends one to prove the transport carries it.
+  case "$(printf '%s\n' "$remote_argv" | sed -n 2p)" in ''|--fix|--backend|--backend=*) ;; *) exit 2 ;; esac
   printf 'ok: remote second-mate readiness confirmed on this host\n'
   exit 0
 fi
