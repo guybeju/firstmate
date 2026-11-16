@@ -329,6 +329,65 @@ test_answer_notice_survives_a_restart() {
   pass "a restart between the answer and its notice finishes the notice only"
 }
 
+# page <op> <json>: a topic operation sent the way the board page sends it.
+page() {
+  curl -s -o /dev/null -w '%{http_code}' -X POST \
+    -H "Authorization: Bearer $(cat "$MAIN/state/topic-board/token")" \
+    -H "Origin: http://127.0.0.1:$(cat "$MAIN/state/topic-board/port")" \
+    -H 'Content-Type: application/json' -d "$2" \
+    "http://127.0.0.1:$(cat "$MAIN/state/topic-board/port")/api/topics/$1"
+}
+
+page_body() {  # <op> <json>: the same request, printing the answer
+  curl -s -X POST \
+    -H "Authorization: Bearer $(cat "$MAIN/state/topic-board/token")" \
+    -H "Origin: http://127.0.0.1:$(cat "$MAIN/state/topic-board/port")" \
+    -H 'Content-Type: application/json' -d "$2" \
+    "http://127.0.0.1:$(cat "$MAIN/state/topic-board/port")/api/topics/$1"
+}
+
+# wait_calls <play key> <count>: wait until that stand-in was called <count> times.
+wait_calls() {
+  local tries=0
+  while [ "$(calls "$1")" -lt "$2" ]; do
+    tries=$((tries + 1))
+    [ "$tries" -lt 40 ] || fail "$1 was called $(calls "$1") times, expected $2"
+    sleep 0.15
+  done
+}
+
+test_decisions_made_on_the_page_reach_firstmate() {
+  local before code
+  before=$(calls fm-inbox.sh)
+  t propose "By hand" --goal "g" --id byhand >/dev/null
+  t confirm byhand >/dev/null
+  t propose "Fresh idea" --goal "g" --id fresh >/dev/null
+  sleep 1
+  assert_equals "$before" "$(calls fm-inbox.sh)" "what firstmate does itself must not come back as a notice"
+  assert_equals 200 "$(page confirm '{"id":"fresh","queue":"high"}')" "confirming on the page failed"
+  wait_calls fm-inbox.sh $((before + 1))
+  assert_contains "$(last_call fm-inbox.sh)" "stdin=使用者在看板上：議題「Fresh idea」已確認，放進「高」（id：fresh）" \
+    "a confirmation made on the page must tell firstmate the topic and its id"
+  assert_equals 200 "$(page confirm '{"id":"fresh"}')" "confirming again failed"
+  assert_equals 200 "$(page rename '{"id":"fresh","value":"Fresh name"}')" "renaming on the page failed"
+  t close-propose fresh --reason "all done" >/dev/null
+  sleep 1
+  assert_equals $((before + 1)) "$(calls fm-inbox.sh)" "a repeated confirmation, a rename, and firstmate's own proposal send nothing"
+  assert_equals 200 "$(page keep '{"id":"fresh"}')" "keeping the topic open failed"
+  wait_calls fm-inbox.sh $((before + 2))
+  assert_contains "$(last_call fm-inbox.sh)" "stdin=使用者在看板上：議題「Fresh name」先不關（id：fresh）" \
+    "turning down a close proposal must reach firstmate"
+  code=$(page_body merge '{"from":"byhand","into":"fresh"}' | jq -r '.confirm')
+  assert_equals $((before + 2)) "$(calls fm-inbox.sh)" "asking to merge, before confirming it, sends nothing"
+  assert_equals 200 "$(page merge "{\"from\":\"byhand\",\"into\":\"fresh\",\"confirm\":\"$code\"}")" "merging on the page failed"
+  wait_calls fm-inbox.sh $((before + 3))
+  assert_contains "$(last_call fm-inbox.sh)" "議題「By hand」已併入「Fresh name」（id：fresh）" "a merge made on the page must reach firstmate"
+  assert_equals 200 "$(page archive '{"id":"fresh"}')" "archiving on the page failed"
+  wait_calls fm-inbox.sh $((before + 4))
+  assert_contains "$(last_call fm-inbox.sh)" "議題「Fresh name」已封存（id：fresh）" "archiving on the page must reach firstmate"
+  pass "confirm, keep, merge, and archive done on the page are sent to firstmate; its own commands are not"
+}
+
 test_dispatchable_notice() {
   local before
   before=$(calls fm-inbox.sh)
@@ -375,4 +434,4 @@ test_audit_log() {
 setup_fleet
 fm_test_run test_message_to_firstmate test_direct_message test_retries_run_out test_answers test_tagging \
   test_same_home_writes_do_not_overlap test_restart_resumes_or_settles test_answer_notice_survives_a_restart \
-  test_dispatchable_notice test_audit_log
+  test_dispatchable_notice test_decisions_made_on_the_page_reach_firstmate test_audit_log
