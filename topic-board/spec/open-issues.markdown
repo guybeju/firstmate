@@ -180,7 +180,7 @@ brief 與帳本研究都說待決事項從 snapshot 的 `decisions_open` 讀。�
 
 ### C34　寫錯的摘要沒辦法收回
 
-實測時 first mate 把一個其實沒落地的 task 寫成了 `landed`，摘要檔只能加、不能改，錯的里程碑就一直留在看板上。**做法**：`fm-topic.sh retract [--home <id>] <task-id> <kind> -`，stdin 是原因。它把那個 task 最新一則該種類的摘要從看板拿掉，並印出拿掉的是哪一則。檔案仍然只加不改：原本那一行留著，後面多一行撤回紀錄（含原因）。撤回之後同樣的文字可以再寫一次。規則範本還沒有提到這個指令；要加的話得改範本、重跑 `install-rules`。
+實測時 first mate 把一個其實沒落地的 task 寫成了 `landed`，摘要檔只能加、不能改，錯的里程碑就一直留在看板上。**做法**：`fm-topic.sh retract [--home <id>] <task-id> <kind> -`，stdin 是原因。它把那個 task 最新一則該種類的摘要從看板拿掉，並印出拿掉的是哪一則。檔案仍然只加不改：原本那一行留著，後面多一行撤回紀錄（含原因）。撤回之後同樣的文字可以再寫一次。規則範本還沒有提到這個指令；要加的話得改範本、重跑 `install-rules`。 主 home 的規則範本從 v2 起有一句叫 first mate 寫錯時用 `retract`；範本更新後要由使用者重跑 `install-rules`。
 
 另外，直送給已經結束的 worker 時，原本顯示上游一長串英文錯誤，現在顯示「這個 worker 已經結束或找不到，訊息沒有送出。」
 
