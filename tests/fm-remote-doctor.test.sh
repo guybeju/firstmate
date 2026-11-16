@@ -87,6 +87,9 @@ SUPERVISOR_HOLDER_PID=$HOLDER_PARENT_PID
 hold_child SSH_CONNECTION='100.102.217.78 51234 100.100.1.2 22' XPC_SERVICE_NAME=dev.firstmate.herdr.fm-remote
 SUPERVISED_SSH_HOLDER_PID=$HOLDER_PID
 SUPERVISED_SSH_PARENT_PID=$HOLDER_PARENT_PID
+hold_child XPC_SERVICE_NAME=0
+FORKED_HOLDER_PID=$HOLDER_PID
+FORKED_PARENT_PID=$HOLDER_PARENT_PID
 
 # new_case <Darwin|Linux> [with-herdr] [gui] [login-shell]
 # Builds one isolated account fixture and points the module-level CASE_*
@@ -957,6 +960,27 @@ assert_contains "$DOCTOR_OUT" "check herdr-server=fixable: session fm-remote is 
   "an SSH-marked server was trusted because its parent is the launchd job"
 mv "$CASE_STATE/loaded-$LABEL.contract" "$CASE_STATE/loaded-$LABEL"
 rm -f "$CASE_STATE/user-loaded-$LABEL"
+
+# The rolled-out macOS shape: the forked server sees XPC_SERVICE_NAME=0, so
+# only launchd's record for the doctor's own label can prove the birth.
+cp "$CASE_STATE/loaded-$LABEL" "$CASE_STATE/loaded-$LABEL.contract"
+printf 'pid = %s\n' "$FORKED_PARENT_PID" >> "$CASE_STATE/loaded-$LABEL"
+printf '%s\n' "$FORKED_HOLDER_PID" > "$CASE_STATE/socket-owner"
+doctor
+expect_code 0 "$DOCTOR_RC" "an XPC_SERVICE_NAME=0 child of the launchd job was not reported ready"
+assert_contains "$DOCTOR_OUT" "check herdr-server=ok: session fm-remote is running in the Aqua login session (pid $FORKED_HOLDER_PID, launchd)" \
+  "an XPC_SERVICE_NAME=0 child of the launchd job was not proven Aqua-born"
+cp "$CASE_STATE/loaded-$LABEL.contract" "$CASE_STATE/loaded-$LABEL"
+printf 'pid = %s\n' "$AQUA_HOLDER_PID" >> "$CASE_STATE/loaded-$LABEL"
+doctor
+expect_code 1 "$DOCTOR_RC" "an XPC_SERVICE_NAME=0 server outside the launchd job was reported ready"
+assert_contains "$DOCTOR_OUT" "check herdr-server=fixable: session fm-remote is served by pid $FORKED_HOLDER_PID born outside the Aqua login session (unknown)" \
+  "an XPC_SERVICE_NAME=0 server whose parent is not the launchd job was trusted"
+mv "$CASE_STATE/loaded-$LABEL.contract" "$CASE_STATE/loaded-$LABEL"
+doctor
+expect_code 1 "$DOCTOR_RC" "an XPC_SERVICE_NAME=0 server was reported ready while the launchd job reports no pid"
+assert_contains "$DOCTOR_OUT" "check herdr-server=fixable: session fm-remote is served by pid $FORKED_HOLDER_PID born outside the Aqua login session (unknown)" \
+  "an XPC_SERVICE_NAME=0 server was trusted without a launchd job pid"
 
 printf '%s\n' "$XPC_ZERO_HOLDER_PID" > "$CASE_STATE/socket-owner"
 doctor

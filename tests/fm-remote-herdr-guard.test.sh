@@ -442,6 +442,80 @@ assert_contains "$GUARD_OUT" "pid $SUPERVISED_SSH_PID born outside the Aqua logi
   "an SSH-marked server was trusted because its parent is the launchd job"
 pass "a server whose parent is the gui-domain launchd job is Aqua-born unless it carries SSH markers"
 
+# The rolled-out macOS shape: the forked session-leader server sees
+# XPC_SERVICE_NAME=0, so only launchd's record for the label the guard derives
+# from its session can prove the birth.
+hold_child XPC_SERVICE_NAME=0
+FORKED_PID=$HOLDER_PID
+FORKED_PARENT_PID=$HOLDER_PARENT_PID
+hold_child SSH_CONNECTION='100.102.217.78 51234 100.100.1.2 22' XPC_SERVICE_NAME=0
+FORKED_SSH_PID=$HOLDER_PID
+FORKED_SSH_PARENT_PID=$HOLDER_PARENT_PID
+SSHD_PARENT_PID=$(ps -o ppid= -p "$SSHD_CHILD_PID" | tr -d ' ')
+
+new_case running
+printf '%s\n' "$FORKED_PID" > "$CASE_OWNER"
+load_job gui dev.firstmate.herdr.fm-remote "$FORKED_PARENT_PID"
+authorize
+guard
+expect_code 0 "$GUARD_RC" "the guard did not exit 0 for an XPC_SERVICE_NAME=0 child of the launchd job"
+assert_not_started "the guard started a second server over an XPC_SERVICE_NAME=0 child of the launchd job"
+assert_not_contains "$(herdr_calls)" 'server stop' "the guard stopped an XPC_SERVICE_NAME=0 child of the launchd job"
+assert_contains "$GUARD_OUT" "pid $FORKED_PID born in the Aqua login session (launchd)" \
+  "an XPC_SERVICE_NAME=0 child of the launchd job was not proven Aqua-born"
+rm -f "$TAKEOVER_MARKER"
+
+# None of the cases below may become launchd, and none is authorized, so the
+# guard must leave each server alone.
+forked_case() { # <what> <owner> <birth>
+  guard
+  expect_code 0 "$GUARD_RC" "the guard failed for $1"
+  assert_not_started "the guard started a server over $1 without authorization"
+  assert_contains "$GUARD_OUT" "pid $2 born outside the Aqua login session ($3)" "$1 was trusted as Aqua"
+}
+new_case running
+printf '%s\n' "$FORKED_PID" > "$CASE_OWNER"
+load_job gui dev.firstmate.herdr.fm-remote "$LAUNCHD_PID"
+forked_case "a forked server whose parent is not the launchd job" "$FORKED_PID" unknown
+new_case running
+printf '%s\n' "$FORKED_PID" > "$CASE_OWNER"
+load_job user dev.firstmate.herdr.fm-remote "$FORKED_PARENT_PID"
+forked_case "a forked server whose label is loaded only in the user domain" "$FORKED_PID" unknown
+new_case running
+printf '%s\n' "$FORKED_PID" > "$CASE_OWNER"
+forked_case "a forked server whose launchctl print fails" "$FORKED_PID" unknown
+new_case running
+printf '%s\n' "$FORKED_PID" > "$CASE_OWNER"
+load_job gui dev.firstmate.herdr.fm-remote
+forked_case "a forked server whose launchd job reports no pid" "$FORKED_PID" unknown
+new_case running
+printf '%s\n' "$FORKED_SSH_PID" > "$CASE_OWNER"
+load_job gui dev.firstmate.herdr.fm-remote "$FORKED_SSH_PARENT_PID"
+forked_case "an SSH-marked forked child of the launchd job" "$FORKED_SSH_PID" ssh
+new_case running
+printf '%s\n' "$SSHD_CHILD_PID" > "$CASE_OWNER"
+load_job gui dev.firstmate.herdr.fm-remote "$SSHD_PARENT_PID"
+forked_case "an sshd-born server whose parent is reported as the launchd job" "$SSHD_CHILD_PID" ssh
+
+# A missing or empty expected label proves nothing even when the gui job's
+# pid is the owner's parent; the guard always supplies one, so this case is
+# read through the library the doctor and guard share.
+new_case running
+load_job gui dev.firstmate.herdr.fm-remote "$FORKED_PARENT_PID"
+for expected in '' 0; do
+  # shellcheck disable=SC2016 # the inner bash expands its own arguments
+  birth=$(env -i PATH="$CASE_PATH" FM_FAKE_STATE="$CASE_STATE" \
+    bash -c '. "$1"; fm_remote_herdr_owner_birth "$2" "$3"' bash \
+    "$ROOT/bin/fm-remote-herdr-owner-lib.sh" "$FORKED_PID" "$expected")
+  assert_equals unknown "$birth" "a forked server was proven Aqua-born with expected label '$expected'"
+done
+# shellcheck disable=SC2016 # the inner bash expands its own arguments
+birth=$(env -i PATH="$CASE_PATH" FM_FAKE_STATE="$CASE_STATE" \
+  bash -c '. "$1"; fm_remote_herdr_owner_birth "$2"' bash \
+  "$ROOT/bin/fm-remote-herdr-owner-lib.sh" "$FORKED_PID")
+assert_equals unknown "$birth" "a forked server was proven Aqua-born with no expected label"
+pass "an XPC_SERVICE_NAME=0 server is Aqua-born only when the expected label's gui job is its parent"
+
 # --- a foreign owner is stopped, then the guard becomes the server -----------
 
 new_case running

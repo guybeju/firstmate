@@ -34,19 +34,36 @@
 #     server is never one), /proc/<pid>/environ elsewhere.
 #   fm_remote_herdr_process_ancestry <pid>
 #     Prints "<pid> <command>" for <pid> and each ancestor up to pid 1.
-#   fm_remote_herdr_owner_birth <pid>
-#     Prints exactly one word, the strongest marker present:
-#       ssh      SSH_CONNECTION, SSH_CLIENT, or SSH_TTY in the environment, or
-#                an ancestor that is sshd or herdr's remote-client-bridge
-#                (matched on argv[0] and whole arguments only)
-#       launchd  XPC_SERVICE_NAME=<label>, with launchctl proving that the
-#                gui/<uid> job's pid is the owner or the owner's parent (the
-#                guard's supervisor), or that the job is loaded only in that
-#                domain
+#   fm_remote_herdr_owner_birth <pid> [<expected-label>]
+#     Prints exactly one word, the strongest marker present. <expected-label>
+#     is the launch-agent label that should own the session: the doctor
+#     passes the identity library's label and the guard derives it from its
+#     session name. The markers, in the order they are tried:
+#       ssh      SSH_CONNECTION, SSH_CLIENT, or SSH_TTY in the environment
+#       launchd  XPC_SERVICE_NAME=<label> in the environment, with launchctl
+#                proving that the gui/<uid> job's pid is the owner or the
+#                owner's parent, or that the job is loaded only in that
+#                domain; this is the route for a server that is the launchd
+#                job process itself
 #       worker   FM_REMOTE_JOB_ACTIVE=1, with launchctl proving that
 #                dev.firstmate.remote-job is loaded only in gui/<uid>
+#       ssh      an ancestor that is sshd or herdr's remote-client-bridge
+#                (matched on argv[0] and whole arguments only)
+#       launchd  `launchctl print gui/<uid>/<expected-label>` reports a
+#                `pid =` equal to the owner or to the owner's parent (the
+#                guard's supervisor). This route reads no environment
+#                variable: a forked child of a launchd job sees
+#                XPC_SERVICE_NAME=0 on macOS, so the guard's session-leader
+#                server can only be proven by launchd's own job record. It
+#                never falls back to domain exclusivity, so a label loaded
+#                only in user/<uid>, a job with no pid, an empty label, or a
+#                launchctl failure proves nothing here.
 #       unknown  none of the above; XPC_SERVICE_NAME alone, including value 0,
-#                does not prove an Aqua birth
+#                does not prove an Aqua birth. An orphaned server - its
+#                supervisor gone and the server reparented to pid 1 - is
+#                unknown: launchd no longer reports its parent as the job's
+#                pid, pid 1 never counts as that parent, and the forked
+#                server's own XPC_SERVICE_NAME=0 proves nothing.
 #   fm_remote_herdr_birth_is_aqua <birth>
 #     Succeeds only for launchd and worker. `unknown` is deliberately not
 #     Aqua: a server that cannot prove its birth is treated like a foreign one,
@@ -104,19 +121,26 @@ fm_remote_herdr_process_ancestry() { # <pid>
   done
 }
 
-fm_remote_herdr_gui_job_proves_owner() { # <uid> <label> <pid>
+# Succeeds when launchd's gui/<uid> job for <label> reports a pid equal to
+# <pid> or to <pid>'s parent. Pid 1 is never accepted as that parent, so an
+# orphan reparented to launchd itself proves nothing.
+fm_remote_herdr_gui_job_pid_matches() { # <uid> <label> <pid>
   local uid=$1 label=$2 pid=$3 job parent
   [ -n "$label" ] && [ "$label" != 0 ] || return 1
   job=$(launchctl print "gui/$uid/$label" 2>/dev/null) || return 1
   parent=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ') || parent=
-  [ -n "$parent" ] || parent=$pid
-  if printf '%s\n' "$job" | awk -v owner="$pid" -v parent="$parent" '
+  case "$parent" in ''|*[!0-9]*) parent=$pid ;; esac
+  [ "$parent" -gt 1 ] || parent=$pid
+  printf '%s\n' "$job" | awk -v owner="$pid" -v parent="$parent" '
     $1 == "pid" && $2 == "=" && ($3 == owner || $3 == parent) { found = 1 }
     END { exit found ? 0 : 1 }
-  '; then
-    return 0
-  fi
-  ! launchctl print "user/$uid/$label" >/dev/null 2>&1
+  '
+}
+
+fm_remote_herdr_gui_job_proves_owner() { # <uid> <label> <pid>
+  [ -n "$2" ] && [ "$2" != 0 ] || return 1
+  fm_remote_herdr_gui_job_pid_matches "$1" "$2" "$3" \
+    || fm_remote_herdr_gui_job_is_exclusive "$1" "$2"
 }
 
 fm_remote_herdr_gui_job_is_exclusive() { # <uid> <label>
@@ -125,8 +149,8 @@ fm_remote_herdr_gui_job_is_exclusive() { # <uid> <label>
     && ! launchctl print "user/$uid/$label" >/dev/null 2>&1
 }
 
-fm_remote_herdr_owner_birth() { # <pid>
-  local pid=$1 env uid xpc_line label
+fm_remote_herdr_owner_birth() { # <pid> [<expected-label>]
+  local pid=$1 expected=${2:-} env uid xpc_line label
   env=$(fm_remote_herdr_process_env "$pid") || { printf 'unknown\n'; return 0; }
   if printf '%s\n' "$env" | grep -q -E '^SSH_(CONNECTION|CLIENT|TTY)='; then
     printf 'ssh\n'
@@ -148,6 +172,11 @@ fm_remote_herdr_owner_birth() { # <pid>
   fi
   if fm_remote_herdr_process_ancestry "$pid" | fm_remote_herdr_ancestry_has_ssh_origin; then
     printf 'ssh\n'
+    return 0
+  fi
+  if [ -n "$uid" ] && [ -n "$expected" ] \
+    && fm_remote_herdr_gui_job_pid_matches "$uid" "$expected" "$pid"; then
+    printf 'launchd\n'
     return 0
   fi
   printf 'unknown\n'

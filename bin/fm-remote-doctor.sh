@@ -334,7 +334,7 @@ herdr_server_birth() {
     printf 'unproven\n'
     return 0
   fi
-  birth=$(fm_remote_herdr_owner_birth "$owner")
+  birth=$(fm_remote_herdr_owner_birth "$owner" "$LAUNCH_AGENT_LABEL")
   printf '%s %s\n' "$birth" "$owner"
 }
 
