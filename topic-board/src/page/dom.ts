@@ -11,7 +11,11 @@ function append(parent: Node, child: Child): void {
   else parent.appendChild(child instanceof Node ? child : document.createTextNode(String(child)));
 }
 
-function applyProp(element: HTMLElement, name: string, value: string | number | true | Listener): void {
+function applyProp(
+  element: HTMLElement,
+  name: string,
+  value: string | number | true | Listener,
+): void {
   if (typeof value === "function") element.addEventListener(name.slice(2), value);
   else if (name === "class") element.className = String(value);
   else if (name === "value") (element as HTMLInputElement).value = String(value);

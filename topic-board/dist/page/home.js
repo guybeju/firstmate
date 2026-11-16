@@ -14,7 +14,11 @@ function moveMenu(actions, topic) {
         const [queue, where] = select.value.split(":");
         select.value = "";
         if (queue !== undefined && queue !== "")
-            actions.topic("move", { id: topic, queue, ...(where === "first" ? { first: true } : { last: true }) });
+            actions.topic("move", {
+                id: topic,
+                queue,
+                ...(where === "first" ? { first: true } : { last: true }),
+            });
     };
     return h("select", { class: "auto", "aria-label": "移到", onchange: choose }, h("option", { value: "" }, "移到…"), QUEUES.flatMap((queue) => [
         h("option", { value: `${queue}:first` }, `${QUEUE_LABEL[queue]}：最前`),
@@ -46,7 +50,9 @@ function closeProposals(view, actions) {
         .map(([id, topic]) => h("div", { class: "card" }, h("div", { class: "meta" }, topicLink(view, id, actions), h("span", { class: "pill warn" }, "提議關閉")), h("div", {}, `first mate 認為這個議題可以關了：${topic.close_reason ?? ""}`), h("div", { class: "btns" }, h("button", { onclick: () => actions.topic("archive", { id }) }, "關閉並封存"), h("button", { onclick: () => actions.topic("keep", { id }) }, "先不關"))));
 }
 function section(title, ...children) {
-    const content = children.flat(4).filter((child) => child !== null && child !== undefined && child !== false);
+    const content = children
+        .flat(4)
+        .filter((child) => child !== null && child !== undefined && child !== false);
     return h("section", {}, h("h2", {}, title), content.length > 0 ? content : h("p", { class: "note" }, "目前沒有。"));
 }
 function tagMenu(view, actions, agent) {
@@ -93,15 +99,29 @@ export function mergeConfirm(page, view, actions, key) {
 function unsorted(page, view, actions) {
     return section("未分類", proposals(page, view, actions), view.agents
         .filter((agent) => agent.topic === null)
-        .map((agent) => h("div", { class: "row" }, h("span", { class: "grow" }, h("b", {}, agent.task), " ", h("span", { class: "note" }, UNSORTED_REASON[agent.unsorted_reason ?? ""] ?? "")), h("span", { class: "pill" }, agent.home), tagMenu(view, actions, agent))), view.summaries.filter((summary) => summary.topic === null).map((summary) => summaryRow(view, actions, summary, false)), view.holds.filter((hold) => hold.topic === null && !hold.live).map((hold) => holdCard(page, view, actions, hold, false)), view.questions.filter((question) => question.topic === null).map((question) => questionRow(view, actions, question, false)));
+        .map((agent) => h("div", { class: "row" }, h("span", { class: "grow" }, h("b", {}, agent.task), " ", h("span", { class: "note" }, UNSORTED_REASON[agent.unsorted_reason ?? ""] ?? "")), h("span", { class: "pill" }, agent.home), tagMenu(view, actions, agent))), view.summaries
+        .filter((summary) => summary.topic === null)
+        .map((summary) => summaryRow(view, actions, summary, false)), view.holds
+        .filter((hold) => hold.topic === null && !hold.live)
+        .map((hold) => holdCard(page, view, actions, hold, false)), view.questions
+        .filter((question) => question.topic === null)
+        .map((question) => questionRow(view, actions, question, false)));
 }
 export function home(page, view, actions) {
     const active = ["working", "stuck", "unknown", "decide"];
     return [
-        section("等你決定", closeProposals(view, actions), view.holds.filter((hold) => hold.live).map((hold) => holdCard(page, view, actions, hold, true))),
-        section("最近的結果", view.summaries.slice(0, RECENT_SUMMARIES).map((summary) => summaryRow(view, actions, summary, true))),
-        section("進行中", view.agents.filter((agent) => agent.topic !== null && active.includes(agent.light)).map((agent) => agentRow(view, actions, agent))),
-        section("排定的", view.queues.later.map((id) => h("div", { class: "row" }, topicLink(view, id, actions), h("span", { class: "note" }, "待辦，不自動開工"))), view.holds.filter((hold) => !hold.live && hold.topic !== null).map((hold) => holdCard(page, view, actions, hold, true))),
+        section("等你決定", closeProposals(view, actions), view.holds
+            .filter((hold) => hold.live)
+            .map((hold) => holdCard(page, view, actions, hold, true))),
+        section("最近的結果", view.summaries
+            .slice(0, RECENT_SUMMARIES)
+            .map((summary) => summaryRow(view, actions, summary, true))),
+        section("進行中", view.agents
+            .filter((agent) => agent.topic !== null && active.includes(agent.light))
+            .map((agent) => agentRow(view, actions, agent))),
+        section("排定的", view.queues.later.map((id) => h("div", { class: "row" }, topicLink(view, id, actions), h("span", { class: "note" }, "待辦，不自動開工"))), view.holds
+            .filter((hold) => !hold.live && hold.topic !== null)
+            .map((hold) => holdCard(page, view, actions, hold, true))),
         unsorted(page, view, actions),
     ];
 }

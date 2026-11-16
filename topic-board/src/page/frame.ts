@@ -21,7 +21,8 @@ function staleBanner(view: View): Child {
 }
 
 const VERSION_NOTE: Record<string, string> = {
-  "not-on-fork": "還沒換到 fork：在那台的 code root 加上 fork remote、寫 config/self-update-source 為「fork carry」，再回主 home 跑 /updatefirstmate。它的 agent 不會顯示。",
+  "not-on-fork":
+    "還沒換到 fork：在那台的 code root 加上 fork remote、寫 config/self-update-source 為「fork carry」，再回主 home 跑 /updatefirstmate。它的 agent 不會顯示。",
   incompatible: "版本不相容，它的資料沒有被使用：請在主 home 跑 /updatefirstmate。",
   different: "版本和主 home 不同（通常只是更新還沒傳到），資料照常使用。",
 };
@@ -29,31 +30,60 @@ const VERSION_NOTE: Record<string, string> = {
 function versionBanner(view: View): Child {
   return view.homes
     .filter((entry) => VERSION_NOTE[entry.version] !== undefined)
-    .map((entry) => h("div", { class: "banner warn" }, `home ${entry.id}：${VERSION_NOTE[entry.version] ?? ""}`));
+    .map((entry) =>
+      h("div", { class: "banner warn" }, `home ${entry.id}：${VERSION_NOTE[entry.version] ?? ""}`),
+    );
 }
 
 function ledgerCommand(entry: View["homes"][number]): string {
   if (entry.id === "main") return "bin/fm-topic.sh setup";
-  return entry.remote ? `bin/fm-on.sh ${entry.id} fm-topic.sh setup` : `bin/fm-topic.sh --in-home ${entry.id} setup`;
+  return entry.remote
+    ? `bin/fm-on.sh ${entry.id} fm-topic.sh setup`
+    : `bin/fm-topic.sh --in-home ${entry.id} setup`;
 }
 
 function ledgerBanner(view: View): Child {
   return view.homes
     .filter((entry) => entry.ledger_enabled === false)
-    .map((entry) => h("div", { class: "banner warn" }, `home ${entry.id} 的帳本未開，它的 task 不會有更新。在主 home 的終端機跑 `, h("code", {}, ledgerCommand(entry))));
+    .map((entry) =>
+      h(
+        "div",
+        { class: "banner warn" },
+        `home ${entry.id} 的帳本未開，它的 task 不會有更新。在主 home 的終端機跑 `,
+        h("code", {}, ledgerCommand(entry)),
+      ),
+    );
 }
 
 function banners(page: Page, actions: Actions): Child {
   const view = page.view;
   return [
-    page.tokenBad ? h("div", { class: "banner" }, "token 已重置或無效，請在終端機重新跑 ", h("code", {}, "bin/fm-topic.sh open")) : null,
+    page.tokenBad
+      ? h(
+          "div",
+          { class: "banner" },
+          "token 已重置或無效，請在終端機重新跑 ",
+          h("code", {}, "bin/fm-topic.sh open"),
+        )
+      : null,
     page.down
-      ? h("div", { class: "banner" }, "看板服務沒有回應。畫面是最後拿到的資料，現在送不出東西。請在終端機跑 ", h("code", {}, "bin/fm-topic.sh open"))
+      ? h(
+          "div",
+          { class: "banner" },
+          "看板服務沒有回應。畫面是最後拿到的資料，現在送不出東西。請在終端機跑 ",
+          h("code", {}, "bin/fm-topic.sh open"),
+        )
       : null,
     view === null ? null : [staleBanner(view), versionBanner(view), ledgerBanner(view)],
     page.notice === null
       ? null
-      : h("div", { class: "banner warn" }, page.notice, " ", h("button", { class: "link", onclick: () => actions.cancel("notice") }, "知道了")),
+      : h(
+          "div",
+          { class: "banner warn" },
+          page.notice,
+          " ",
+          h("button", { class: "link", onclick: () => actions.cancel("notice") }, "知道了"),
+        ),
   ];
 }
 
@@ -72,6 +102,17 @@ export function frame(page: Page, actions: Actions): Child {
     banners(page, actions),
     view === null
       ? h("main", {}, h("p", { class: "note" }, page.tokenBad || page.down ? "" : "載入中…"))
-      : h("main", {}, topic === null ? h("div", { class: "side" }, sidebar(view, actions), h("div", {}, home(page, view, actions))) : topicPage(page, view, actions, topic)),
+      : h(
+          "main",
+          {},
+          topic === null
+            ? h(
+                "div",
+                { class: "side" },
+                sidebar(view, actions),
+                h("div", {}, home(page, view, actions)),
+              )
+            : topicPage(page, view, actions, topic),
+        ),
   ];
 }

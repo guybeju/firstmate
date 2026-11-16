@@ -3,6 +3,7 @@
 import crypto from "node:crypto";
 import { directTextProblem } from "./commands.js";
 import type { Placement, Secondmate } from "./commands.js";
+import type { HomeReport, ReportHold } from "./report.js";
 import { MAIN_HOME } from "./journal.js";
 import { resolveTopicId } from "./topics.js";
 import type { TopicState } from "./topics.js";
@@ -47,12 +48,18 @@ function lengthOf(text: string): number {
 }
 
 /** A message from a topic page to the main firstmate. */
-export function message(context: ActionContext, rawTopic: string, text: string, channel: Channel): ActionResult {
+export function message(
+  context: ActionContext,
+  rawTopic: string,
+  text: string,
+  channel: Channel,
+): ActionResult {
   const topic = resolveTopicId(context.topics.doc, rawTopic);
   const name = topicName(context.topics, topic);
   if (name === null) return refuse(`沒有 ${rawTopic} 這個議題。`);
   const body = text.trim();
-  if (body === "" || lengthOf(body) > MESSAGE_MAX) return refuse(`訊息要有內容，而且最多 ${MESSAGE_MAX} 個字。`);
+  if (body === "" || lengthOf(body) > MESSAGE_MAX)
+    return refuse(`訊息要有內容，而且最多 ${MESSAGE_MAX} 個字。`);
   return {
     ok: true,
     write: context.writes.submit({
@@ -61,7 +68,11 @@ export function message(context: ActionContext, rawTopic: string, text: string, 
       task: null,
       topic,
       text: body,
-      plan: { type: "note", requestId: `tb-${crypto.randomBytes(8).toString("hex")}`, body: `［議題：${name}（${topic}）］\n${body}` },
+      plan: {
+        type: "note",
+        requestId: `tb-${crypto.randomBytes(8).toString("hex")}`,
+        body: `［議題：${name}（${topic}）］\n${body}`,
+      },
     }),
   };
 }
@@ -73,17 +84,35 @@ function agentTarget(context: ActionContext, home: string, task: string): Placem
   return TASK_ID.test(task) ? placement : refuse(`task id 格式不對：${task}`);
 }
 
+/** Why `text` cannot be sent to an agent, or null when it can. */
+function directProblem(text: string): string | null {
+  const problem = directTextProblem(text);
+  if (problem !== null) return problem;
+  return lengthOf(text) > MESSAGE_MAX ? `訊息最多 ${MESSAGE_MAX} 個字。` : null;
+}
+
 /** A message straight to one agent: written to a main-home worker, relayed by its secondmate otherwise. */
-export function direct(context: ActionContext, home: string, task: string, text: string, channel: Channel): ActionResult {
+export function direct(
+  context: ActionContext,
+  home: string,
+  task: string,
+  text: string,
+  channel: Channel,
+): ActionResult {
   const placement = agentTarget(context, home, task);
   if (typeof placement !== "string") return placement;
-  const problem = directTextProblem(text) ?? (lengthOf(text) > MESSAGE_MAX ? `訊息最多 ${MESSAGE_MAX} 個字。` : null);
+  const problem = directProblem(text);
   if (problem !== null) return refuse(problem);
   const topic = placeTask(context.topics, context.homes, home, task).topic;
   const plan: WriteRecord["plan"] =
     placement === "main"
       ? { type: "send", task }
-      : { type: "relay", secondmate: home, remote: placement === "remote", deliveryId: crypto.randomBytes(8).toString("hex") };
+      : {
+          type: "relay",
+          secondmate: home,
+          remote: placement === "remote",
+          deliveryId: crypto.randomBytes(8).toString("hex"),
+        };
   return { ok: true, write: context.writes.submit({ channel, home, task, topic, text, plan }) };
 }
 
@@ -96,29 +125,50 @@ export interface AnswerInput {
 }
 
 function oneLineProblem(what: string, text: string): string | null {
-  if (text.trim() === "" || lengthOf(text) > ANSWER_MAX) return `${what}要有內容，而且最多 ${ANSWER_MAX} 個字。`;
+  if (text.trim() === "" || lengthOf(text) > ANSWER_MAX)
+    return `${what}要有內容，而且最多 ${ANSWER_MAX} 個字。`;
   return /[\t\r\n]/.test(text) ? `${what}只能有一行，而且不能有 tab。` : null;
 }
 
-function findHold(context: ActionContext, home: string, task: string): { origin: string } | undefined {
-  const holds = context.homes.find((entry) => entry.id === home)?.report?.holds ?? [];
-  return holds.find((entry) => entry.id === task);
+/** What `home` last reported, or null when the board has no report for it. */
+function reportOf(context: ActionContext, home: string): HomeReport | null {
+  const snapshot = context.homes.find((entry) => entry.id === home);
+  return snapshot === undefined ? null : snapshot.report;
+}
+
+/** The captain hold on `task` in `home`, as last reported. */
+export function findHold(
+  context: ActionContext,
+  home: string,
+  task: string,
+): ReportHold | undefined {
+  const report = reportOf(context, home);
+  return report === null ? undefined : report.holds.find((entry) => entry.id === task);
 }
 
 /** The name to show for a topic id; "未分類" when there is none. */
 function topicLabel(topics: TopicState, topic: string | null): string {
   if (topic === null) return "未分類";
-  return topicName(topics, topic) ?? topic;
+  const name = topicName(topics, topic);
+  return name === null ? topic : name;
 }
 
 /** The last line of a task's tag file as its home last reported it. */
 function lastTagLine(context: ActionContext, home: string, task: string): string {
-  const tags = context.homes.find((entry) => entry.id === home)?.report?.topics[task] ?? "";
-  return tags.trimEnd().split("\n").pop() ?? "";
+  const report = reportOf(context, home);
+  const tags = report === null ? undefined : report.topics[task];
+  if (tags === undefined) return "";
+  const lines = tags.trimEnd().split("\n");
+  return lines[lines.length - 1] as string;
 }
 
 /** The topic a hold belongs to: its own task's, else its origin task's, else none. */
-function holdTopic(context: ActionContext, home: string, task: string, origin: string): string | null {
+function holdTopic(
+  context: ActionContext,
+  home: string,
+  task: string,
+  origin: string,
+): string | null {
   const own = placeTask(context.topics, context.homes, home, task).topic;
   if (own !== null || origin === "") return own;
   return placeTask(context.topics, context.homes, home, origin).topic;
@@ -129,9 +179,12 @@ export function answer(context: ActionContext, input: AnswerInput, channel: Chan
   const placement = agentTarget(context, input.home, input.task);
   if (typeof placement !== "string") return placement;
   const hold = findHold(context, input.home, input.task);
-  if (hold === undefined) return refuse(`${input.home}/${input.task} 沒有等你回答的待決事項（可能已經有人答了）。`);
-  const problem = oneLineProblem("答案", input.answer) ?? oneLineProblem("選項", input.label);
-  if (problem !== null) return refuse(problem);
+  if (hold === undefined)
+    return refuse(`${input.home}/${input.task} 沒有等你回答的待決事項（可能已經有人答了）。`);
+  const answerProblem = oneLineProblem("答案", input.answer);
+  if (answerProblem !== null) return refuse(answerProblem);
+  const labelProblem = oneLineProblem("選項", input.label);
+  if (labelProblem !== null) return refuse(labelProblem);
   const topic = holdTopic(context, input.home, input.task, hold.origin);
   const name = topicLabel(context.topics, topic);
   return {
@@ -154,11 +207,18 @@ export function answer(context: ActionContext, input: AnswerInput, channel: Chan
 }
 
 /** Files an agent under a confirmed topic by tagging its task in the home it lives in. */
-export function tagAgent(context: ActionContext, home: string, task: string, rawTopic: string, channel: Channel): ActionResult {
+export function tagAgent(
+  context: ActionContext,
+  home: string,
+  task: string,
+  rawTopic: string,
+  channel: Channel,
+): ActionResult {
   const placement = agentTarget(context, home, task);
   if (typeof placement !== "string") return placement;
   const topic = resolveTopicId(context.topics.doc, rawTopic);
-  if (context.topics.doc.topics[topic]?.status !== "confirmed") return refuse(`${rawTopic} 不是已確認的議題。`);
+  if (context.topics.doc.topics[topic]?.status !== "confirmed")
+    return refuse(`${rawTopic} 不是已確認的議題。`);
   return {
     ok: true,
     write: context.writes.submit({
@@ -167,7 +227,13 @@ export function tagAgent(context: ActionContext, home: string, task: string, raw
       task,
       topic,
       text: `歸到「${topicLabel(context.topics, topic)}」`,
-      plan: { type: "tag", placement, task, topic, lastLineAtSend: lastTagLine(context, home, task) },
+      plan: {
+        type: "tag",
+        placement,
+        task,
+        topic,
+        lastLineAtSend: lastTagLine(context, home, task),
+      },
     }),
   };
 }

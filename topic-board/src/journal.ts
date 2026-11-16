@@ -1,7 +1,15 @@
 // The board's own append-only files: the event journal (every home's ledger
 // events plus the board's system records), the milestone summaries, and the
 // per-home ledger offsets.
-import { appendLine, isRecord, readCompleteLines, readJsonFile, stringField, writeFileAtomic } from "./files.js";
+import {
+  appendLine,
+  isRecord,
+  readCompleteLines,
+  readJsonFile,
+  stringField,
+  textField,
+  writeFileAtomic,
+} from "./files.js";
 import type { BoardPaths } from "./layout.js";
 import path from "node:path";
 
@@ -45,7 +53,10 @@ function parseLedgerLine(home: string, raw: string): LedgerEvent | null {
   return { src: "ledger", home, ts, event, task, fields: line };
 }
 
-function parseStoredLedger(stored: Record<string, unknown>): { event: JournalEvent | null; key: string | null } {
+function parseStoredLedger(stored: Record<string, unknown>): {
+  event: JournalEvent | null;
+  key: string | null;
+} {
   const home = stringField(stored, "home");
   const raw = stringField(stored, "raw");
   if (home === null || raw === null) return { event: null, key: null };
@@ -63,7 +74,7 @@ function parseStoredBoard(stored: Record<string, unknown>): BoardEvent | null {
     topic: stringField(stored, "topic"),
     home: stringField(stored, "home"),
     task: stringField(stored, "task"),
-    text: stringField(stored, "text") ?? "",
+    text: textField(stored, "text"),
   };
 }
 
@@ -139,7 +150,14 @@ function parseSummary(text: string): Summary | null {
   const task = stringField(raw, "task");
   const body = stringField(raw, "text");
   const ts = raw["ts"];
-  if (kind === undefined || home === null || task === null || body === null || typeof ts !== "number") return null;
+  if (
+    kind === undefined ||
+    home === null ||
+    task === null ||
+    body === null ||
+    typeof ts !== "number"
+  )
+    return null;
   return { ts, home, task, kind, text: body };
 }
 
@@ -198,11 +216,19 @@ export class Offsets {
   }
 
   get(home: string): LedgerCursor {
-    return this.cursors.get(home) ?? { offset: 0, sha: "-" };
+    const cursor = this.cursors.get(home);
+    return cursor === undefined ? { offset: 0, sha: "-" } : cursor;
   }
 
+  /** Remembers the cursor; the file is rewritten only when the cursor moved. */
   set(home: string, cursor: LedgerCursor): void {
+    const current = this.get(home);
+    if (current.offset === cursor.offset && current.sha === cursor.sha) return;
     this.cursors.set(home, cursor);
-    writeFileAtomic(this.file, `${JSON.stringify(Object.fromEntries(this.cursors), null, 2)}\n`, FILE_MODE);
+    writeFileAtomic(
+      this.file,
+      `${JSON.stringify(Object.fromEntries(this.cursors), null, 2)}\n`,
+      FILE_MODE,
+    );
   }
 }

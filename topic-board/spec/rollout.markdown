@@ -8,7 +8,7 @@
 2. 主 home 有 `node` 22 以上與 `jq`。這台是 node v22.22.1；它沒有 TypeScript 支援，但看板只跑編譯好的 `.js`，不受影響。
 3. 每台遠端機器有 `jq`。遠端不需要 `node`，不需要看板服務，沒有議題檔。
 4. 六段都已合併進 `carry` 並推上 fork（<https://github.com/guybeju/firstmate>）。
-5. 主 home 的 checkout 已經有名為 `fork` 的 remote（2026-11-16 已加），`origin` 仍指向上游，不動。
+5. 主 home 的 checkout 有一個指向 fork 的 remote。規劃時它叫 `fork`、`origin` 指向上游；2026-11-16 之後主 home 改成 `origin` 指向 fork、`upstream` 指向上游。下面步驟裡寫的 `fork carry`，在主 home 要寫成 `origin carry`：`config/self-update-source` 的第一個字是那台機器上指向 fork 的 remote 名稱。
 6. 每個 code root 都停在預設分支、工作目錄乾淨。
 
 ## 步驟

@@ -4,7 +4,13 @@
 // retried only when a retry cannot take effect twice, and resumed after a
 // restart from the audit log alone.
 import crypto from "node:crypto";
-import type { CommandResult, CommandRunner, Placement, Secondmate, WriteCommand } from "./commands.js";
+import type {
+  CommandResult,
+  CommandRunner,
+  Placement,
+  Secondmate,
+  WriteCommand,
+} from "./commands.js";
 import { appendLine, isRecord, readCompleteLines, stringField } from "./files.js";
 import { MAIN_HOME } from "./journal.js";
 
@@ -81,11 +87,15 @@ const UNFINISHED: WriteState[] = ["sending", "retrying"];
 export const NEEDS_ATTENTION: WriteState[] = ["failed", "undelivered", "unknown"];
 
 function errorText(result: CommandResult): string {
-  return (result.stderr.trim() || result.stdout.trim() || `exit ${result.code ?? "?"}`).slice(0, 600);
+  return (result.stderr.trim() || result.stdout.trim() || `exit ${result.code ?? "?"}`).slice(
+    0,
+    600,
+  );
 }
 
 function lastLine(text: string): string {
-  return text.trimEnd().split("\n").pop() ?? "";
+  const lines = text.trimEnd().split("\n");
+  return lines[lines.length - 1] as string;
 }
 
 /** True when repeating the write after an unknown outcome cannot make it take effect twice. */
@@ -110,14 +120,18 @@ function secondmateOf(record: WriteRecord): { secondmate?: string } {
 function noteOutcome(result: CommandResult): Outcome {
   if (result.code === 0) return { kind: "delivered" };
   // Exit 3: the note is saved but firstmate was not woken; replaying the same request id wakes it.
-  return result.code === 3 ? { kind: "retry", error: errorText(result) } : { kind: "failed", error: errorText(result) };
+  return result.code === 3
+    ? { kind: "retry", error: errorText(result) }
+    : { kind: "failed", error: errorText(result) };
 }
 
 /** Reads fm-captain-hold.sh answers output for the line about `task`. */
 function answerOutcome(result: CommandResult, task: string, remote: boolean): Outcome | "closed" {
   const lines = result.stdout.split("\n").map((line) => line.trim());
   if (lines.includes(`closed: ${task}`)) return "closed";
-  const verdict = lines.find((line) => line.startsWith(`skipped: ${task} `) || line.startsWith(`refused: ${task} `));
+  const verdict = lines.find(
+    (line) => line.startsWith(`skipped: ${task} `) || line.startsWith(`refused: ${task} `),
+  );
   if (verdict === `skipped: ${task} (already closed)`) return { kind: "handled_elsewhere" };
   if (verdict !== undefined) return { kind: "failed", error: verdict };
   if (remote && result.code === 255) return { kind: "retry", error: errorText(result) };
@@ -125,7 +139,9 @@ function answerOutcome(result: CommandResult, task: string, remote: boolean): Ou
 }
 
 /** One audit line about a write; lines about rejected requests carry no write id and yield null. */
-function parseAuditLine(line: string): { id: string; state: WriteState; fields: Record<string, unknown> } | null {
+function parseAuditLine(
+  line: string,
+): { id: string; state: WriteState; fields: Record<string, unknown> } | null {
   let entry: unknown;
   try {
     entry = JSON.parse(line);
@@ -157,14 +173,18 @@ export class WriteEngine {
    * remote writes are only allowed to secondmates it lists.
    */
   async resumeUnfinished(): Promise<void> {
-    const unfinished = [...this.records.values()].filter((record) => UNFINISHED.includes(record.state));
+    const unfinished = [...this.records.values()].filter((record) =>
+      UNFINISHED.includes(record.state),
+    );
     if (unfinished.length === 0) return;
     await this.host.prepare();
     for (const record of unfinished) this.resume(record);
   }
 
   /** Records a new write as "sending" and starts delivering it. */
-  submit(input: Pick<WriteRecord, "channel" | "home" | "task" | "topic" | "text" | "plan">): WriteRecord {
+  submit(
+    input: Pick<WriteRecord, "channel" | "home" | "task" | "topic" | "text" | "plan">,
+  ): WriteRecord {
     const record: WriteRecord = {
       ...input,
       id: `w-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`,
@@ -185,7 +205,8 @@ export class WriteEngine {
     const record = this.records.get(id);
     if (record === undefined) return "沒有這筆寫入。";
     if (!NEEDS_ATTENTION.includes(record.state)) return "這筆寫入不需要重送。";
-    if (record.state === "unknown" && !confirmed) return "這筆寫入結果不明，重送可能會重複，需要先確認。";
+    if (record.state === "unknown" && !confirmed)
+      return "這筆寫入結果不明，重送可能會重複，需要先確認。";
     record.attempt = 0;
     this.setState(record, "sending", null);
     this.enqueue(record, true);
@@ -206,11 +227,22 @@ export class WriteEngine {
   }
 
   private audit(record: WriteRecord, extra: Record<string, unknown>): void {
-    const line = { ts: new Date().toISOString(), write_id: record.id, state: record.state, attempt: record.attempt, ...extra };
+    const line = {
+      ts: new Date().toISOString(),
+      write_id: record.id,
+      state: record.state,
+      attempt: record.attempt,
+      ...extra,
+    };
     appendLine(this.auditFile, JSON.stringify(line), AUDIT_MODE);
   }
 
-  private setState(record: WriteRecord, state: WriteState, error: string | null, nextAt: number | null = null): void {
+  private setState(
+    record: WriteRecord,
+    state: WriteState,
+    error: string | null,
+    nextAt: number | null = null,
+  ): void {
     record.state = state;
     record.error = error;
     record.nextAt = nextAt;
@@ -233,7 +265,8 @@ export class WriteEngine {
    * does not hold up the other writes to that home.
    */
   private exclusive<T>(home: string, task: () => Promise<T>): Promise<T> {
-    const previous = this.queues.get(home) ?? Promise.resolve();
+    const queued = this.queues.get(home);
+    const previous = queued === undefined ? Promise.resolve() : queued;
     const result = previous.then(task);
     this.queues.set(
       home,
@@ -285,10 +318,14 @@ export class WriteEngine {
     const { plan } = record;
     switch (plan.type) {
       case "note":
-        return noteOutcome(await this.run({ kind: "note", requestId: plan.requestId, body: plan.body }));
+        return noteOutcome(
+          await this.run({ kind: "note", requestId: plan.requestId, body: plan.body }),
+        );
       case "send": {
         const result = await this.run({ kind: "send", task: plan.task, text: record.text });
-        return result.code === 0 ? { kind: "delivered" } : { kind: "failed", error: errorText(result) };
+        return result.code === 0
+          ? { kind: "delivered" }
+          : { kind: "failed", error: errorText(result) };
       }
       case "relay":
         return this.attemptRelay(record, plan);
@@ -299,9 +336,17 @@ export class WriteEngine {
     }
   }
 
-  private async attemptRelay(record: WriteRecord, plan: Extract<WritePlan, { type: "relay" }>): Promise<Outcome> {
-    const text = `轉給 ${record.task ?? ""}：${record.text}`;
-    const result = await this.run({ kind: "relay", secondmate: plan.secondmate, deliveryId: plan.deliveryId, text });
+  private async attemptRelay(
+    record: WriteRecord,
+    plan: Extract<WritePlan, { type: "relay" }>,
+  ): Promise<Outcome> {
+    const text = `轉給 ${String(record.task)}：${record.text}`;
+    const result = await this.run({
+      kind: "relay",
+      secondmate: plan.secondmate,
+      deliveryId: plan.deliveryId,
+      text,
+    });
     if (result.code === 0) return { kind: "delivered" };
     // Exit 3: fm-send.sh retried once and the remote delivery is still unconfirmed.
     if (result.code === 3 && plan.remote) return { kind: "retry", error: errorText(result) };
@@ -309,15 +354,29 @@ export class WriteEngine {
   }
 
   /** An answer is two steps: record it on the hold, then tell firstmate. The note waits for the answer. */
-  private async attemptAnswer(record: WriteRecord, plan: Extract<WritePlan, { type: "answer" }>): Promise<Outcome> {
+  private async attemptAnswer(
+    record: WriteRecord,
+    plan: Extract<WritePlan, { type: "answer" }>,
+  ): Promise<Outcome> {
     if (!plan.answered) {
-      const command: WriteCommand = { kind: "answer", placement: plan.placement, line: plan.line, ...secondmateOf(record) };
-      const outcome = answerOutcome(await this.run(command), record.task ?? "", plan.placement === "remote");
+      const command: WriteCommand = {
+        kind: "answer",
+        placement: plan.placement,
+        line: plan.line,
+        ...secondmateOf(record),
+      };
+      const outcome = answerOutcome(
+        await this.run(command),
+        String(record.task),
+        plan.placement === "remote",
+      );
       if (outcome !== "closed") return outcome;
       plan.answered = true;
       this.audit(record, { step: "answered" });
     }
-    return noteOutcome(await this.run({ kind: "note", requestId: `tb-${record.id}-note`, body: plan.noteBody }));
+    return noteOutcome(
+      await this.run({ kind: "note", requestId: `tb-${record.id}-note`, body: plan.noteBody }),
+    );
   }
 
   /**
@@ -337,10 +396,17 @@ export class WriteEngine {
       if (current.split(" ")[0] === plan.topic) return { kind: "delivered" };
       if (current !== plan.lastLineAtSend) return { kind: "handled_elsewhere" };
     }
-    const command: WriteCommand = { kind: "tag", placement: plan.placement, task: plan.task, topic: plan.topic, ...secondmateOf(record) };
+    const command: WriteCommand = {
+      kind: "tag",
+      placement: plan.placement,
+      task: plan.task,
+      topic: plan.topic,
+      ...secondmateOf(record),
+    };
     const result = await this.run(command);
     if (result.code === 0) return { kind: "delivered" };
-    if (plan.placement === "remote" && result.code === 255) return { kind: "retry", error: errorText(result) };
+    if (plan.placement === "remote" && result.code === 255)
+      return { kind: "retry", error: errorText(result) };
     return { kind: "failed", error: errorText(result) };
   }
 
@@ -356,7 +422,8 @@ export class WriteEngine {
     record.attempt = typeof attempt === "number" ? attempt : record.attempt;
     record.error = stringField(entry.fields, "error");
     record.nextAt = null;
-    if (entry.fields["step"] === "answered" && record.plan.type === "answer") record.plan.answered = true;
+    if (entry.fields["step"] === "answered" && record.plan.type === "answer")
+      record.plan.answered = true;
   }
 
   private resume(record: WriteRecord): void {

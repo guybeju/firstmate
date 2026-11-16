@@ -11,7 +11,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { appendLine, fileSize, isAlive, isRecord, readCompleteLines, readPidFile, removeStaleTemps, stringField, writeFileAtomic, } from "./files.js";
+import { appendLine, fileSize, isAlive, isRecord, readPidFile, removeStaleTemps, stringField, writeFileAtomic, } from "./files.js";
 import * as actions from "./actions.js";
 import { createApi } from "./api.js";
 import { ConfirmStore } from "./confirm.js";
@@ -104,7 +104,13 @@ const TOPIC_HANDLERS = {
             return { usage: "propose 需要名稱與 --goal。" };
         if (id !== undefined && typeof id !== "string")
             return { usage: "--id 要是字串。" };
-        return topics.propose(service.state, { name, goal, by: "firstmate", ...(id === undefined ? {} : { id }), ...(queue === undefined ? {} : { queue }) }, now());
+        return topics.propose(service.state, {
+            name,
+            goal,
+            by: "firstmate",
+            ...(id === undefined ? {} : { id }),
+            ...(queue === undefined ? {} : { queue }),
+        }, now());
     },
     confirm: (service, args) => {
         const id = stringField(args, "id");
@@ -230,7 +236,8 @@ async function reminderPrefix(service, home, task) {
     }
     if (placement.topic === null)
         return "未分類：";
-    const name = service.state.doc.topics[placement.topic]?.name ?? service.state.archive.topics[placement.topic]?.name;
+    const name = service.state.doc.topics[placement.topic]?.name ??
+        service.state.archive.topics[placement.topic]?.name;
     return `${name ?? placement.topic}：`;
 }
 function taskArg(args) {
@@ -305,10 +312,10 @@ function actionContext(service) {
  * a change no read announces, so each home's staleness is part of the version.
  */
 function viewVersion(service) {
-    const now = Date.now();
+    const nowMs = Date.now();
     const stale = service.poller
         .snapshots()
-        .map((home) => (home.lastOkAt === null || now - home.lastOkAt > service.timings.staleMs ? "1" : "0"));
+        .map((home) => home.lastOkAt === null || nowMs - home.lastOkAt > service.timings.staleMs ? "1" : "0");
     return `${service.version}-${stale.join("")}`;
 }
 function boardView(service) {
@@ -335,7 +342,9 @@ async function dump(service, args) {
     return { ok: true, line: "ok", data: boardView(service) };
 }
 function actionResponse(result) {
-    return result.ok ? { ok: true, line: `ok ${result.write.id}`, data: { write_id: result.write.id } } : refused(result.line);
+    return result.ok
+        ? { ok: true, line: `ok ${result.write.id}`, data: { write_id: result.write.id } }
+        : refused(result.line);
 }
 /** Test-only: submit a write the way the browser API will. */
 async function testWrite(service, args) {
@@ -352,7 +361,13 @@ async function testWrite(service, args) {
             const mode = actions.ANSWER_MODES.find((name) => name === args["mode"]);
             if (mode === undefined)
                 return usage("mode 要是 done 或 release。");
-            const input = { home: field("home"), task: field("task"), answer: field("answer"), label: field("label"), mode };
+            const input = {
+                home: field("home"),
+                task: field("task"),
+                answer: field("answer"),
+                label: field("label"),
+                mode,
+            };
             return actionResponse(actions.answer(context, input, "socket"));
         }
         default:
@@ -374,7 +389,9 @@ const SERVICE_HANDLERS = {
     "reset-token": async (service) => resetToken(service),
     summary,
     which,
-    ...(TEST_MODE ? { dump, "test-write": testWrite, "test-resend": testResend, "test-ignore": testIgnore } : {}),
+    ...(TEST_MODE
+        ? { dump, "test-write": testWrite, "test-resend": testResend, "test-ignore": testIgnore }
+        : {}),
 };
 async function handle(service, request) {
     const serviceHandler = SERVICE_HANDLERS[request.op];
@@ -444,14 +461,15 @@ function serveConnection(service, connection) {
         void respond(service, connection, buffered.slice(0, newline));
     });
 }
+/** A positive FM_TOPIC_BOARD_<name>_MS from the environment, else `fallback`. */
+function override(name, fallback) {
+    const value = Number(process.env[`FM_TOPIC_BOARD_${name}_MS`]);
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+}
 /** Test runs may shorten the poll timings through FM_TOPIC_BOARD_*_MS variables. */
 function pollTimings() {
     if (!TEST_MODE)
         return DEFAULT_TIMINGS;
-    const override = (name, fallback) => {
-        const value = Number(process.env[`FM_TOPIC_BOARD_${name}_MS`]);
-        return Number.isFinite(value) && value > 0 ? value : fallback;
-    };
     return {
         ...DEFAULT_TIMINGS,
         localMs: override("LOCAL", DEFAULT_TIMINGS.localMs),
@@ -468,13 +486,15 @@ function writeTimings() {
     const resume = Number(process.env["FM_TOPIC_BOARD_RESUME_MS"]);
     return {
         ...DEFAULT_WRITE_TIMINGS,
-        ...(delays.every((delay) => Number.isFinite(delay) && delay > 0) ? { retryDelaysMs: delays } : {}),
+        ...(delays.every((delay) => Number.isFinite(delay) && delay > 0)
+            ? { retryDelaysMs: delays }
+            : {}),
         ...(Number.isFinite(resume) && resume > 0 ? { resumeWindowMs: resume } : {}),
     };
 }
 function notifyDelay() {
-    const override = Number(process.env["FM_TOPIC_BOARD_NOTIFY_MS"]);
-    return TEST_MODE && Number.isFinite(override) && override > 0 ? override : NOTIFY_DELAY_MS;
+    const configured = Number(process.env["FM_TOPIC_BOARD_NOTIFY_MS"]);
+    return TEST_MODE && Number.isFinite(configured) && configured > 0 ? configured : NOTIFY_DELAY_MS;
 }
 /** Tells firstmate which topics just became dispatchable, as one note. */
 function notifyDispatchable(service, topicIds) {
@@ -498,12 +518,24 @@ function notifyDispatchable(service, topicIds) {
 }
 /** Records a delivered answer or tag as a system record and re-reads the home it changed. */
 function recordDelivery(service, record) {
-    const kinds = { answer: "hold.answered", tag: "agent.tagged" };
+    const kinds = {
+        answer: "hold.answered",
+        tag: "agent.tagged",
+    };
     const kind = kinds[record.plan.type];
     if (kind === undefined)
         return;
-    const text = record.plan.type === "answer" ? `在看板回答 ${record.home}/${record.task ?? ""}：${record.text}` : `${record.home}/${record.task ?? ""} ${record.text}`;
-    service.journal.appendBoard({ ts: epochSeconds(), kind, topic: record.topic, home: record.home, task: record.task, text });
+    const text = record.plan.type === "answer"
+        ? `在看板回答 ${record.home}/${record.task ?? ""}：${record.text}`
+        : `${record.home}/${record.task ?? ""} ${record.text}`;
+    service.journal.appendBoard({
+        ts: epochSeconds(),
+        kind,
+        topic: record.topic,
+        home: record.home,
+        task: record.task,
+        text,
+    });
     service.version += 1;
     void service.poller.readNow(record.home);
 }
@@ -578,7 +610,13 @@ function serveBrowser(service) {
         }),
         // Only the path is recorded: a query string could carry a token someone pasted into the URL.
         onRejected: (reason, request) => {
-            const entry = { ts: new Date().toISOString(), rejected: reason, host: request.headers.host ?? null, origin: request.headers.origin ?? null, path: (request.url ?? "").split("?")[0] ?? null };
+            const entry = {
+                ts: new Date().toISOString(),
+                rejected: reason,
+                host: request.headers.host ?? null,
+                origin: request.headers.origin ?? null,
+                path: (request.url ?? "").split("?")[0] ?? null,
+            };
             appendLine(service.paths.audit, JSON.stringify(entry), PRIVATE_FILE);
         },
     });
@@ -650,7 +688,13 @@ function main() {
         response.writeHead(404, { "Content-Type": "text/plain" });
         response.end("not found\n");
     });
-    const boot = { config, paths, bootId: crypto.randomBytes(8).toString("hex"), startedAt: now(), web };
+    const boot = {
+        config,
+        paths,
+        bootId: crypto.randomBytes(8).toString("hex"),
+        startedAt: now(),
+        web,
+    };
     web.once("error", (error) => {
         if (error.code === "EADDRINUSE")
             yieldOrFail(boot);

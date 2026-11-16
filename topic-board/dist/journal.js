@@ -1,7 +1,7 @@
 // The board's own append-only files: the event journal (every home's ledger
 // events plus the board's system records), the milestone summaries, and the
 // per-home ledger offsets.
-import { appendLine, isRecord, readCompleteLines, readJsonFile, stringField, writeFileAtomic } from "./files.js";
+import { appendLine, isRecord, readCompleteLines, readJsonFile, stringField, textField, writeFileAtomic, } from "./files.js";
 import path from "node:path";
 const FILE_MODE = 0o644;
 export const MAIN_HOME = "main";
@@ -41,7 +41,7 @@ function parseStoredBoard(stored) {
         topic: stringField(stored, "topic"),
         home: stringField(stored, "home"),
         task: stringField(stored, "task"),
-        text: stringField(stored, "text") ?? "",
+        text: textField(stored, "text"),
     };
 }
 function parseStored(text) {
@@ -112,7 +112,11 @@ function parseSummary(text) {
     const task = stringField(raw, "task");
     const body = stringField(raw, "text");
     const ts = raw["ts"];
-    if (kind === undefined || home === null || task === null || body === null || typeof ts !== "number")
+    if (kind === undefined ||
+        home === null ||
+        task === null ||
+        body === null ||
+        typeof ts !== "number")
         return null;
     return { ts, home, task, kind, text: body };
 }
@@ -165,9 +169,14 @@ export class Offsets {
         }
     }
     get(home) {
-        return this.cursors.get(home) ?? { offset: 0, sha: "-" };
+        const cursor = this.cursors.get(home);
+        return cursor === undefined ? { offset: 0, sha: "-" } : cursor;
     }
+    /** Remembers the cursor; the file is rewritten only when the cursor moved. */
     set(home, cursor) {
+        const current = this.get(home);
+        if (current.offset === cursor.offset && current.sha === cursor.sha)
+            return;
         this.cursors.set(home, cursor);
         writeFileAtomic(this.file, `${JSON.stringify(Object.fromEntries(this.cursors), null, 2)}\n`, FILE_MODE);
     }

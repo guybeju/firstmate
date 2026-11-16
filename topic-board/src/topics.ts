@@ -162,8 +162,8 @@ function mintId(state: TopicState, name: string): string {
   }
 }
 
-function queueOf(doc: TopicsDoc, id: string): Queue | null {
-  return QUEUES.find((queue) => doc.queues[queue].includes(id)) ?? null;
+function queueOf(doc: TopicsDoc, id: string): Queue | undefined {
+  return QUEUES.find((queue) => doc.queues[queue].includes(id));
 }
 
 function removeFromQueues(doc: TopicsDoc, id: string): void {
@@ -181,7 +181,11 @@ export interface ProposeInput {
 }
 
 /** The id a new topic gets: the caller's `--id` when given and free, else a minted one. */
-function chooseId(state: TopicState, name: string, wanted: string | undefined): string | TopicResult {
+function chooseId(
+  state: TopicState,
+  name: string,
+  wanted: string | undefined,
+): string | TopicResult {
   if (wanted === undefined) return mintId(state, name);
   if (!isValidTopicId(wanted)) return refuse(`議題 id 格式不對：${wanted}`);
   if (idInUse(state, wanted)) return refuse(`議題 id ${wanted} 已經用過，不能重用。`);
@@ -206,9 +210,10 @@ export function propose(state: TopicState, input: ProposeInput, now: string): To
   return changed(next, `ok ${id} 已提議，等使用者確認`);
 }
 
-function archivedRefusal(state: TopicState, id: string): TopicResult | null {
-  if (state.archive.topics[id] === undefined) return null;
-  return refuse(`議題 ${id} 已封存，要先 reopen。`);
+/** Why a topic that is not live cannot be acted on: it is archived, or it does not exist. */
+function unusable(state: TopicState, id: string, rawId: string): TopicResult {
+  if (state.archive.topics[id] !== undefined) return refuse(`議題 ${id} 已封存，要先 reopen。`);
+  return missing(rawId);
 }
 
 function missing(id: string): TopicResult {
@@ -218,7 +223,7 @@ function missing(id: string): TopicResult {
 export function confirm(state: TopicState, rawId: string, queue: Queue | undefined): TopicResult {
   const id = resolveTopicId(state.doc, rawId);
   const topic = state.doc.topics[id];
-  if (topic === undefined) return archivedRefusal(state, id) ?? missing(rawId);
+  if (topic === undefined) return unusable(state, id, rawId);
   if (topic.status === "confirmed") return unchanged(state, `ok ${id} 本來就已確認`);
   const next = clone(state);
   const target = queue ?? topic.suggested_queue ?? "normal";
@@ -226,7 +231,11 @@ export function confirm(state: TopicState, rawId: string, queue: Queue | undefin
   confirmed.status = "confirmed";
   next.doc.queues[target].push(id);
   return changed(next, `ok ${id} 已確認，放進「${QUEUE_LABEL[target]}」`, [
-    { kind: "topic.confirmed", topic: id, text: `議題「${topic.name}」已確認，放進「${QUEUE_LABEL[target]}」` },
+    {
+      kind: "topic.confirmed",
+      topic: id,
+      text: `議題「${topic.name}」已確認，放進「${QUEUE_LABEL[target]}」`,
+    },
   ]);
 }
 
@@ -234,14 +243,15 @@ export function merge(state: TopicState, rawFrom: string, rawInto: string): Topi
   const into = resolveTopicId(state.doc, rawInto);
   const from = resolveTopicId(state.doc, rawFrom);
   if (from === into) {
-    if (state.doc.merged[rawFrom] !== undefined) return unchanged(state, `ok ${rawFrom} 本來就已併入 ${into}`);
+    if (state.doc.merged[rawFrom] !== undefined)
+      return unchanged(state, `ok ${rawFrom} 本來就已併入 ${into}`);
     return refuse("不能把議題併進它自己。");
   }
   const target = state.doc.topics[into];
-  if (target === undefined) return archivedRefusal(state, into) ?? missing(rawInto);
+  if (target === undefined) return unusable(state, into, rawInto);
   if (target.status !== "confirmed") return refuse(`${into} 還在提議中，只能併進已確認的議題。`);
   const source = state.doc.topics[from];
-  if (source === undefined) return archivedRefusal(state, from) ?? missing(rawFrom);
+  if (source === undefined) return unusable(state, from, rawFrom);
   const next = clone(state);
   delete next.doc.topics[from];
   removeFromQueues(next.doc, from);
@@ -251,20 +261,29 @@ export function merge(state: TopicState, rawFrom: string, rawInto: string): Topi
   ]);
 }
 
-function confirmedTopic(state: TopicState, rawId: string): { id: string; topic: Topic } | TopicResult {
+function confirmedTopic(
+  state: TopicState,
+  rawId: string,
+): { id: string; topic: Topic } | TopicResult {
   const id = resolveTopicId(state.doc, rawId);
   const topic = state.doc.topics[id];
-  if (topic === undefined) return archivedRefusal(state, id) ?? missing(rawId);
+  if (topic === undefined) return unusable(state, id, rawId);
   if (topic.status !== "confirmed") return refuse(`${id} 還在提議中，要先 confirm。`);
   return { id, topic };
 }
 
-export function closePropose(state: TopicState, rawId: string, rawReason: string, now: string): TopicResult {
+export function closePropose(
+  state: TopicState,
+  rawId: string,
+  rawReason: string,
+  now: string,
+): TopicResult {
   const found = confirmedTopic(state, rawId);
   if ("ok" in found) return found;
   const reason = oneLine(rawReason, GOAL_MAX);
   if (reason === null) return refuse(`理由要是一行、不能是空的、最多 ${GOAL_MAX} 個字。`);
-  if (found.topic.close_proposal?.reason === reason) return unchanged(state, `ok ${found.id} 已經提議過關閉`);
+  if (found.topic.close_proposal?.reason === reason)
+    return unchanged(state, `ok ${found.id} 已經提議過關閉`);
   const next = clone(state);
   (next.doc.topics[found.id] as Topic).close_proposal = { at: now, reason };
   return changed(next, `ok ${found.id} 已提議關閉，等使用者決定`, [
@@ -275,7 +294,12 @@ export function closePropose(state: TopicState, rawId: string, rawReason: string
 /** Where in the queue a moved topic lands; undefined keeps a topic already in the queue where it is. */
 export type MovePosition = { first: true } | { last: true } | { before: string } | undefined;
 
-function insertAt(queue: string[], id: string, position: MovePosition, doc: TopicsDoc): string[] | string {
+function insertAt(
+  queue: string[],
+  id: string,
+  position: MovePosition,
+  doc: TopicsDoc,
+): string[] | string {
   const without = queue.filter((entry) => entry !== id);
   if (position === undefined) return queue.includes(id) ? queue : [...without, id];
   if ("first" in position) return [id, ...without];
@@ -286,7 +310,12 @@ function insertAt(queue: string[], id: string, position: MovePosition, doc: Topi
   return [...without.slice(0, at), id, ...without.slice(at)];
 }
 
-export function move(state: TopicState, rawId: string, queue: Queue, position: MovePosition): TopicResult {
+export function move(
+  state: TopicState,
+  rawId: string,
+  queue: Queue,
+  position: MovePosition,
+): TopicResult {
   const found = confirmedTopic(state, rawId);
   if ("ok" in found) return found;
   const { id } = found;
@@ -303,10 +332,15 @@ export function move(state: TopicState, rawId: string, queue: Queue, position: M
   return changed(next, `ok ${id} 已移到「${QUEUE_LABEL[queue]}」`, [], dispatchable);
 }
 
-function setText(state: TopicState, rawId: string, field: "name" | "goal", value: string): TopicResult {
+function setText(
+  state: TopicState,
+  rawId: string,
+  field: "name" | "goal",
+  value: string,
+): TopicResult {
   const id = resolveTopicId(state.doc, rawId);
   const topic = state.doc.topics[id];
-  if (topic === undefined) return archivedRefusal(state, id) ?? missing(rawId);
+  if (topic === undefined) return unusable(state, id, rawId);
   const max = field === "name" ? NAME_MAX : GOAL_MAX;
   const label = field === "name" ? "名稱" : "目標";
   const text = oneLine(value, max);
@@ -349,7 +383,7 @@ export function reopen(state: TopicState, rawId: string, queue: Queue | undefine
     return missing(rawId);
   }
   const next = clone(state);
-  const target = queue ?? "normal";
+  const target = queue === undefined ? "normal" : queue;
   const { archived_at: _dropped, ...kept } = archived;
   void _dropped;
   next.doc.topics[id] = { ...kept, status: "confirmed" };
@@ -359,7 +393,13 @@ export function reopen(state: TopicState, rawId: string, queue: Queue | undefine
   return changed(
     next,
     `ok ${id} 已重開，放進「${QUEUE_LABEL[target]}」`,
-    [{ kind: "topic.reopened", topic: id, text: `議題「${archived.name}」已重開，放進「${QUEUE_LABEL[target]}」` }],
+    [
+      {
+        kind: "topic.reopened",
+        topic: id,
+        text: `議題「${archived.name}」已重開，放進「${QUEUE_LABEL[target]}」`,
+      },
+    ],
     dispatchable,
   );
 }
@@ -368,7 +408,7 @@ export function reopen(state: TopicState, rawId: string, queue: Queue | undefine
 export function keepOpen(state: TopicState, rawId: string): TopicResult {
   const id = resolveTopicId(state.doc, rawId);
   const topic = state.doc.topics[id];
-  if (topic === undefined) return archivedRefusal(state, id) ?? missing(rawId);
+  if (topic === undefined) return unusable(state, id, rawId);
   if (topic.close_proposal === undefined) return unchanged(state, `ok ${id} 沒有關閉的提議`);
   const next = clone(state);
   delete (next.doc.topics[id] as Topic).close_proposal;

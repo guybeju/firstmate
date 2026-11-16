@@ -44,7 +44,10 @@ export function readCompleteLines(file) {
         fs.truncateSync(file, end);
     if (end === 0)
         return [];
-    return content.subarray(0, end - 1).toString("utf8").split("\n");
+    return content
+        .subarray(0, end - 1)
+        .toString("utf8")
+        .split("\n");
 }
 export function appendLine(file, line, mode) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -96,4 +99,13 @@ export class CodedError extends Error {
         super(message);
         this.code = code;
     }
+}
+/** The string stored under `name`, or "" when it is absent or not a string. */
+export function textField(record, name) {
+    const value = stringField(record, name);
+    return value === null ? "" : value;
+}
+/** Turns "absent" into null, for values that are shown as JSON. */
+export function orNull(value) {
+    return value === undefined ? null : value;
 }

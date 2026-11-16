@@ -1,6 +1,6 @@
 // Loads and saves the topic files. The service is their only writer.
 import fs from "node:fs";
-import { isRecord, readJsonFile, stringField, stringRecord, writeFileAtomic } from "./files.js";
+import { isRecord, readJsonFile, stringRecord, textField, writeFileAtomic } from "./files.js";
 import type { BoardPaths } from "./layout.js";
 import { QUEUES, emptyState, isQueue } from "./topics.js";
 import type { ArchiveDoc, ArchivedTopic, Topic, TopicState, TopicsDoc } from "./topics.js";
@@ -8,24 +8,27 @@ import type { ArchiveDoc, ArchivedTopic, Topic, TopicState, TopicsDoc } from "./
 const FILE_MODE = 0o644;
 
 function parseCloseProposal(raw: unknown): Topic["close_proposal"] {
-  if (!isRecord(raw) || typeof raw["at"] !== "string" || typeof raw["reason"] !== "string") return undefined;
+  if (!isRecord(raw) || typeof raw["at"] !== "string" || typeof raw["reason"] !== "string")
+    return undefined;
   return { at: raw["at"], reason: raw["reason"] };
 }
 
 function parseStatus(id: string, raw: unknown): Topic["status"] {
-  if (raw !== "proposed" && raw !== "confirmed") throw new Error(`topic ${id} has an unknown status`);
+  if (raw !== "proposed" && raw !== "confirmed")
+    throw new Error(`topic ${id} has an unknown status`);
   return raw;
 }
 
 function parseTopic(id: string, raw: unknown): Topic {
   if (!isRecord(raw)) throw new Error(`topic ${id} is not an object`);
   const { name, goal } = raw;
-  if (typeof name !== "string" || typeof goal !== "string") throw new Error(`topic ${id} lacks name or goal`);
+  if (typeof name !== "string" || typeof goal !== "string")
+    throw new Error(`topic ${id} lacks name or goal`);
   const topic: Topic = {
     name,
     goal,
     status: parseStatus(id, raw["status"]),
-    created_at: stringField(raw, "created_at") ?? "",
+    created_at: textField(raw, "created_at"),
     proposed_by: raw["proposed_by"] === "user" ? "user" : "firstmate",
   };
   if (isQueue(raw["suggested_queue"])) topic.suggested_queue = raw["suggested_queue"];
@@ -43,7 +46,7 @@ function parseQueue(raw: unknown, topics: Record<string, Topic>): string[] {
 }
 
 function parseNextSeq(raw: unknown): number {
-  return typeof raw === "number" && Number.isInteger(raw) && raw > 0 ? raw : 1;
+  return typeof raw === "number" && Number.isInteger(raw) ? Math.max(1, raw) : 1;
 }
 
 function parseDoc(raw: unknown): TopicsDoc {
@@ -66,7 +69,10 @@ function parseArchive(raw: unknown): ArchiveDoc {
   const archive: ArchiveDoc = { v: 1, topics: {} };
   for (const [id, topic] of Object.entries(raw["topics"])) {
     const parsed = parseTopic(id, topic);
-    const archived: ArchivedTopic = { ...parsed, archived_at: stringField(topic as Record<string, unknown>, "archived_at") ?? "" };
+    const archived: ArchivedTopic = {
+      ...parsed,
+      archived_at: textField(topic as Record<string, unknown>, "archived_at"),
+    };
     archive.topics[id] = archived;
   }
   return archive;
@@ -77,13 +83,13 @@ function loadFile<T>(file: string, parse: (raw: unknown) => T, fallback: T): T {
   try {
     raw = readJsonFile(file);
   } catch (error) {
-    throw new Error(`${file} 讀不懂：${(error as Error).message}`);
+    throw new Error(`${file} 讀不懂：${(error as Error).message}`, { cause: error });
   }
   if (raw === null) return fallback;
   try {
     return parse(raw);
   } catch (error) {
-    throw new Error(`${file} 讀不懂：${(error as Error).message}`);
+    throw new Error(`${file} 讀不懂：${(error as Error).message}`, { cause: error });
   }
 }
 
@@ -115,9 +121,12 @@ export function saveTopicState(paths: BoardPaths, previous: TopicState, next: To
     if (docText !== serialize(previous.doc)) writeFileAtomic(paths.topics, docText, FILE_MODE);
   };
   const writeArchive = (): void => {
-    if (archiveText !== serialize(previous.archive)) writeFileAtomic(paths.archive, archiveText, FILE_MODE);
+    if (archiveText !== serialize(previous.archive))
+      writeFileAtomic(paths.archive, archiveText, FILE_MODE);
   };
-  const archiveGained = Object.keys(next.archive.topics).some((id) => previous.archive.topics[id] === undefined);
+  const archiveGained = Object.keys(next.archive.topics).some(
+    (id) => previous.archive.topics[id] === undefined,
+  );
   if (archiveGained) {
     writeArchive();
     writeDoc();

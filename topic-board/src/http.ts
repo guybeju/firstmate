@@ -29,7 +29,12 @@ export interface ApiReply {
   body: Record<string, unknown>;
 }
 
-export type ApiHandler = (method: string, route: string, query: URLSearchParams, body: Record<string, unknown>) => Promise<ApiReply>;
+export type ApiHandler = (
+  method: string,
+  route: string,
+  query: URLSearchParams,
+  body: Record<string, unknown>,
+) => Promise<ApiReply>;
 
 export interface HttpOptions {
   port: number;
@@ -45,12 +50,21 @@ export interface HttpOptions {
 /** A refused request: `code` is the HTTP status, `message` the reason recorded in the audit log. */
 class Rejection extends CodedError {}
 
-function send(response: http.ServerResponse, status: number, type: string, body: string | Buffer): void {
+function send(
+  response: http.ServerResponse,
+  status: number,
+  type: string,
+  body: string | Buffer,
+): void {
   response.writeHead(status, { ...SECURITY_HEADERS, "Content-Type": type });
   response.end(body);
 }
 
-function sendJson(response: http.ServerResponse, status: number, body: Record<string, unknown>): void {
+function sendJson(
+  response: http.ServerResponse,
+  status: number,
+  body: Record<string, unknown>,
+): void {
   send(response, status, "application/json; charset=utf-8", JSON.stringify(body));
 }
 
@@ -85,12 +99,16 @@ function readBody(request: http.IncomingMessage): Promise<Buffer> {
 }
 
 /** The JSON object in a state-changing request, after the Origin and Content-Type checks. */
-async function changeBody(request: http.IncomingMessage, options: HttpOptions): Promise<Record<string, unknown>> {
+async function changeBody(
+  request: http.IncomingMessage,
+  options: HttpOptions,
+): Promise<Record<string, unknown>> {
   const origin = request.headers.origin;
   if (origin === undefined || !ownHosts(options.port).some((host) => origin === `http://${host}`)) {
     throw new Rejection(403, "origin is not this board");
   }
-  const type = (request.headers["content-type"] ?? "").split(";")[0]?.trim().toLowerCase();
+  const header = request.headers["content-type"];
+  const type = header === undefined ? "" : (header.split(";")[0] as string).trim().toLowerCase();
   if (type !== "application/json") throw new Rejection(415, "content type is not application/json");
   const raw = await readBody(request);
   let body: unknown;
@@ -103,39 +121,71 @@ async function changeBody(request: http.IncomingMessage, options: HttpOptions): 
   return body;
 }
 
-async function serveApi(request: http.IncomingMessage, response: http.ServerResponse, url: URL, options: HttpOptions): Promise<void> {
-  if (!tokenMatches(options.tokenFile, request.headers.authorization)) throw new Rejection(401, "missing or wrong token");
-  const method = request.method ?? "GET";
+async function serveApi(
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+  url: URL,
+  options: HttpOptions,
+): Promise<void> {
+  if (!tokenMatches(options.tokenFile, request.headers.authorization))
+    throw new Rejection(401, "missing or wrong token");
+  const method = String(request.method);
   if (method !== "GET" && method !== "POST") throw new Rejection(405, "method not allowed");
   const body = method === "POST" ? await changeBody(request, options) : {};
-  const reply = await options.api(method, url.pathname.slice("/api/".length), url.searchParams, body);
+  const reply = await options.api(
+    method,
+    url.pathname.slice("/api/".length),
+    url.searchParams,
+    body,
+  );
   sendJson(response, reply.status, reply.body);
+}
+
+function contentType(file: string): string {
+  const known = CONTENT_TYPES[path.extname(file)];
+  return known === undefined ? "application/octet-stream" : known;
 }
 
 /** Maps an /assets/ file name to a file in one of the asset directories; no path is ever joined from the URL. */
 function findAsset(name: string, assetDirs: string[]): string | null {
-  if (!ASSET_NAME.test(name) || name.includes("..")) return null;
+  if (!ASSET_NAME.test(name)) return null;
   for (const dir of assetDirs) {
     if (fs.existsSync(dir) && fs.readdirSync(dir).includes(name)) return path.join(dir, name);
   }
   return null;
 }
 
-function serveStatic(request: http.IncomingMessage, response: http.ServerResponse, url: URL, options: HttpOptions): void {
+function serveStatic(
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+  url: URL,
+  options: HttpOptions,
+): void {
   if (request.method !== "GET") throw new Rejection(405, "method not allowed");
-  const file = url.pathname === "/" ? options.indexFile : url.pathname.startsWith("/assets/") ? findAsset(url.pathname.slice(8), options.assetDirs) : null;
+  const file =
+    url.pathname === "/"
+      ? options.indexFile
+      : url.pathname.startsWith("/assets/")
+        ? findAsset(url.pathname.slice(8), options.assetDirs)
+        : null;
   if (file === null || !fs.existsSync(file)) throw new Rejection(404, "not found");
-  send(response, 200, CONTENT_TYPES[path.extname(file)] ?? "application/octet-stream", fs.readFileSync(file));
+  send(response, 200, contentType(file), fs.readFileSync(file));
 }
 
-async function route(request: http.IncomingMessage, response: http.ServerResponse, options: HttpOptions): Promise<void> {
+async function route(
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+  options: HttpOptions,
+): Promise<void> {
   if (request.headers.upgrade !== undefined) throw new Rejection(400, "upgrade is not supported");
-  const host = request.headers.host ?? "";
-  if (!ownHosts(options.port).includes(host)) throw new Rejection(403, "host is not this board");
+  const host = request.headers.host;
+  if (host === undefined || !ownHosts(options.port).includes(host)) {
+    throw new Rejection(403, "host is not this board");
+  }
   if (request.method === "OPTIONS") throw new Rejection(405, "preflight is not answered");
   let url: URL;
   try {
-    url = new URL(request.url ?? "/", `http://${host}`);
+    url = new URL(String(request.url), `http://${host}`);
   } catch {
     throw new Rejection(400, "malformed URL");
   }
@@ -150,7 +200,8 @@ export function serveBoard(server: http.Server, options: HttpOptions): void {
     route(request, response, options).catch((error: unknown) => {
       const rejection = error instanceof Rejection ? error : new Rejection(500, "internal error");
       if (rejection.code !== 404) options.onRejected(rejection.message, request);
-      if (!response.headersSent) sendJson(response, rejection.code, { error: "rejected", message: rejection.message });
+      if (!response.headersSent)
+        sendJson(response, rejection.code, { error: "rejected", message: rejection.message });
       else response.end();
     });
   });

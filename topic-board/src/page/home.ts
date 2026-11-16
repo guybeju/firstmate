@@ -1,7 +1,7 @@
 // The home page: the priority sidebar and the four Bearings-style sections,
 // followed by everything not yet filed under a topic.
-import type { Queue } from "../topics.js";
-import type { AgentView } from "../view.js";
+import type { Queue } from "#board/topics.js";
+import type { AgentView } from "#board/view.js";
 import { h } from "./dom.js";
 import type { Child } from "./dom.js";
 import { agentRow, holdCard, questionRow, summaryRow, topicLink, topicName } from "./parts.js";
@@ -14,7 +14,9 @@ function lightCounts(agents: AgentView[]): Child {
   return Object.keys(LIGHT_LABEL)
     .map((name) => ({ name, count: agents.filter((agent) => agent.light === name).length }))
     .filter((entry) => entry.count > 0)
-    .map((entry) => h("span", {}, h("span", { class: `dot l-${entry.name}` }), String(entry.count)));
+    .map((entry) =>
+      h("span", {}, h("span", { class: `dot l-${entry.name}` }), String(entry.count)),
+    );
 }
 
 function moveMenu(actions: Actions, topic: string): Child {
@@ -22,7 +24,12 @@ function moveMenu(actions: Actions, topic: string): Child {
     const select = event.target as HTMLSelectElement;
     const [queue, where] = select.value.split(":");
     select.value = "";
-    if (queue !== undefined && queue !== "") actions.topic("move", { id: topic, queue, ...(where === "first" ? { first: true } : { last: true }) });
+    if (queue !== undefined && queue !== "")
+      actions.topic("move", {
+        id: topic,
+        queue,
+        ...(where === "first" ? { first: true } : { last: true }),
+      });
   };
   return h(
     "select",
@@ -40,7 +47,9 @@ function topicCard(view: View, actions: Actions, id: string): Child {
   if (topic === undefined) return null;
   const agents = view.agents.filter((agent) => agent.topic === id);
   const deciding = view.holds.filter((hold) => hold.topic === id && hold.live).length;
-  const unsent = view.writes.filter((write) => write.topic === id && BAD_WRITES.includes(write.state)).length;
+  const unsent = view.writes.filter(
+    (write) => write.topic === id && BAD_WRITES.includes(write.state),
+  ).length;
   return h(
     "div",
     { class: "card topic", draggable: "true", "data-topic": id },
@@ -84,7 +93,11 @@ function archivedBox(view: View, actions: Actions): Child {
         { class: "card" },
         h("button", { class: "link", onclick: () => actions.open(id) }, topic.name),
         h("div", { class: "goal" }, topic.goal),
-        h("div", { class: "btns" }, h("button", { onclick: () => actions.topic("reopen", { id }) }, "重開（放「一般」）")),
+        h(
+          "div",
+          { class: "btns" },
+          h("button", { onclick: () => actions.topic("reopen", { id }) }, "重開（放「一般」）"),
+        ),
       ),
     ),
   );
@@ -107,7 +120,12 @@ function closeProposals(view: View, actions: Actions): Child {
       h(
         "div",
         { class: "card" },
-        h("div", { class: "meta" }, topicLink(view, id, actions), h("span", { class: "pill warn" }, "提議關閉")),
+        h(
+          "div",
+          { class: "meta" },
+          topicLink(view, id, actions),
+          h("span", { class: "pill warn" }, "提議關閉"),
+        ),
         h("div", {}, `first mate 認為這個議題可以關了：${topic.close_reason ?? ""}`),
         h(
           "div",
@@ -120,8 +138,15 @@ function closeProposals(view: View, actions: Actions): Child {
 }
 
 function section(title: string, ...children: Child[]): Child {
-  const content = children.flat(4).filter((child) => child !== null && child !== undefined && child !== false);
-  return h("section", {}, h("h2", {}, title), content.length > 0 ? content : h("p", { class: "note" }, "目前沒有。"));
+  const content = children
+    .flat(4)
+    .filter((child) => child !== null && child !== undefined && child !== false);
+  return h(
+    "section",
+    {},
+    h("h2", {}, title),
+    content.length > 0 ? content : h("p", { class: "note" }, "目前沒有。"),
+  );
 }
 
 function tagMenu(view: View, actions: Actions, agent: AgentView): Child {
@@ -133,7 +158,9 @@ function tagMenu(view: View, actions: Actions, agent: AgentView): Child {
     "select",
     { class: "auto", onchange: choose },
     h("option", { value: "" }, "歸併到…"),
-    QUEUES.flatMap((queue) => view.queues[queue]).map((id) => h("option", { value: id }, topicName(view, id))),
+    QUEUES.flatMap((queue) => view.queues[queue]).map((id) =>
+      h("option", { value: id }, topicName(view, id)),
+    ),
   );
 }
 
@@ -158,9 +185,17 @@ function proposals(page: Page, view: View, actions: Actions): Child {
         h(
           "div",
           { class: "btns" },
-          h("button", { class: "primary", onclick: () => actions.topic("confirm", { id, queue }) }, `確認（放「${QUEUE_LABEL[queue]}」）`),
+          h(
+            "button",
+            { class: "primary", onclick: () => actions.topic("confirm", { id, queue }) },
+            `確認（放「${QUEUE_LABEL[queue]}」）`,
+          ),
           QUEUES.filter((other) => other !== queue).map((other) =>
-            h("button", { onclick: () => actions.topic("confirm", { id, queue: other }) }, `放「${QUEUE_LABEL[other]}」`),
+            h(
+              "button",
+              { onclick: () => actions.topic("confirm", { id, queue: other }) },
+              `放「${QUEUE_LABEL[other]}」`,
+            ),
           ),
           mergeMenu(view, actions, id, key),
           h("button", { onclick: () => actions.topic("archive", { id }) }, "不採用"),
@@ -214,14 +249,26 @@ function unsorted(page: Page, view: View, actions: Actions): Child {
         h(
           "div",
           { class: "row" },
-          h("span", { class: "grow" }, h("b", {}, agent.task), " ", h("span", { class: "note" }, UNSORTED_REASON[agent.unsorted_reason ?? ""] ?? "")),
+          h(
+            "span",
+            { class: "grow" },
+            h("b", {}, agent.task),
+            " ",
+            h("span", { class: "note" }, UNSORTED_REASON[agent.unsorted_reason ?? ""] ?? ""),
+          ),
           h("span", { class: "pill" }, agent.home),
           tagMenu(view, actions, agent),
         ),
       ),
-    view.summaries.filter((summary) => summary.topic === null).map((summary) => summaryRow(view, actions, summary, false)),
-    view.holds.filter((hold) => hold.topic === null && !hold.live).map((hold) => holdCard(page, view, actions, hold, false)),
-    view.questions.filter((question) => question.topic === null).map((question) => questionRow(view, actions, question, false)),
+    view.summaries
+      .filter((summary) => summary.topic === null)
+      .map((summary) => summaryRow(view, actions, summary, false)),
+    view.holds
+      .filter((hold) => hold.topic === null && !hold.live)
+      .map((hold) => holdCard(page, view, actions, hold, false)),
+    view.questions
+      .filter((question) => question.topic === null)
+      .map((question) => questionRow(view, actions, question, false)),
   );
 }
 
@@ -231,20 +278,35 @@ export function home(page: Page, view: View, actions: Actions): Child {
     section(
       "等你決定",
       closeProposals(view, actions),
-      view.holds.filter((hold) => hold.live).map((hold) => holdCard(page, view, actions, hold, true)),
+      view.holds
+        .filter((hold) => hold.live)
+        .map((hold) => holdCard(page, view, actions, hold, true)),
     ),
     section(
       "最近的結果",
-      view.summaries.slice(0, RECENT_SUMMARIES).map((summary) => summaryRow(view, actions, summary, true)),
+      view.summaries
+        .slice(0, RECENT_SUMMARIES)
+        .map((summary) => summaryRow(view, actions, summary, true)),
     ),
     section(
       "進行中",
-      view.agents.filter((agent) => agent.topic !== null && active.includes(agent.light)).map((agent) => agentRow(view, actions, agent)),
+      view.agents
+        .filter((agent) => agent.topic !== null && active.includes(agent.light))
+        .map((agent) => agentRow(view, actions, agent)),
     ),
     section(
       "排定的",
-      view.queues.later.map((id) => h("div", { class: "row" }, topicLink(view, id, actions), h("span", { class: "note" }, "待辦，不自動開工"))),
-      view.holds.filter((hold) => !hold.live && hold.topic !== null).map((hold) => holdCard(page, view, actions, hold, true)),
+      view.queues.later.map((id) =>
+        h(
+          "div",
+          { class: "row" },
+          topicLink(view, id, actions),
+          h("span", { class: "note" }, "待辦，不自動開工"),
+        ),
+      ),
+      view.holds
+        .filter((hold) => !hold.live && hold.topic !== null)
+        .map((hold) => holdCard(page, view, actions, hold, true)),
     ),
     unsorted(page, view, actions),
   ];

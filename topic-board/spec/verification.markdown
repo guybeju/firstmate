@@ -69,13 +69,34 @@
 | 瀏覽器 | 無頭 Firefox 154 經 WebDriver BiDi 走完整個使用流程 | 通過。Chrome、真的滑鼠拖曳未驗 |
 | 上游的檢查 | `bin/fm-doc-audience-check.sh`、`bin/fm-test-run.sh --check-coverage`、`tests/fm-documentation-audiences.test.sh`、`bin/fm-lint.sh` 對三支新腳本 | 都過；六段相對 `carry` 只有新增的檔（91 個） |
 
+## 二之二、主 home 的 first mate（firstmate_ever）幫忙驗的
+
+2026-11-16，在它那邊的隔離 worktree 與暫時的 `FM_HOME`，有 `tasks-axi` 0.2.6。
+
+| 項目 | 結果 |
+| --- | --- |
+| 整套測試 | `topic-board/test/run.sh` 十支全過，含瀏覽器那一支 |
+| 1-3 | `tasks-axi unhold <id>` 存在；`order` 印出的 hold 與 unhold 指令原樣可用。不帶 `--kind` 的 hold 存成 `(hold: topic-board：議題 demo 在待辦)`，snapshot 裡是 `hold_kind: null`、`hold_bucket: null` |
+| `order` 的來回 | 待辦議題的項目列在「該 hold」→ 照做之後到「停著」→ 議題移到「高」之後到「該解除」→ 解除之後只在「可派」 |
+| 4-4 | `done`：項目移到 Done。`release`：項目留在 Queued、hold 拿掉，`order` 把它列為可派。兩種的 stdout 都是 `closed: <id>`，不能靠輸出分辨 |
+| 多行的 hold reason | `tasks-axi` 自己不收多行與括號；`fm-captain-hold.sh` 把 reason 編成 `(hold: fm-hold-v1:<base64>)`，snapshot 會解回來，換行是真的換行。所以「最後一行寫選項」行得通 |
+| 1-5 | hold 的 `body_lines` 是 `Captain hold set: <UTC>` 與 `Captain hold origin: <task>`（用 `hold --title` 建的多一行 `Origin: <task>`） |
+
+它沒有試的：直送真的 worker（它的 fleet 是空的）、真的 home 上的行為（要等合併之後套用）。
+
+## 二之三、單元測試與 mutation testing（2026-11-16）
+
+- `pnpm test`：149 個單元測試，10 個測試檔。
+- `mutator-axi`，分批跑的結果（被抓到／存活／沒覆蓋）：`topics` 90／0／0；`commands` 134／0／0；`view` 與 `report` 259／0／0；`notifier`、`files`、`store`、`journal` 411／0／0；`actions`、`writes`、`api` 552／0／1；`poller`、`http`、`journal` 642／1／1。各批有重疊，所以不加總。存活的那一個見 [open-issues](open-issues.markdown) 的 C28。
+- `crapper-axi`：這些模組的函式 CRAP 都在 10 以下；進入點與頁面不在內。
+- 上游自己的 `tests/fm-test-run.test.sh` 在這台有一項失敗（`fm-session-lock-ancestry` 的「pty-host 沒有被 init 收養」）。在不含這個功能的乾淨 `carry` 上跑，同一項一樣失敗，所以和這個功能無關。
+
 ## 三、未驗
 
 | 項目 | 原因 | 所屬 |
 | --- | --- | --- |
-| `unhold` 的確切指令名稱；經真的 `tasks-axi` 寫入的 hold 欄位 | 沒有 `tasks-axi` | 第一段 1-3 |
 | bash 3.2 的語法相容、`shfmt` 的格式 | 沒有 bash 3.2、沒有 docker 權限、沒有裝 `shfmt` | 第一段的驗收 |
-| CRAP 分數與 mutation testing | 測試是從 `fm-topic.sh` 進去的 Bash 整合測試，跑的是編譯後的 `dist/`；`crapper-axi`、`mutator-axi` 拿不到覆蓋率（mutator 回報 97 個位置都沒被覆蓋）。複雜度有量，全部 8 以下 | 全部 |
+| 進入點與頁面程式的 CRAP 分數 | `board-server.ts`、`board-client.ts`、`src/page/` 只有整合測試，覆蓋率工具看不到 | 第二、五段 |
 | 服務活過 Claude Code session 結束 | 要結束目前的 session 才能驗，這次做不到。已驗到的部分見上 | 第二段 2-1 |
 | macOS 上比對 `pid` 的指令列 | 這台是 Linux | 第二段 2-2 |
 | `tsc` 的輸出跨機器逐位元組相同 | 這次沒有裝 `typescript` | 第二段 2-3 |

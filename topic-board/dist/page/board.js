@@ -119,7 +119,8 @@ async function post(path, body) {
         return null;
     }
     page.tokenBad = reply.status === 401;
-    page.notice = reply.status === 200 ? null : String(reply.data["message"] ?? "看板拒絕了這個操作。");
+    page.notice =
+        reply.status === 200 ? null : String(reply.data["message"] ?? "看板拒絕了這個操作。");
     await poll();
     render();
     return reply.status === 200 ? reply.data : null;
@@ -193,7 +194,12 @@ const actions = {
         void post(path, body).then((data) => {
             if (data === null || typeof data["confirm"] !== "string")
                 return;
-            page.pending.set(key, { path, body, confirm: data["confirm"], expiresAt: Number(data["expires_at"]) });
+            page.pending.set(key, {
+                path,
+                body,
+                confirm: data["confirm"],
+                expiresAt: Number(data["expires_at"]),
+            });
             render();
         });
     },

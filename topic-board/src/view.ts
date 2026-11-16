@@ -2,6 +2,7 @@
 // inputs always give the same view.
 import type { JournalEvent, LedgerEvent, Summary } from "./journal.js";
 import type { HomeReport, ReportHold } from "./report.js";
+import { orNull } from "./files.js";
 import { QUEUES, resolveTopicId } from "./topics.js";
 import type { Queue, TopicState } from "./topics.js";
 
@@ -28,7 +29,9 @@ export interface ViewInput {
   staleMs: number;
 }
 
-export type Placement = { topic: string; reason: null } | { topic: null; reason: "no-tag" | "unknown-topic" | "proposed" };
+export type Placement =
+  | { topic: string; reason: null }
+  | { topic: null; reason: "no-tag" | "unknown-topic" | "proposed" };
 
 export interface HomeView {
   id: string;
@@ -133,7 +136,7 @@ export function parseTags(text: string): Tag[] {
   for (const line of text.split("\n")) {
     const [topic, time] = line.trim().split(" ");
     if (topic === undefined || topic === "") continue;
-    const atMs = Date.parse(time ?? "");
+    const atMs = time === undefined ? Number.NaN : Date.parse(time);
     tags.push({ topic, atMs: Number.isNaN(atMs) ? 0 : atMs });
   }
   return tags;
@@ -141,7 +144,8 @@ export function parseTags(text: string): Tag[] {
 
 /** The option buttons a hold asks for: what follows "選項：" at the end of its last line, split on " | ". */
 export function parseOptions(question: string): string[] {
-  const lastLine = question.trimEnd().split("\n").pop() ?? "";
+  const lines = question.trimEnd().split("\n");
+  const lastLine = lines[lines.length - 1] as string;
   const at = lastLine.lastIndexOf(OPTION_MARKER);
   if (at === -1) return [];
   const options = lastLine
@@ -174,7 +178,7 @@ function deferredReason(hold: ReportHold): string | null {
     case "aged":
       return "已放超過 14 天";
     case "dated":
-      return `延到 ${hold.hold_until ?? "之後"}`;
+      return `延到 ${hold.hold_until === null ? "之後" : hold.hold_until}`;
     case "blocked":
       return `等 ${hold.unresolved_blocker_ids.join("、")} 完成`;
   }
@@ -189,10 +193,16 @@ class Placer {
     homes: HomeSnapshot[],
   ) {
     for (const home of homes) {
-      for (const [task, text] of Object.entries(home.report?.topics ?? {})) {
+      if (home.report === null) continue;
+      for (const [task, text] of Object.entries(home.report.topics)) {
         this.tags.set(`${home.id}\n${task}`, parseTags(text));
       }
     }
+  }
+
+  private tagsOf(home: string, task: string): Tag[] {
+    const tags = this.tags.get(`${home}\n${task}`);
+    return tags === undefined ? [] : tags;
   }
 
   private classify(tagged: string | undefined): Placement {
@@ -201,24 +211,33 @@ class Placer {
     if (this.topics.archive.topics[id] !== undefined) return { topic: id, reason: null };
     const topic = this.topics.doc.topics[id];
     if (topic === undefined) return { topic: null, reason: "unknown-topic" };
-    return topic.status === "confirmed" ? { topic: id, reason: null } : { topic: null, reason: "proposed" };
+    return topic.status === "confirmed"
+      ? { topic: id, reason: null }
+      : { topic: null, reason: "proposed" };
   }
 
   /** The topic a task belongs to now. */
   current(home: string, task: string): Placement {
-    return this.classify(this.tags.get(`${home}\n${task}`)?.at(-1)?.topic);
+    const tags = this.tagsOf(home, task);
+    return this.classify(tags[tags.length - 1]?.topic);
   }
 
   /** The topic a task belonged to at `atMs`: the last tag written by then, else its first tag. */
   at(home: string, task: string, atMs: number): Placement {
-    const tags = this.tags.get(`${home}\n${task}`) ?? [];
-    const inEffect = tags.filter((tag) => tag.atMs <= atMs).at(-1) ?? tags[0];
+    const tags = this.tagsOf(home, task);
+    const written = tags.filter((tag) => tag.atMs <= atMs);
+    const inEffect = written.length > 0 ? written[written.length - 1] : tags[0];
     return this.classify(inEffect?.topic);
   }
 }
 
 /** Where one task belongs right now, given what the homes last reported. */
-export function placeTask(topics: TopicState, homes: HomeSnapshot[], home: string, task: string): Placement {
+export function placeTask(
+  topics: TopicState,
+  homes: HomeSnapshot[],
+  home: string,
+  task: string,
+): Placement {
   return new Placer(topics, homes).current(home, task);
 }
 
@@ -247,9 +266,15 @@ function lastEvents(events: LedgerEvent[]): Map<string, LedgerEvent> {
 }
 
 /** Builds agent entries for one home; everything that does not vary per task is bound here. */
-function agentMaker(home: HomeSnapshot, stale: boolean, placer: Placer, last: Map<string, LedgerEvent>) {
+function agentMaker(
+  home: HomeSnapshot,
+  stale: boolean,
+  placer: Placer,
+  last: Map<string, LedgerEvent>,
+) {
   return (task: string, kind: string, light: Light, state: string, detail: string): AgentView => {
     const placement = placer.current(home.id, task);
+    const lastEvent = last.get(`${home.id}\n${task}`);
     return {
       home: home.id,
       task,
@@ -259,70 +284,96 @@ function agentMaker(home: HomeSnapshot, stale: boolean, placer: Placer, last: Ma
       detail,
       topic: placement.topic,
       unsorted_reason: placement.reason,
-      updated_at: last.get(`${home.id}\n${task}`)?.ts ?? null,
+      updated_at: lastEvent === undefined ? null : lastEvent.ts,
       stale,
     };
   };
 }
 
-function agentsOf(home: HomeSnapshot, stale: boolean, placer: Placer, last: Map<string, LedgerEvent>): AgentView[] {
+function agentsOf(
+  home: HomeSnapshot,
+  stale: boolean,
+  placer: Placer,
+  last: Map<string, LedgerEvent>,
+): AgentView[] {
   const report = home.report;
   if (report === null) return [];
   const agent = agentMaker(home, stale, placer, last);
-  const deciding = new Set(report.holds.filter((hold) => hold.hold_bucket === "live").map((hold) => hold.id));
+  const deciding = new Set(
+    report.holds.filter((hold) => hold.hold_bucket === "live").map((hold) => hold.id),
+  );
   const running = report.tasks
     .filter((task) => task.kind !== "secondmate")
     .map((task) =>
-      agent(task.id, task.kind, deciding.has(task.id) ? "decide" : lightFor(task.state), task.state, task.detail),
+      agent(
+        task.id,
+        task.kind,
+        deciding.has(task.id) ? "decide" : lightFor(task.state),
+        task.state,
+        task.detail,
+      ),
     );
   // A cleaned-up task is gone from the snapshot; its last ledger event says how it ended.
   const known = new Set(report.tasks.map((task) => task.id));
   const ended = [...last.values()]
     .filter((event) => event.home === home.id && !known.has(event.task))
     .map((event) => {
-      const outcome = event.event === "task.merged" || event.event === "task.cleaned_up" ? "done" : "unknown";
+      const outcome =
+        event.event === "task.merged" || event.event === "task.cleaned_up" ? "done" : "unknown";
       return agent(event.task, "", outcome, outcome, "");
     });
   return [...running, ...ended];
 }
 
-function holdsOf(home: HomeSnapshot, stale: boolean, placer: Placer): HoldView[] {
-  return (home.report?.holds ?? []).map((hold) => {
+/** A hold as shown, with the age that orders it among its topic's holds. */
+interface RankedHold {
+  view: HoldView;
+  ageDays: number;
+}
+
+function holdsOf(home: HomeSnapshot, stale: boolean, placer: Placer): RankedHold[] {
+  if (home.report === null) return [];
+  return home.report.holds.map((hold) => {
     const own = placer.current(home.id, hold.id);
-    const placement = own.topic === null && hold.origin !== "" ? placer.current(home.id, hold.origin) : own;
+    const placement =
+      own.topic === null && hold.origin !== "" ? placer.current(home.id, hold.origin) : own;
     return {
-      home: home.id,
-      task: hold.id,
-      title: hold.title,
-      question: hold.question,
-      options: parseOptions(hold.question),
-      live: hold.hold_bucket === "live",
-      deferred_reason: deferredReason(hold),
-      topic: placement.topic,
-      stale,
+      ageDays: hold.hold_age_days === null ? 0 : hold.hold_age_days,
+      view: {
+        home: home.id,
+        task: hold.id,
+        title: hold.title,
+        question: hold.question,
+        options: parseOptions(hold.question),
+        live: hold.hold_bucket === "live",
+        deferred_reason: deferredReason(hold),
+        topic: placement.topic,
+        stale,
+      },
     };
   });
 }
 
 /** Sort key for a hold: live first, then the topic's queue order, then oldest first. */
-function holdRank(view: BoardView, hold: HoldView, ageDays: number): number[] {
-  const queue = hold.topic === null ? null : (view.topics[hold.topic]?.queue ?? null);
-  if (queue === null || hold.topic === null) return [hold.live ? 0 : 1, QUEUES.length, 0, -ageDays];
-  return [hold.live ? 0 : 1, QUEUES.indexOf(queue), view.queues[queue].indexOf(hold.topic), -ageDays];
+function holdRank(view: BoardView, { view: hold, ageDays }: RankedHold): number[] {
+  const live = hold.live ? 0 : 1;
+  const queue = hold.topic === null ? null : (view.topics[hold.topic] as TopicView).queue;
+  // A hold with no topic, or whose topic is archived, sorts after every queue.
+  if (hold.topic === null || queue === null) return [live, QUEUES.length, QUEUES.length, -ageDays];
+  return [live, QUEUES.indexOf(queue), view.queues[queue].indexOf(hold.topic), -ageDays];
 }
 
 function compareRanks(left: number[], right: number[]): number {
-  for (let index = 0; index < left.length; index += 1) {
-    const difference = (left[index] as number) - (right[index] as number);
+  for (const [index, value] of left.entries()) {
+    const difference = value - (right[index] as number);
     if (difference !== 0) return difference;
   }
   return 0;
 }
 
-function holdOrder(view: BoardView, ages: Map<HoldView, number>): (a: HoldView, b: HoldView) => number {
+function holdOrder(view: BoardView): (a: RankedHold, b: RankedHold) => number {
   return (a, b) =>
-    compareRanks(holdRank(view, a, ages.get(a) ?? 0), holdRank(view, b, ages.get(b) ?? 0)) ||
-    a.task.localeCompare(b.task);
+    compareRanks(holdRank(view, a), holdRank(view, b)) || a.view.task.localeCompare(b.view.task);
 }
 
 function prOf(event: LedgerEvent): string | null {
@@ -364,7 +415,7 @@ function updatesOf(input: ViewInput, placer: Placer): UpdateView[] {
       topic: placer.at(event.home, event.task, event.ts * 1000).topic,
     };
   });
-  return updates.sort((a, b) => b.ts - a.ts).slice(0, MAX_UPDATES);
+  return updates.toSorted((a, b) => b.ts - a.ts).slice(0, MAX_UPDATES);
 }
 
 /** The PR a `ready` or `landed` summary refers to: the task's latest PR event at or before it. */
@@ -388,9 +439,9 @@ function topicViews(topics: TopicState): Record<string, TopicView> {
       name: topic.name,
       goal: topic.goal,
       status: topic.status,
-      queue: QUEUES.find((queue) => topics.doc.queues[queue].includes(id)) ?? null,
-      suggested_queue: topic.suggested_queue ?? null,
-      close_reason: topic.close_proposal?.reason ?? null,
+      queue: orNull(QUEUES.find((queue) => topics.doc.queues[queue].includes(id))),
+      suggested_queue: orNull(topic.suggested_queue),
+      close_reason: topic.close_proposal === undefined ? null : topic.close_proposal.reason,
       archived_at: null,
     };
   }
@@ -427,16 +478,15 @@ export function buildView(input: ViewInput): BoardView {
         pr: prForSummary(summary, ledger),
         topic: placer.current(summary.home, summary.task).topic,
       }))
-      .sort((a, b) => b.ts - a.ts),
+      .toSorted((a, b) => b.ts - a.ts),
   };
-  const ages = new Map<HoldView, number>();
+  const ranked: RankedHold[] = [];
   input.homes.forEach((home, index) => {
     const stale = (homes[index] as HomeView).stale;
     view.agents.push(...agentsOf(home, stale, placer, last));
-    const holds = holdsOf(home, stale, placer);
-    holds.forEach((hold, at) => ages.set(hold, home.report?.holds[at]?.hold_age_days ?? 0));
-    view.holds.push(...holds);
-    for (const question of home.report?.status_decisions ?? []) {
+    ranked.push(...holdsOf(home, stale, placer));
+    if (home.report === null) return;
+    for (const question of home.report.status_decisions) {
       view.questions.push({
         home: home.id,
         task: question.id,
@@ -446,6 +496,6 @@ export function buildView(input: ViewInput): BoardView {
       });
     }
   });
-  view.holds.sort(holdOrder(view, ages));
+  view.holds = ranked.toSorted(holdOrder(view)).map((entry) => entry.view);
   return view;
 }

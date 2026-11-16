@@ -1,6 +1,6 @@
 // The page's controller: polls the board, keeps the page state, runs the
 // actions buttons ask for, and handles dragging topics between queues.
-import type { Queue } from "../topics.js";
+import type { Queue } from "#board/topics.js";
 import { getJson, postJson, takeToken } from "./api.js";
 import type { Reply } from "./api.js";
 import { h, replaceChildren } from "./dom.js";
@@ -37,7 +37,9 @@ function uiState(): { focusKey: string | null; caret: number | null; opened: str
   return {
     focusKey,
     caret: focusKey === null ? null : (active?.selectionStart ?? null),
-    opened: [...app.querySelectorAll("details[open][data-key]")].map((element) => element.getAttribute("data-key") ?? ""),
+    opened: [...app.querySelectorAll("details[open][data-key]")].map(
+      (element) => element.getAttribute("data-key") ?? "",
+    ),
   };
 }
 
@@ -46,7 +48,8 @@ function render(): void {
   if (dragged !== null) return;
   const { focusKey, caret, opened } = uiState();
   replaceChildren(app, frame(page, actions));
-  for (const key of opened) app.querySelector(`details[data-key="${CSS.escape(key)}"]`)?.setAttribute("open", "");
+  for (const key of opened)
+    app.querySelector(`details[data-key="${CSS.escape(key)}"]`)?.setAttribute("open", "");
   if (focusKey === null) return;
   const input = app.querySelector<HTMLInputElement>(`[data-key="${CSS.escape(focusKey)}"]`);
   input?.focus();
@@ -65,7 +68,14 @@ function toast(text: string, countdownUntil?: number): void {
       close();
       return;
     }
-    replaceChildren(toastBox, h("div", { class: "card", onclick: close }, countdownUntil === undefined ? text : `${left} 秒後${text}`));
+    replaceChildren(
+      toastBox,
+      h(
+        "div",
+        { class: "card", onclick: close },
+        countdownUntil === undefined ? text : `${left} 秒後${text}`,
+      ),
+    );
   };
   draw();
   if (countdownUntil === undefined) toastTimer = window.setTimeout(close, TOAST_MS);
@@ -109,7 +119,10 @@ async function poll(): Promise<void> {
 }
 
 /** Sends a change to the board. Returns the reply's data when the board accepted it. */
-async function post(path: string, body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+async function post(
+  path: string,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown> | null> {
   if (page.down) {
     toast("看板服務沒有回應，這次沒有送出。");
     return null;
@@ -122,7 +135,8 @@ async function post(path: string, body: Record<string, unknown>): Promise<Record
     return null;
   }
   page.tokenBad = reply.status === 401;
-  page.notice = reply.status === 200 ? null : String(reply.data["message"] ?? "看板拒絕了這個操作。");
+  page.notice =
+    reply.status === 200 ? null : String(reply.data["message"] ?? "看板拒絕了這個操作。");
   await poll();
   render();
   return reply.status === 200 ? reply.data : null;
@@ -135,9 +149,14 @@ function queueOf(topic: string): Queue | null {
 /** Says what a move will and will not do, so nobody expects work to start or stop at once. */
 function moveFeedback(from: Queue | null, to: Queue): void {
   if (from === "later" && to !== "later") {
-    toast("會通知 first mate 重新評估派工；拖回「待辦」就不通知。", Date.now() + NOTIFY_SECONDS * 1000);
+    toast(
+      "會通知 first mate 重新評估派工；拖回「待辦」就不通知。",
+      Date.now() + NOTIFY_SECONDS * 1000,
+    );
   } else if (to === "later") {
-    toast("已移到「待辦」。已經在跑的 worker 不會停；還在排隊的項目要等 first mate 下次重新評估才會被停住。");
+    toast(
+      "已移到「待辦」。已經在跑的 worker 不會停；還在排隊的項目要等 first mate 下次重新評估才會被停住。",
+    );
   } else {
     toast("順序已更新。first mate 下次重新評估派工時才會照新順序，不會馬上開工。");
   }
@@ -185,14 +204,21 @@ const actions: Actions = {
   },
   move: (topic, queue, before) => {
     const from = queueOf(topic);
-    void post("topics/move", { id: topic, queue, ...(before === null ? {} : { before }) }).then((data) => {
-      if (data !== null) moveFeedback(from, queue);
-    });
+    void post("topics/move", { id: topic, queue, ...(before === null ? {} : { before }) }).then(
+      (data) => {
+        if (data !== null) moveFeedback(from, queue);
+      },
+    );
   },
   ask: (key, path, body) => {
     void post(path, body).then((data) => {
       if (data === null || typeof data["confirm"] !== "string") return;
-      page.pending.set(key, { path, body, confirm: data["confirm"], expiresAt: Number(data["expires_at"]) });
+      page.pending.set(key, {
+        path,
+        body,
+        confirm: data["confirm"],
+        expiresAt: Number(data["expires_at"]),
+      });
       render();
     });
   },
@@ -201,10 +227,13 @@ const actions: Actions = {
     if (pending === undefined) return;
     page.pending.delete(key);
     page.panel = null;
-    void post(pending.path, { ...pending.body, ...extra, confirm: pending.confirm }).then((data) => {
-      if (data !== null && key.startsWith("answer:")) page.drafts.delete(key.replace("answer:", "answer-text:"));
-      render();
-    });
+    void post(pending.path, { ...pending.body, ...extra, confirm: pending.confirm }).then(
+      (data) => {
+        if (data !== null && key.startsWith("answer:"))
+          page.drafts.delete(key.replace("answer:", "answer-text:"));
+        render();
+      },
+    );
   },
   cancel: (key) => {
     if (key === "notice") page.notice = null;
@@ -215,7 +244,8 @@ const actions: Actions = {
   direct: (home, task, key) => void sendDraft("direct", { home, task }, key),
   tag: (home, task, topic) => void post("agents/tag", { home, task, topic }),
   resend: (write) => {
-    if (write.state === "unknown") actions.ask(`resend:${write.id}`, "writes/resend", { write_id: write.id });
+    if (write.state === "unknown")
+      actions.ask(`resend:${write.id}`, "writes/resend", { write_id: write.id });
     else void post("writes/resend", { write_id: write.id });
   },
   ignore: (write) => void post("writes/ignore", { write_id: write.id }),
@@ -237,7 +267,10 @@ function dragOver(event: DragEvent): void {
   if (over === null) list.insertBefore(card, list.querySelector(".empty"));
   else if (over !== card) {
     const box = over.getBoundingClientRect();
-    over.parentElement?.insertBefore(card, event.clientY < box.top + box.height / 2 ? over : over.nextSibling);
+    over.parentElement?.insertBefore(
+      card,
+      event.clientY < box.top + box.height / 2 ? over : over.nextSibling,
+    );
   }
 }
 

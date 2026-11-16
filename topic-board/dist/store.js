@@ -1,6 +1,6 @@
 // Loads and saves the topic files. The service is their only writer.
 import fs from "node:fs";
-import { isRecord, readJsonFile, stringField, stringRecord, writeFileAtomic } from "./files.js";
+import { isRecord, readJsonFile, stringRecord, textField, writeFileAtomic } from "./files.js";
 import { QUEUES, emptyState, isQueue } from "./topics.js";
 const FILE_MODE = 0o644;
 function parseCloseProposal(raw) {
@@ -23,7 +23,7 @@ function parseTopic(id, raw) {
         name,
         goal,
         status: parseStatus(id, raw["status"]),
-        created_at: stringField(raw, "created_at") ?? "",
+        created_at: textField(raw, "created_at"),
         proposed_by: raw["proposed_by"] === "user" ? "user" : "firstmate",
     };
     if (isQueue(raw["suggested_queue"]))
@@ -40,7 +40,7 @@ function parseQueue(raw, topics) {
     return [...new Set(raw)].filter((id) => typeof id === "string" && topics[id]?.status === "confirmed");
 }
 function parseNextSeq(raw) {
-    return typeof raw === "number" && Number.isInteger(raw) && raw > 0 ? raw : 1;
+    return typeof raw === "number" && Number.isInteger(raw) ? Math.max(1, raw) : 1;
 }
 function parseDoc(raw) {
     if (!isRecord(raw) || raw["v"] !== 1)
@@ -65,7 +65,10 @@ function parseArchive(raw) {
     const archive = { v: 1, topics: {} };
     for (const [id, topic] of Object.entries(raw["topics"])) {
         const parsed = parseTopic(id, topic);
-        const archived = { ...parsed, archived_at: stringField(topic, "archived_at") ?? "" };
+        const archived = {
+            ...parsed,
+            archived_at: textField(topic, "archived_at"),
+        };
         archive.topics[id] = archived;
     }
     return archive;
@@ -76,7 +79,7 @@ function loadFile(file, parse, fallback) {
         raw = readJsonFile(file);
     }
     catch (error) {
-        throw new Error(`${file} 讀不懂：${error.message}`);
+        throw new Error(`${file} 讀不懂：${error.message}`, { cause: error });
     }
     if (raw === null)
         return fallback;
@@ -84,7 +87,7 @@ function loadFile(file, parse, fallback) {
         return parse(raw);
     }
     catch (error) {
-        throw new Error(`${file} 讀不懂：${error.message}`);
+        throw new Error(`${file} 讀不懂：${error.message}`, { cause: error });
     }
 }
 export function loadTopicState(paths) {

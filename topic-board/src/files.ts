@@ -42,7 +42,10 @@ export function readCompleteLines(file: string): string[] {
   const end = content.lastIndexOf(0x0a) + 1;
   if (end !== content.length) fs.truncateSync(file, end);
   if (end === 0) return [];
-  return content.subarray(0, end - 1).toString("utf8").split("\n");
+  return content
+    .subarray(0, end - 1)
+    .toString("utf8")
+    .split("\n");
 }
 
 export function appendLine(file: string, line: string, mode: number): void {
@@ -99,4 +102,15 @@ export class CodedError extends Error {
   ) {
     super(message);
   }
+}
+
+/** The string stored under `name`, or "" when it is absent or not a string. */
+export function textField(record: Record<string, unknown>, name: string): string {
+  const value = stringField(record, name);
+  return value === null ? "" : value;
+}
+
+/** Turns "absent" into null, for values that are shown as JSON. */
+export function orNull<T>(value: T | undefined): T | null {
+  return value === undefined ? null : value;
 }

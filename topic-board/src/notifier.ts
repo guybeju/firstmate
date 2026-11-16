@@ -27,7 +27,7 @@ export class DispatchNotifier {
   /** Call after every topic change with the topics the change made dispatchable. */
   observe(before: TopicState, after: TopicState, becameDispatchable: string[]): void {
     const due = Date.now() + this.delayMs;
-    for (const id of [...this.pending.keys()]) {
+    for (const id of this.pending.keys()) {
       const spot = dispatchableSpot(after, id);
       if (spot === null) this.pending.delete(id);
       else if (spot !== dispatchableSpot(before, id)) this.pending.set(id, due);
@@ -45,7 +45,7 @@ export class DispatchNotifier {
     this.stop();
     if (this.pending.size === 0) return;
     const earliest = Math.min(...this.pending.values());
-    this.timer = setTimeout(() => this.fire(), Math.max(0, earliest - Date.now()));
+    this.timer = setTimeout(() => this.fire(), earliest - Date.now());
   }
 
   /** Sends one notice for every topic due now or within the batch window. */
@@ -53,7 +53,8 @@ export class DispatchNotifier {
     const cutoff = Date.now() + BATCH_WINDOW_MS;
     const ready = [...this.pending].filter(([, dueAt]) => dueAt <= cutoff).map(([id]) => id);
     for (const id of ready) this.pending.delete(id);
-    if (ready.length > 0) this.notify(ready);
+    // The timer is set for the earliest pending topic, so at least that one is ready.
+    this.notify(ready);
     this.schedule();
   }
 }

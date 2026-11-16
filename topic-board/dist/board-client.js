@@ -30,7 +30,7 @@ function unavailable(reason, fix) {
 }
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Sends one request. "silent" means the service accepted the connection but never answered. */
-function exchange(socketPath, request, timeoutMs) {
+function exchange(socketPath, message, timeoutMs) {
     return new Promise((resolve) => {
         const connection = net.connect(socketPath);
         let received = "";
@@ -47,7 +47,7 @@ function exchange(socketPath, request, timeoutMs) {
         const timer = setTimeout(() => settle({ kind: "silent", sent }), timeoutMs);
         connection.setEncoding("utf8");
         connection.on("connect", () => {
-            connection.write(`${JSON.stringify(request)}\n`, () => {
+            connection.write(`${JSON.stringify(message)}\n`, () => {
                 sent = true;
             });
         });
@@ -159,7 +159,9 @@ async function terminate(pid) {
 async function killHung(config, paths) {
     const pid = readPidFile(paths.pid);
     const commandLine = pid === null ? "" : commandLineOf(pid);
-    if (pid === null || !commandLine.includes("board-server.js") || !commandLine.includes(config.state)) {
+    if (pid === null ||
+        !commandLine.includes("board-server.js") ||
+        !commandLine.includes(config.state)) {
         throw unavailable("看板服務沒有回應，而且找不到它的程序", `確認沒有別的程式佔著 ${paths.socket} 之後刪掉它再試`);
     }
     await terminate(pid);
@@ -358,7 +360,10 @@ async function restart(config, paths) {
 }
 async function open(config, paths) {
     const running = await ensureRunning(config, paths);
-    return finish({ ok: true, line: `http://127.0.0.1:${running.port}/#t=${readTrimmed(paths.token)}` });
+    return finish({
+        ok: true,
+        line: `http://127.0.0.1:${running.port}/#t=${readTrimmed(paths.token)}`,
+    });
 }
 /** summary reads its text from stdin: `summary [--home <id>] <task-id> <kind> -`. */
 async function summaryCommand(config, paths, args) {
@@ -392,7 +397,9 @@ async function run() {
     if (sub === "summary")
         return summaryCommand(config, paths, args);
     const lifecycle = LIFECYCLE[sub];
-    return lifecycle === undefined ? topicCommand(config, paths, sub, args) : lifecycle(config, paths);
+    return lifecycle === undefined
+        ? topicCommand(config, paths, sub, args)
+        : lifecycle(config, paths);
 }
 run().catch((error) => {
     if (error instanceof Exit) {

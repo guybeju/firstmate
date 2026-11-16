@@ -71,7 +71,8 @@ function answerLine(line) {
 function placed(command, known) {
     if (command.placement === "main")
         return "";
-    return secondmateArg(command.secondmate ?? "", command.placement === "remote", known);
+    const secondmate = command.secondmate === undefined ? "" : command.secondmate;
+    return secondmateArg(secondmate, command.placement === "remote", known);
 }
 function answerInvocation(command, known) {
     const stdin = answerLine(command.line);
@@ -105,7 +106,12 @@ function relayInvocation(command, known) {
         refuse(`unknown secondmate: ${command.secondmate}`);
     return {
         script: "fm-send.sh",
-        args: [idArg(command.secondmate, "secondmate id"), "--fire-and-forget", command.deliveryId, sendText(command.text)],
+        args: [
+            idArg(command.secondmate, "secondmate id"),
+            "--fire-and-forget",
+            command.deliveryId,
+            sendText(command.text),
+        ],
     };
 }
 function readInvocation(command, known) {
@@ -120,7 +126,11 @@ function readInvocation(command, known) {
         case "read-remote":
             return {
                 script: "fm-on.sh",
-                args: [secondmateArg(command.secondmate, true, known), "fm-topic-board-read.sh", ...readArgs(command)],
+                args: [
+                    secondmateArg(command.secondmate, true, known),
+                    "fm-topic-board-read.sh",
+                    ...readArgs(command),
+                ],
             };
     }
 }
@@ -129,9 +139,16 @@ function writeInvocation(command, known) {
         case "note":
             if (!REQUEST_ID.test(command.requestId))
                 refuse("malformed request id");
-            return { script: "fm-inbox.sh", args: ["note", "--request-id", command.requestId, "-"], stdin: command.body };
+            return {
+                script: "fm-inbox.sh",
+                args: ["note", "--request-id", command.requestId, "-"],
+                stdin: command.body,
+            };
         case "send":
-            return { script: "fm-send.sh", args: [idArg(command.task, "task id"), sendText(command.text)] };
+            return {
+                script: "fm-send.sh",
+                args: [idArg(command.task, "task id"), sendText(command.text)],
+            };
         case "relay":
             return relayInvocation(command, known);
         case "answer":
@@ -165,8 +182,13 @@ export function commandRunner(config) {
             encoding: "utf8",
         }, (error, stdout, stderr) => {
             const code = error === null ? 0 : typeof error.code === "number" ? error.code : null;
-            resolve({ code, stdout, stderr: error !== null && code === null ? `${stderr}${error.message}` : stderr });
+            resolve({
+                code,
+                stdout,
+                stderr: error !== null && code === null ? `${stderr}${error.message}` : stderr,
+            });
         });
-        child.stdin?.end(invocation.stdin ?? "");
+        if (child.stdin !== null)
+            child.stdin.end(invocation.stdin);
     });
 }

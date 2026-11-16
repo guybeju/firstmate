@@ -65,7 +65,8 @@ async function changeBody(request, options) {
     if (origin === undefined || !ownHosts(options.port).some((host) => origin === `http://${host}`)) {
         throw new Rejection(403, "origin is not this board");
     }
-    const type = (request.headers["content-type"] ?? "").split(";")[0]?.trim().toLowerCase();
+    const header = request.headers["content-type"];
+    const type = header === undefined ? "" : header.split(";")[0].trim().toLowerCase();
     if (type !== "application/json")
         throw new Rejection(415, "content type is not application/json");
     const raw = await readBody(request);
@@ -83,16 +84,20 @@ async function changeBody(request, options) {
 async function serveApi(request, response, url, options) {
     if (!tokenMatches(options.tokenFile, request.headers.authorization))
         throw new Rejection(401, "missing or wrong token");
-    const method = request.method ?? "GET";
+    const method = String(request.method);
     if (method !== "GET" && method !== "POST")
         throw new Rejection(405, "method not allowed");
     const body = method === "POST" ? await changeBody(request, options) : {};
     const reply = await options.api(method, url.pathname.slice("/api/".length), url.searchParams, body);
     sendJson(response, reply.status, reply.body);
 }
+function contentType(file) {
+    const known = CONTENT_TYPES[path.extname(file)];
+    return known === undefined ? "application/octet-stream" : known;
+}
 /** Maps an /assets/ file name to a file in one of the asset directories; no path is ever joined from the URL. */
 function findAsset(name, assetDirs) {
-    if (!ASSET_NAME.test(name) || name.includes(".."))
+    if (!ASSET_NAME.test(name))
         return null;
     for (const dir of assetDirs) {
         if (fs.existsSync(dir) && fs.readdirSync(dir).includes(name))
@@ -103,22 +108,27 @@ function findAsset(name, assetDirs) {
 function serveStatic(request, response, url, options) {
     if (request.method !== "GET")
         throw new Rejection(405, "method not allowed");
-    const file = url.pathname === "/" ? options.indexFile : url.pathname.startsWith("/assets/") ? findAsset(url.pathname.slice(8), options.assetDirs) : null;
+    const file = url.pathname === "/"
+        ? options.indexFile
+        : url.pathname.startsWith("/assets/")
+            ? findAsset(url.pathname.slice(8), options.assetDirs)
+            : null;
     if (file === null || !fs.existsSync(file))
         throw new Rejection(404, "not found");
-    send(response, 200, CONTENT_TYPES[path.extname(file)] ?? "application/octet-stream", fs.readFileSync(file));
+    send(response, 200, contentType(file), fs.readFileSync(file));
 }
 async function route(request, response, options) {
     if (request.headers.upgrade !== undefined)
         throw new Rejection(400, "upgrade is not supported");
-    const host = request.headers.host ?? "";
-    if (!ownHosts(options.port).includes(host))
+    const host = request.headers.host;
+    if (host === undefined || !ownHosts(options.port).includes(host)) {
         throw new Rejection(403, "host is not this board");
+    }
     if (request.method === "OPTIONS")
         throw new Rejection(405, "preflight is not answered");
     let url;
     try {
-        url = new URL(request.url ?? "/", `http://${host}`);
+        url = new URL(String(request.url), `http://${host}`);
     }
     catch {
         throw new Rejection(400, "malformed URL");

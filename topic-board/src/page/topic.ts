@@ -1,16 +1,31 @@
 // One topic's page: pending decisions, updates, its agents, and the message box.
-import type { AgentView, SummaryView, UpdateView } from "../view.js";
+import type { AgentView, SummaryView, UpdateView } from "#board/view.js";
 import { h } from "./dom.js";
 import type { Child } from "./dom.js";
 import { mergeConfirm, mergeMenu } from "./home.js";
-import { draftInput, holdCard, light, questionRow, summaryRow, updateRow, when, writeRows } from "./parts.js";
+import {
+  draftInput,
+  holdCard,
+  light,
+  questionRow,
+  summaryRow,
+  updateRow,
+  when,
+  writeRows,
+} from "./parts.js";
 import { QUEUE_LABEL } from "./state.js";
 import type { Actions, Page, View } from "./state.js";
 
 const MAX_UPDATES = 200;
 
 /** A line of text with an edit button that swaps it for an input in place. */
-function editable(page: Page, actions: Actions, id: string, field: "name" | "goal", text: string): Child {
+function editable(
+  page: Page,
+  actions: Actions,
+  id: string,
+  field: "name" | "goal",
+  text: string,
+): Child {
   const key = `${field}:${id}`;
   const op = field === "name" ? "rename" : "goal";
   if (!page.editing.has(key)) {
@@ -27,7 +42,11 @@ function editable(page: Page, actions: Actions, id: string, field: "name" | "goa
   input.addEventListener("keydown", (event) => {
     if (event.key === "Escape") actions.edit(key, false);
   });
-  return [input, h("button", { class: "primary", onclick: save }, "儲存"), h("button", { onclick: () => actions.edit(key, false) }, "取消")];
+  return [
+    input,
+    h("button", { class: "primary", onclick: save }, "儲存"),
+    h("button", { onclick: () => actions.edit(key, false) }, "取消"),
+  ];
 }
 
 function menu(page: Page, view: View, actions: Actions, id: string): Child {
@@ -36,7 +55,14 @@ function menu(page: Page, view: View, actions: Actions, id: string): Child {
   return h(
     "span",
     { class: "menu" },
-    h("button", { "aria-label": "更多操作", onclick: () => actions.setPanel(page.panel === "menu" ? null : "menu") }, "⋯"),
+    h(
+      "button",
+      {
+        "aria-label": "更多操作",
+        onclick: () => actions.setPanel(page.panel === "menu" ? null : "menu"),
+      },
+      "⋯",
+    ),
     page.panel === "menu"
       ? h(
           "div",
@@ -74,7 +100,17 @@ function panels(page: Page, view: View, actions: Actions, id: string): Child {
     );
   }
   if (page.panel === "merge" && !page.pending.has(key)) {
-    return h("div", { class: "confirm" }, "要併進哪一個議題？", h("div", { class: "btns" }, mergeMenu(view, actions, id, key), h("button", { onclick: () => actions.setPanel(null) }, "取消")));
+    return h(
+      "div",
+      { class: "confirm" },
+      "要併進哪一個議題？",
+      h(
+        "div",
+        { class: "btns" },
+        mergeMenu(view, actions, id, key),
+        h("button", { onclick: () => actions.setPanel(null) }, "取消"),
+      ),
+    );
   }
   return mergeConfirm(page, view, actions, key);
 }
@@ -82,9 +118,20 @@ function panels(page: Page, view: View, actions: Actions, id: string): Child {
 function header(page: Page, view: View, actions: Actions, id: string): Child {
   const topic = view.topics[id];
   if (topic === undefined) return null;
-  const place = topic.status === "archived" ? "已封存" : topic.queue === null ? "提議中" : `佇列：${QUEUE_LABEL[topic.queue]}`;
+  const place =
+    topic.status === "archived"
+      ? "已封存"
+      : topic.queue === null
+        ? "提議中"
+        : `佇列：${QUEUE_LABEL[topic.queue]}`;
   return [
-    h("div", { class: "titleline" }, editable(page, actions, id, "name", topic.name), h("span", { class: "pill" }, place), menu(page, view, actions, id)),
+    h(
+      "div",
+      { class: "titleline" },
+      editable(page, actions, id, "name", topic.name),
+      h("span", { class: "pill" }, place),
+      menu(page, view, actions, id),
+    ),
     h("div", { class: "titleline" }, editable(page, actions, id, "goal", topic.goal)),
     panels(page, view, actions, id),
   ];
@@ -115,8 +162,15 @@ function decisions(page: Page, view: View, actions: Actions, id: string): Child 
     holds.filter((hold) => hold.live).map((hold) => holdCard(page, view, actions, hold, false)),
     deferred.length === 0
       ? null
-      : h("details", { "data-key": `deferred:${id}` }, h("summary", {}, `暫緩 ${deferred.length}`), deferred.map((hold) => holdCard(page, view, actions, hold, false))),
-    view.questions.filter((question) => question.topic === id).map((question) => questionRow(view, actions, question, false)),
+      : h(
+          "details",
+          { "data-key": `deferred:${id}` },
+          h("summary", {}, `暫緩 ${deferred.length}`),
+          deferred.map((hold) => holdCard(page, view, actions, hold, false)),
+        ),
+    view.questions
+      .filter((question) => question.topic === id)
+      .map((question) => questionRow(view, actions, question, false)),
   );
 }
 
@@ -124,16 +178,28 @@ type Entry = { ts: number; row: Child };
 
 function updates(view: View, actions: Actions, id: string): Child {
   const entries: Entry[] = [
-    ...view.summaries.filter((summary: SummaryView) => summary.topic === id).map((summary) => ({ ts: summary.ts, row: summaryRow(view, actions, summary, false) })),
-    ...view.updates.filter((update: UpdateView) => update.topic === id).map((update) => ({ ts: update.ts, row: updateRow(update) })),
+    ...view.summaries
+      .filter((summary: SummaryView) => summary.topic === id)
+      .map((summary) => ({ ts: summary.ts, row: summaryRow(view, actions, summary, false) })),
+    ...view.updates
+      .filter((update: UpdateView) => update.topic === id)
+      .map((update) => ({ ts: update.ts, row: updateRow(update) })),
   ];
-  const rows = entries.sort((a, b) => b.ts - a.ts).slice(0, MAX_UPDATES);
-  const ledgerOff = view.homes.filter((home) => home.ledger_enabled === false).map((home) => home.id);
+  const rows = entries.toSorted((a, b) => b.ts - a.ts).slice(0, MAX_UPDATES);
+  const ledgerOff = view.homes
+    .filter((home) => home.ledger_enabled === false)
+    .map((home) => home.id);
   return h(
     "section",
     {},
     h("h2", {}, "更新"),
-    ledgerOff.length === 0 ? null : h("p", { class: "note" }, `帳本未開的 home：${ledgerOff.join("、")}。它們的 task 不會有更新；開帳本的指令見頁首的說明。`),
+    ledgerOff.length === 0
+      ? null
+      : h(
+          "p",
+          { class: "note" },
+          `帳本未開的 home：${ledgerOff.join("、")}。它們的 task 不會有更新；開帳本的指令見頁首的說明。`,
+        ),
     rows.length === 0 ? h("p", { class: "note" }, "還沒有更新。") : rows.map((entry) => entry.row),
   );
 }
@@ -150,7 +216,9 @@ function agentCard(page: Page, actions: Actions, agent: AgentView): Child {
       h("span", {}, light(agent)),
       h("b", {}, agent.task),
       h("span", { class: "pill" }, agent.home),
-      agent.updated_at === null ? null : h("span", { class: "note" }, `最後更新 ${when(agent.updated_at)}`),
+      agent.updated_at === null
+        ? null
+        : h("span", { class: "note" }, `最後更新 ${when(agent.updated_at)}`),
       agent.stale ? h("span", { class: "pill warn" }, "資料過期") : null,
     ),
     h("div", { class: "note" }, `${agent.state} ${agent.detail}`),
@@ -160,14 +228,32 @@ function agentCard(page: Page, actions: Actions, agent: AgentView): Child {
       draftInput(page, actions, key, "只給這個 agent 的訊息", send),
       h("button", { onclick: send }, agent.home === "main" ? "直送" : `經 ${agent.home} 轉達`),
     ),
-    agent.home === "main" ? null : h("div", { class: "note" }, "「已送達」只代表訊息到了 secondmate 的收件匣，它轉給 worker 可能還要一點時間。"),
-    writeRows(page, actions, (write) => (write.kind === "send" || write.kind === "relay") && write.home === agent.home && write.task === agent.task),
+    agent.home === "main"
+      ? null
+      : h(
+          "div",
+          { class: "note" },
+          "「已送達」只代表訊息到了 secondmate 的收件匣，它轉給 worker 可能還要一點時間。",
+        ),
+    writeRows(
+      page,
+      actions,
+      (write) =>
+        (write.kind === "send" || write.kind === "relay") &&
+        write.home === agent.home &&
+        write.task === agent.task,
+    ),
   );
 }
 
 export function topicPage(page: Page, view: View, actions: Actions, id: string): Child {
   if (view.topics[id] === undefined) {
-    return h("p", {}, "沒有這個議題。", h("button", { class: "link", onclick: () => actions.open(null) }, "回首頁"));
+    return h(
+      "p",
+      {},
+      "沒有這個議題。",
+      h("button", { class: "link", onclick: () => actions.open(null) }, "回首頁"),
+    );
   }
   const key = `message:${id}`;
   const send = (): void => actions.message(id, key);
@@ -179,7 +265,14 @@ export function topicPage(page: Page, view: View, actions: Actions, id: string):
       header(page, view, actions, id),
       decisions(page, view, actions, id),
       updates(view, actions, id),
-      h("section", {}, h("h2", {}, "關聯 agent"), view.agents.filter((agent) => agent.topic === id).map((agent) => agentCard(page, actions, agent))),
+      h(
+        "section",
+        {},
+        h("h2", {}, "關聯 agent"),
+        view.agents
+          .filter((agent) => agent.topic === id)
+          .map((agent) => agentCard(page, actions, agent)),
+      ),
     ),
     h(
       "div",
@@ -187,7 +280,18 @@ export function topicPage(page: Page, view: View, actions: Actions, id: string):
       h(
         "div",
         { class: "inner" },
-        h("div", { class: "btns" }, draftInput(page, actions, key, `給 first mate 的訊息（會附上議題「${view.topics[id]?.name ?? id}」）`, send), h("button", { class: "primary", onclick: send }, "送給 first mate")),
+        h(
+          "div",
+          { class: "btns" },
+          draftInput(
+            page,
+            actions,
+            key,
+            `給 first mate 的訊息（會附上議題「${view.topics[id]?.name ?? id}」）`,
+            send,
+          ),
+          h("button", { class: "primary", onclick: send }, "送給 first mate"),
+        ),
         writeRows(page, actions, (write) => write.kind === "note" && write.topic === id),
       ),
     ),

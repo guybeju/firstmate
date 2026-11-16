@@ -18,7 +18,8 @@ function errorText(result) {
     return (result.stderr.trim() || result.stdout.trim() || `exit ${result.code ?? "?"}`).slice(0, 600);
 }
 function lastLine(text) {
-    return text.trimEnd().split("\n").pop() ?? "";
+    const lines = text.trimEnd().split("\n");
+    return lines[lines.length - 1];
 }
 /** True when repeating the write after an unknown outcome cannot make it take effect twice. */
 export function isDedupable(plan) {
@@ -41,7 +42,9 @@ function noteOutcome(result) {
     if (result.code === 0)
         return { kind: "delivered" };
     // Exit 3: the note is saved but firstmate was not woken; replaying the same request id wakes it.
-    return result.code === 3 ? { kind: "retry", error: errorText(result) } : { kind: "failed", error: errorText(result) };
+    return result.code === 3
+        ? { kind: "retry", error: errorText(result) }
+        : { kind: "failed", error: errorText(result) };
 }
 /** Reads fm-captain-hold.sh answers output for the line about `task`. */
 function answerOutcome(result, task, remote) {
@@ -144,7 +147,13 @@ export class WriteEngine {
         this.timers.clear();
     }
     audit(record, extra) {
-        const line = { ts: new Date().toISOString(), write_id: record.id, state: record.state, attempt: record.attempt, ...extra };
+        const line = {
+            ts: new Date().toISOString(),
+            write_id: record.id,
+            state: record.state,
+            attempt: record.attempt,
+            ...extra,
+        };
         appendLine(this.auditFile, JSON.stringify(line), AUDIT_MODE);
     }
     setState(record, state, error, nextAt = null) {
@@ -168,7 +177,8 @@ export class WriteEngine {
      * does not hold up the other writes to that home.
      */
     exclusive(home, task) {
-        const previous = this.queues.get(home) ?? Promise.resolve();
+        const queued = this.queues.get(home);
+        const previous = queued === undefined ? Promise.resolve() : queued;
         const result = previous.then(task);
         this.queues.set(home, result.then(() => undefined, () => undefined));
         return result;
@@ -214,7 +224,9 @@ export class WriteEngine {
                 return noteOutcome(await this.run({ kind: "note", requestId: plan.requestId, body: plan.body }));
             case "send": {
                 const result = await this.run({ kind: "send", task: plan.task, text: record.text });
-                return result.code === 0 ? { kind: "delivered" } : { kind: "failed", error: errorText(result) };
+                return result.code === 0
+                    ? { kind: "delivered" }
+                    : { kind: "failed", error: errorText(result) };
             }
             case "relay":
                 return this.attemptRelay(record, plan);
@@ -225,8 +237,13 @@ export class WriteEngine {
         }
     }
     async attemptRelay(record, plan) {
-        const text = `轉給 ${record.task ?? ""}：${record.text}`;
-        const result = await this.run({ kind: "relay", secondmate: plan.secondmate, deliveryId: plan.deliveryId, text });
+        const text = `轉給 ${String(record.task)}：${record.text}`;
+        const result = await this.run({
+            kind: "relay",
+            secondmate: plan.secondmate,
+            deliveryId: plan.deliveryId,
+            text,
+        });
         if (result.code === 0)
             return { kind: "delivered" };
         // Exit 3: fm-send.sh retried once and the remote delivery is still unconfirmed.
@@ -237,8 +254,13 @@ export class WriteEngine {
     /** An answer is two steps: record it on the hold, then tell firstmate. The note waits for the answer. */
     async attemptAnswer(record, plan) {
         if (!plan.answered) {
-            const command = { kind: "answer", placement: plan.placement, line: plan.line, ...secondmateOf(record) };
-            const outcome = answerOutcome(await this.run(command), record.task ?? "", plan.placement === "remote");
+            const command = {
+                kind: "answer",
+                placement: plan.placement,
+                line: plan.line,
+                ...secondmateOf(record),
+            };
+            const outcome = answerOutcome(await this.run(command), String(record.task), plan.placement === "remote");
             if (outcome !== "closed")
                 return outcome;
             plan.answered = true;
@@ -262,7 +284,13 @@ export class WriteEngine {
             if (current !== plan.lastLineAtSend)
                 return { kind: "handled_elsewhere" };
         }
-        const command = { kind: "tag", placement: plan.placement, task: plan.task, topic: plan.topic, ...secondmateOf(record) };
+        const command = {
+            kind: "tag",
+            placement: plan.placement,
+            task: plan.task,
+            topic: plan.topic,
+            ...secondmateOf(record),
+        };
         const result = await this.run(command);
         if (result.code === 0)
             return { kind: "delivered" };

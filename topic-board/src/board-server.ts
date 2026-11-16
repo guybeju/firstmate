@@ -16,7 +16,6 @@ import {
   fileSize,
   isAlive,
   isRecord,
-  readCompleteLines,
   readPidFile,
   removeStaleTemps,
   stringField,
@@ -130,7 +129,10 @@ function commit(service: Service, result: TopicResult): BoardResponse {
 }
 
 /** A handler either rejects malformed arguments or returns the topic change to persist. */
-type TopicHandler = (service: Service, args: Record<string, unknown>) => TopicResult | { usage: string };
+type TopicHandler = (
+  service: Service,
+  args: Record<string, unknown>,
+) => TopicResult | { usage: string };
 
 function movePosition(args: Record<string, unknown>): MovePosition | null {
   const before = args["before"];
@@ -146,11 +148,18 @@ const TOPIC_HANDLERS: Record<string, TopicHandler> = {
     const goal = stringField(args, "goal");
     const queue = optionalQueue(args);
     const id = args["id"];
-    if (name === null || goal === null || queue === null) return { usage: "propose 需要名稱與 --goal。" };
+    if (name === null || goal === null || queue === null)
+      return { usage: "propose 需要名稱與 --goal。" };
     if (id !== undefined && typeof id !== "string") return { usage: "--id 要是字串。" };
     return topics.propose(
       service.state,
-      { name, goal, by: "firstmate", ...(id === undefined ? {} : { id }), ...(queue === undefined ? {} : { queue }) },
+      {
+        name,
+        goal,
+        by: "firstmate",
+        ...(id === undefined ? {} : { id }),
+        ...(queue === undefined ? {} : { queue }),
+      },
       now(),
     );
   },
@@ -247,12 +256,16 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T
 }
 
 /** The home a `--home` argument names, or a refusal when it is not a registered secondmate. */
-async function homeArg(service: Service, args: Record<string, unknown>): Promise<string | BoardResponse> {
+async function homeArg(
+  service: Service,
+  args: Record<string, unknown>,
+): Promise<string | BoardResponse> {
   const home = args["home"];
   if (home === undefined) return MAIN_HOME;
   if (typeof home !== "string") return usage("--home 要是 secondmate id。");
   // A board started just now has never read the main home, so it does not know the secondmates yet.
-  if (!service.poller.hasMainReport()) await withTimeout(service.poller.readNow(MAIN_HOME), LOOKUP_WAIT_MS, false);
+  if (!service.poller.hasMainReport())
+    await withTimeout(service.poller.readNow(MAIN_HOME), LOOKUP_WAIT_MS, false);
   return service.poller.knows(home) && home !== MAIN_HOME
     ? home
     : refused(`--home ${home} 不是已註冊的 secondmate。`);
@@ -264,7 +277,8 @@ async function homeArg(service: Service, args: Record<string, unknown>): Promise
  * as knowing the task has no topic.
  */
 async function reminderPrefix(service: Service, home: string, task: string): Promise<string> {
-  const place = (): ReturnType<typeof placeTask> => placeTask(service.state, service.poller.snapshots(), home, task);
+  const place = (): ReturnType<typeof placeTask> =>
+    placeTask(service.state, service.poller.snapshots(), home, task);
   let placement = place();
   if (placement.reason === "no-tag") {
     const read = await withTimeout(service.poller.readFresh(home), LOOKUP_WAIT_MS, false);
@@ -272,7 +286,9 @@ async function reminderPrefix(service: Service, home: string, task: string): Pro
     placement = place();
   }
   if (placement.topic === null) return "未分類：";
-  const name = service.state.doc.topics[placement.topic]?.name ?? service.state.archive.topics[placement.topic]?.name;
+  const name =
+    service.state.doc.topics[placement.topic]?.name ??
+    service.state.archive.topics[placement.topic]?.name;
   return `${name ?? placement.topic}：`;
 }
 
@@ -293,7 +309,8 @@ function summaryText(args: Record<string, unknown>): string | BoardResponse {
 async function summary(service: Service, args: Record<string, unknown>): Promise<BoardResponse> {
   const task = taskArg(args);
   const kind = SUMMARY_KINDS.find((name) => name === args["kind"]);
-  if (task === null || kind === undefined) return usage("summary 需要 task id 與 ready、report、failed、landed 其中一種。");
+  if (task === null || kind === undefined)
+    return usage("summary 需要 task id 與 ready、report、failed、landed 其中一種。");
   const text = summaryText(args);
   if (typeof text !== "string") return text;
   const home = await homeArg(service, args);
@@ -349,10 +366,12 @@ function actionContext(service: Service): ActionContext {
  * a change no read announces, so each home's staleness is part of the version.
  */
 function viewVersion(service: Service): string {
-  const now = Date.now();
+  const nowMs = Date.now();
   const stale = service.poller
     .snapshots()
-    .map((home) => (home.lastOkAt === null || now - home.lastOkAt > service.timings.staleMs ? "1" : "0"));
+    .map((home) =>
+      home.lastOkAt === null || nowMs - home.lastOkAt > service.timings.staleMs ? "1" : "0",
+    );
   return `${service.version}-${stale.join("")}`;
 }
 
@@ -381,7 +400,9 @@ async function dump(service: Service, args: Record<string, unknown>): Promise<Bo
 }
 
 function actionResponse(result: ActionResult): BoardResponse {
-  return result.ok ? { ok: true, line: `ok ${result.write.id}`, data: { write_id: result.write.id } } : refused(result.line);
+  return result.ok
+    ? { ok: true, line: `ok ${result.write.id}`, data: { write_id: result.write.id } }
+    : refused(result.line);
 }
 
 /** Test-only: submit a write the way the browser API will. */
@@ -392,13 +413,23 @@ async function testWrite(service: Service, args: Record<string, unknown>): Promi
     case "message":
       return actionResponse(actions.message(context, field("topic"), field("text"), "socket"));
     case "direct":
-      return actionResponse(actions.direct(context, field("home"), field("task"), field("text"), "socket"));
+      return actionResponse(
+        actions.direct(context, field("home"), field("task"), field("text"), "socket"),
+      );
     case "tag":
-      return actionResponse(actions.tagAgent(context, field("home"), field("task"), field("topic"), "socket"));
+      return actionResponse(
+        actions.tagAgent(context, field("home"), field("task"), field("topic"), "socket"),
+      );
     case "answer": {
       const mode = actions.ANSWER_MODES.find((name) => name === args["mode"]);
       if (mode === undefined) return usage("mode 要是 done 或 release。");
-      const input = { home: field("home"), task: field("task"), answer: field("answer"), label: field("label"), mode };
+      const input = {
+        home: field("home"),
+        task: field("task"),
+        answer: field("answer"),
+        label: field("label"),
+        mode,
+      };
       return actionResponse(actions.answer(context, input, "socket"));
     }
     default:
@@ -407,7 +438,10 @@ async function testWrite(service: Service, args: Record<string, unknown>): Promi
 }
 
 async function testResend(service: Service, args: Record<string, unknown>): Promise<BoardResponse> {
-  const problem = service.writes.resend(stringField(args, "write_id") ?? "", args["confirmed"] === true);
+  const problem = service.writes.resend(
+    stringField(args, "write_id") ?? "",
+    args["confirmed"] === true,
+  );
   return problem === null ? { ok: true, line: "ok" } : refused(problem);
 }
 
@@ -425,7 +459,9 @@ const SERVICE_HANDLERS: Record<string, AsyncHandler> = {
   "reset-token": async (service) => resetToken(service),
   summary,
   which,
-  ...(TEST_MODE ? { dump, "test-write": testWrite, "test-resend": testResend, "test-ignore": testIgnore } : {}),
+  ...(TEST_MODE
+    ? { dump, "test-write": testWrite, "test-resend": testResend, "test-ignore": testIgnore }
+    : {}),
 };
 
 async function handle(service: Service, request: BoardRequest): Promise<BoardResponse> {
@@ -447,7 +483,9 @@ function parseRequest(line: string): BoardRequest | null {
   return { v: 1, op, args };
 }
 
-function shutdown(service: Boot & Partial<Pick<Service, "ipc" | "poller" | "writes" | "notifier">>): void {
+function shutdown(
+  service: Boot & Partial<Pick<Service, "ipc" | "poller" | "writes" | "notifier">>,
+): void {
   log("stopping");
   service.poller?.stop();
   service.writes?.stop();
@@ -493,13 +531,15 @@ function serveConnection(service: Service, connection: net.Socket): void {
   });
 }
 
+/** A positive FM_TOPIC_BOARD_<name>_MS from the environment, else `fallback`. */
+function override(name: string, fallback: number): number {
+  const value = Number(process.env[`FM_TOPIC_BOARD_${name}_MS`]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 /** Test runs may shorten the poll timings through FM_TOPIC_BOARD_*_MS variables. */
 function pollTimings(): PollTimings {
   if (!TEST_MODE) return DEFAULT_TIMINGS;
-  const override = (name: string, fallback: number): number => {
-    const value = Number(process.env[`FM_TOPIC_BOARD_${name}_MS`]);
-    return Number.isFinite(value) && value > 0 ? value : fallback;
-  };
   return {
     ...DEFAULT_TIMINGS,
     localMs: override("LOCAL", DEFAULT_TIMINGS.localMs),
@@ -516,14 +556,16 @@ function writeTimings(): WriteTimings {
   const resume = Number(process.env["FM_TOPIC_BOARD_RESUME_MS"]);
   return {
     ...DEFAULT_WRITE_TIMINGS,
-    ...(delays.every((delay) => Number.isFinite(delay) && delay > 0) ? { retryDelaysMs: delays } : {}),
+    ...(delays.every((delay) => Number.isFinite(delay) && delay > 0)
+      ? { retryDelaysMs: delays }
+      : {}),
     ...(Number.isFinite(resume) && resume > 0 ? { resumeWindowMs: resume } : {}),
   };
 }
 
 function notifyDelay(): number {
-  const override = Number(process.env["FM_TOPIC_BOARD_NOTIFY_MS"]);
-  return TEST_MODE && Number.isFinite(override) && override > 0 ? override : NOTIFY_DELAY_MS;
+  const configured = Number(process.env["FM_TOPIC_BOARD_NOTIFY_MS"]);
+  return TEST_MODE && Number.isFinite(configured) && configured > 0 ? configured : NOTIFY_DELAY_MS;
 }
 
 /** Tells firstmate which topics just became dispatchable, as one note. */
@@ -548,11 +590,24 @@ function notifyDispatchable(service: Service, topicIds: string[]): void {
 
 /** Records a delivered answer or tag as a system record and re-reads the home it changed. */
 function recordDelivery(service: Service, record: WriteRecord): void {
-  const kinds: Partial<Record<WriteRecord["plan"]["type"], string>> = { answer: "hold.answered", tag: "agent.tagged" };
+  const kinds: Partial<Record<WriteRecord["plan"]["type"], string>> = {
+    answer: "hold.answered",
+    tag: "agent.tagged",
+  };
   const kind = kinds[record.plan.type];
   if (kind === undefined) return;
-  const text = record.plan.type === "answer" ? `在看板回答 ${record.home}/${record.task ?? ""}：${record.text}` : `${record.home}/${record.task ?? ""} ${record.text}`;
-  service.journal.appendBoard({ ts: epochSeconds(), kind, topic: record.topic, home: record.home, task: record.task, text });
+  const text =
+    record.plan.type === "answer"
+      ? `在看板回答 ${record.home}/${record.task ?? ""}：${record.text}`
+      : `${record.home}/${record.task ?? ""} ${record.text}`;
+  service.journal.appendBoard({
+    ts: epochSeconds(),
+    kind,
+    topic: record.topic,
+    home: record.home,
+    task: record.task,
+    text,
+  });
   service.version += 1;
   void service.poller.readNow(record.home);
 }
@@ -588,7 +643,9 @@ function loadService(boot: Boot): Service {
         secondmates: () => service.poller.secondmates(),
         readTags: async (home, task) =>
           (await service.poller.readFresh(home))
-            ? (service.poller.snapshots().find((entry) => entry.id === home)?.report?.topics[task] ?? "")
+            ? (service.poller.snapshots().find((entry) => entry.id === home)?.report?.topics[
+                task
+              ] ?? "")
             : null,
         prepare: async () => {
           await service.poller.readNow(MAIN_HOME);
@@ -633,7 +690,13 @@ function serveBrowser(service: Service): void {
     }),
     // Only the path is recorded: a query string could carry a token someone pasted into the URL.
     onRejected: (reason, request) => {
-      const entry = { ts: new Date().toISOString(), rejected: reason, host: request.headers.host ?? null, origin: request.headers.origin ?? null, path: (request.url ?? "").split("?")[0] ?? null };
+      const entry = {
+        ts: new Date().toISOString(),
+        rejected: reason,
+        host: request.headers.host ?? null,
+        origin: request.headers.origin ?? null,
+        path: (request.url ?? "").split("?")[0] ?? null,
+      };
       appendLine(service.paths.audit, JSON.stringify(entry), PRIVATE_FILE);
     },
   });
@@ -643,7 +706,9 @@ function bindSocket(service: Service): void {
   const { paths } = service;
   fs.rmSync(paths.socket, { force: true });
   const ipc = net.createServer((connection) => serveConnection(service, connection));
-  ipc.on("error", (error) => failStartup(paths, `socket 綁不起來（${error.message}）`, "檢查 state/topic-board 的權限"));
+  ipc.on("error", (error) =>
+    failStartup(paths, `socket 綁不起來（${error.message}）`, "檢查 state/topic-board 的權限"),
+  );
   const previousMask = process.umask(0o177);
   ipc.listen(paths.socket, () => {
     process.umask(previousMask);
@@ -678,7 +743,11 @@ function becomeTheBoard(boot: Boot): void {
 function yieldOrFail(boot: Boot): void {
   const { paths, config } = boot;
   const holderIsNotBoard = (): never =>
-    failStartup(paths, `埠 ${config.port} 被別的程式佔用`, "在 config/topic-board-port 寫另一個埠號");
+    failStartup(
+      paths,
+      `埠 ${config.port} 被別的程式佔用`,
+      "在 config/topic-board-port 寫另一個埠號",
+    );
   const holder = readPidFile(paths.pid);
   if (holder !== null && holder !== process.pid && isAlive(holder)) {
     log(`board ${holder} already holds the port; exiting`);
@@ -713,10 +782,21 @@ function main(): void {
     response.writeHead(404, { "Content-Type": "text/plain" });
     response.end("not found\n");
   });
-  const boot: Boot = { config, paths, bootId: crypto.randomBytes(8).toString("hex"), startedAt: now(), web };
+  const boot: Boot = {
+    config,
+    paths,
+    bootId: crypto.randomBytes(8).toString("hex"),
+    startedAt: now(),
+    web,
+  };
   web.once("error", (error: NodeJS.ErrnoException) => {
     if (error.code === "EADDRINUSE") yieldOrFail(boot);
-    else failStartup(paths, `埠 ${config.port} 綁不起來（${error.message}）`, "在 config/topic-board-port 寫另一個埠號");
+    else
+      failStartup(
+        paths,
+        `埠 ${config.port} 綁不起來（${error.message}）`,
+        "在 config/topic-board-port 寫另一個埠號",
+      );
   });
   web.listen(config.port, "127.0.0.1", () => becomeTheBoard(boot));
   process.on("SIGTERM", () => shutdown(boot));

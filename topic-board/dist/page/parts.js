@@ -1,6 +1,11 @@
 import { h } from "./dom.js";
 import { BAD_WRITES, LIGHT_LABEL, WRITE_LABEL } from "./state.js";
-const SUMMARY_LABEL = { ready: "就緒", report: "報告", failed: "失敗", landed: "落地" };
+const SUMMARY_LABEL = {
+    ready: "就緒",
+    report: "報告",
+    failed: "失敗",
+    landed: "落地",
+};
 const EVENT_LABEL = {
     "task.dispatched": "已派工",
     "task.status": "",
@@ -8,9 +13,11 @@ const EVENT_LABEL = {
     "task.merged": "已合併",
     "task.cleaned_up": "已清理",
 };
+function pad(value) {
+    return String(value).padStart(2, "0");
+}
 export function when(epochSeconds) {
     const date = new Date(epochSeconds * 1000);
-    const pad = (value) => String(value).padStart(2, "0");
     return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 /** A PR link, only for http(s) URLs: the text comes from a ledger and must not become a script link. */
@@ -47,7 +54,9 @@ function writeRow(page, actions, write) {
     const bad = BAD_WRITES.includes(write.state);
     const key = `resend:${write.id}`;
     const asking = page.pending.has(key);
-    return h("div", { class: bad ? "wr bad" : "wr" }, h("span", { class: "pill" }, WRITE_LABEL[write.state] ?? write.state), " ", write.text, write.state === "retrying" ? h("span", { class: "note" }, `（第 ${write.attempt} 次重試）`) : null, write.error === null ? null : h("div", { class: "note" }, write.error), bad && !asking
+    return h("div", { class: bad ? "wr bad" : "wr" }, h("span", { class: "pill" }, WRITE_LABEL[write.state] ?? write.state), " ", write.text, write.state === "retrying"
+        ? h("span", { class: "note" }, `（第 ${write.attempt} 次重試）`)
+        : null, write.error === null ? null : h("div", { class: "note" }, write.error), bad && !asking
         ? h("span", { class: "btns" }, h("button", { onclick: () => actions.resend(write) }, "重送"), h("button", { onclick: () => actions.ignore(write) }, "忽略"))
         : null, asking
         ? h("div", { class: "confirm" }, "這筆不知道有沒有送到，重送可能會重複送出。", h("span", { class: "btns" }, h("button", { class: "danger", onclick: () => actions.confirm(key) }, "還是重送"), h("button", { onclick: () => actions.cancel(key) }, "取消")))
@@ -57,7 +66,7 @@ function writeRow(page, actions, write) {
 export function writeRows(page, actions, matches) {
     const writes = (page.view?.writes ?? []).filter((write) => matches(write) && write.state !== "ignored");
     return writes
-        .sort((a, b) => b.created_at - a.created_at)
+        .toSorted((a, b) => b.created_at - a.created_at)
         .slice(0, 5)
         .map((write) => writeRow(page, actions, write));
 }
@@ -76,7 +85,12 @@ export function holdCard(page, view, actions, hold, showTopic) {
     const draftKey = `answer-text:${hold.home}/${hold.task}`;
     const ask = (answer, label) => {
         if (answer.trim() !== "")
-            actions.ask(key, "holds/answer", { home: hold.home, task: hold.task, answer: answer.trim(), label });
+            actions.ask(key, "holds/answer", {
+                home: hold.home,
+                task: hold.task,
+                answer: answer.trim(),
+                label,
+            });
     };
     const askTyped = () => ask(page.drafts.get(draftKey) ?? "", "文字作答");
     return h("div", { class: "card" }, holdMeta(view, actions, hold, showTopic), h("b", {}, hold.title), h("pre", { class: "q" }, hold.question), h("div", { class: "btns" }, hold.options.map((option) => h("button", { onclick: () => ask(option, option) }, option))), h("div", { class: "btns" }, draftInput(page, actions, draftKey, "用文字回答", askTyped), h("button", { onclick: askTyped }, "送出")), answerConfirm(page, actions, key), writeRows(page, actions, (write) => write.kind === "answer" && write.home === hold.home && write.task === hold.task));
@@ -95,5 +109,7 @@ export function summaryRow(view, actions, summary, showTopic) {
 }
 export function updateRow(update) {
     const label = update.source === "board" ? "" : (EVENT_LABEL[update.event] ?? update.event);
-    return h("div", { class: update.source === "board" ? "upd system" : "upd" }, h("span", { class: "t" }, when(update.ts)), update.task === null ? null : h("span", { class: "note" }, `${update.home ?? ""}/${update.task} `), [label, update.text].filter((part) => part !== "").join(" "), update.pr === null ? null : [" ", prLink(update.pr)]);
+    return h("div", { class: update.source === "board" ? "upd system" : "upd" }, h("span", { class: "t" }, when(update.ts)), update.task === null
+        ? null
+        : h("span", { class: "note" }, `${update.home ?? ""}/${update.task} `), [label, update.text].filter((part) => part !== "").join(" "), update.pr === null ? null : [" ", prLink(update.pr)]);
 }

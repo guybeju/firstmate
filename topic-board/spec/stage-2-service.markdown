@@ -30,7 +30,9 @@
 
 - 原始碼在 `topic-board/src/`，TypeScript。`tsc` 把它編到 `topic-board/dist/`，`dist/` 提交進 git。執行期只跑 `dist/` 裡的 `.js`。
 - **執行期沒有任何 npm 相依**：只用 Node 的內建模組（`node:net`、`node:http`、`node:fs`、`node:child_process`、`node:crypto`、`node:path`）。`topic-board/` 底下不需要 `node_modules` 就能跑。
-- 開發期有兩個相依，都在 `package.json` 的 `devDependencies` 釘死確切版本：`typescript`（7.0.2）與 `@types/node`（22.20.5，沒有它就沒有 Node 內建模組的型別）。用 pnpm 安裝，lockfile 是 `pnpm-lock.yaml`。測試是 Bash 寫的整合測試，從 `fm-topic.sh` 進去，跑的是提交的 `dist/`。
+- 開發期的相依都在 `package.json` 的 `devDependencies` 釘死確切版本：`typescript`（7.0.2）、`@types/node`（22.20.5）、`vitest` 與 `@vitest/coverage-v8`（5.1.0）、`oxlint`（1.93.0）、`oxfmt`（0.78.0）。用 pnpm 安裝，lockfile 是 `pnpm-lock.yaml`。
+- 測試有兩層。Bash 寫的整合測試（`topic-board/test/run.sh`）從 `fm-topic.sh` 進去，跑的是提交的 `dist/`。單元測試是 `src/*.test.ts`，用 `pnpm test` 跑，不會被編進 `dist/`；`pnpm run coverage` 產生覆蓋率給 `crapper-axi` 用。
+- `pnpm run typecheck`、`pnpm run lint`、`pnpm run format:check` 要全過。
 - `package.json`：`"private": true`、`"type": "module"`、`"engines": {"node": ">=22"}`，scripts 只有 `build`（`tsc -p .`）與 `test`。
 - `tsconfig.json`：`"strict"`、`"noUncheckedIndexedAccess"`、`"exactOptionalPropertyTypes"`、`"noImplicitOverride"`、`"noPropertyAccessFromIndexSignature"`、`"verbatimModuleSyntax"`、`"isolatedModules"` 全開；`"module": "nodenext"`、`"target": "es2023"`、`"rootDir": "src"`、`"outDir": "dist"`；不產生 source map 與 `.d.ts`，讓輸出穩定。
 - `topic-board/.gitignore` 忽略 `node_modules/` 與 `.metrics/`（分析工具的輸出）。上游的 `.gitignore` 沒有這一條，不加的話開發用的 clone 會顯示 dirty。

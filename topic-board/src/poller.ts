@@ -51,7 +51,7 @@ function mainHome(): HomeState {
     error: null,
     version: "unknown",
     reading: null,
-    dueAt: 0,
+    dueAt: Number.NEGATIVE_INFINITY,
   };
 }
 
@@ -102,7 +102,7 @@ export class Poller {
   }
 
   hasMainReport(): boolean {
-    return this.homes.get(MAIN_HOME)?.report != null;
+    return (this.homes.get(MAIN_HOME) as HomeState).report !== null;
   }
 
   knows(home: string): boolean {
@@ -133,7 +133,9 @@ export class Poller {
   /** Reads every home now, the main home first so new secondmates are included. */
   async refreshAll(): Promise<void> {
     await this.readNow(MAIN_HOME);
-    await Promise.all([...this.homes.keys()].filter((id) => id !== MAIN_HOME).map((id) => this.readNow(id)));
+    await Promise.all(
+      [...this.homes.keys()].filter((id) => id !== MAIN_HOME).map((id) => this.readNow(id)),
+    );
   }
 
   private tick(): void {
@@ -154,20 +156,20 @@ export class Poller {
   }
 
   private async readHome(home: HomeState): Promise<boolean> {
-    let ok = false;
     const before = fingerprint(home);
     const eventsBefore = this.journal.events.length;
     for (let reads = 0; reads < MAX_CATCH_UP_READS; reads += 1) {
       const timeout = home.remote ? this.timings.remoteTimeoutMs : this.timings.localTimeoutMs;
       const result = await this.run(this.command(home), this.secondmates(), timeout);
-      const more = result.code === 0 ? this.accept(home, result.stdout) : this.reject(home, result.stderr);
-      ok = home.error === null;
+      const more =
+        result.code === 0 ? this.accept(home, result.stdout) : this.reject(home, result.stderr);
       if (!more) break;
     }
     // A read that found nothing new must not look like a change, or every
     // viewer would redraw the whole page on every poll.
-    if (fingerprint(home) !== before || this.journal.events.length !== eventsBefore) this.onChange();
-    return ok;
+    if (fingerprint(home) !== before || this.journal.events.length !== eventsBefore)
+      this.onChange();
+    return home.error === null;
   }
 
   private reject(home: HomeState, stderr: string): boolean {
@@ -208,7 +210,7 @@ export class Poller {
       this.offsets.set(home, { offset: 0, sha: "-" });
       return true;
     }
-    if (ledger.status === "delta" && ledger.lines.length > 0) {
+    if (ledger.status === "delta") {
       // Events first, cursor second: a crash in between re-reads this piece and
       // the journal drops the lines it already has.
       this.journal.appendLedger(home, ledger.lines);
@@ -219,13 +221,18 @@ export class Poller {
 
   private syncSecondmates(report: HomeReport): void {
     const listed = new Set(report.secondmates.map((entry) => entry.id));
-    for (const id of [...this.homes.keys()]) {
+    for (const id of this.homes.keys()) {
       if (id !== MAIN_HOME && !listed.has(id)) this.homes.delete(id);
     }
     for (const entry of report.secondmates) {
       const known = this.homes.get(entry.id);
       if (known === undefined) {
-        this.homes.set(entry.id, { ...mainHome(), id: entry.id, remote: entry.remote, home: entry.home });
+        this.homes.set(entry.id, {
+          ...mainHome(),
+          id: entry.id,
+          remote: entry.remote,
+          home: entry.home,
+        });
       } else {
         known.remote = entry.remote;
         known.home = entry.home;
@@ -234,7 +241,8 @@ export class Poller {
   }
 
   private refreshVersions(): void {
-    const main = this.homes.get(MAIN_HOME)?.report?.code_commit ?? "";
+    const mainReport = (this.homes.get(MAIN_HOME) as HomeState).report;
+    const main = mainReport === null ? "" : mainReport.code_commit;
     for (const home of this.homes.values()) {
       if (home.report !== null) home.version = versionOf(home.id, home.report.code_commit, main);
     }

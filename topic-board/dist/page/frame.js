@@ -22,7 +22,9 @@ function versionBanner(view) {
 function ledgerCommand(entry) {
     if (entry.id === "main")
         return "bin/fm-topic.sh setup";
-    return entry.remote ? `bin/fm-on.sh ${entry.id} fm-topic.sh setup` : `bin/fm-topic.sh --in-home ${entry.id} setup`;
+    return entry.remote
+        ? `bin/fm-on.sh ${entry.id} fm-topic.sh setup`
+        : `bin/fm-topic.sh --in-home ${entry.id} setup`;
 }
 function ledgerBanner(view) {
     return view.homes
@@ -32,7 +34,9 @@ function ledgerBanner(view) {
 function banners(page, actions) {
     const view = page.view;
     return [
-        page.tokenBad ? h("div", { class: "banner" }, "token 已重置或無效，請在終端機重新跑 ", h("code", {}, "bin/fm-topic.sh open")) : null,
+        page.tokenBad
+            ? h("div", { class: "banner" }, "token 已重置或無效，請在終端機重新跑 ", h("code", {}, "bin/fm-topic.sh open"))
+            : null,
         page.down
             ? h("div", { class: "banner" }, "看板服務沒有回應。畫面是最後拿到的資料，現在送不出東西。請在終端機跑 ", h("code", {}, "bin/fm-topic.sh open"))
             : null,
@@ -50,6 +54,8 @@ export function frame(page, actions) {
         banners(page, actions),
         view === null
             ? h("main", {}, h("p", { class: "note" }, page.tokenBad || page.down ? "" : "載入中…"))
-            : h("main", {}, topic === null ? h("div", { class: "side" }, sidebar(view, actions), h("div", {}, home(page, view, actions))) : topicPage(page, view, actions, topic)),
+            : h("main", {}, topic === null
+                ? h("div", { class: "side" }, sidebar(view, actions), h("div", {}, home(page, view, actions)))
+                : topicPage(page, view, actions, topic)),
     ];
 }

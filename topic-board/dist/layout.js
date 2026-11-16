@@ -55,7 +55,14 @@ export function parseConfigArgs(argv) {
     if (!Number.isInteger(port) || port < 1 || port > 65535)
         throw new Error("--port is not a port number");
     return {
-        config: { home: need("home"), root: need("root"), commit: need("commit"), port, state: need("state"), data: need("data") },
+        config: {
+            home: need("home"),
+            root: need("root"),
+            commit: need("commit"),
+            port,
+            state: need("state"),
+            data: need("data"),
+        },
         rest,
     };
 }

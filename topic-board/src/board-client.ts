@@ -41,7 +41,7 @@ type Outcome =
   | { kind: "silent"; sent: boolean };
 
 /** Sends one request. "silent" means the service accepted the connection but never answered. */
-function exchange(socketPath: string, request: BoardRequest, timeoutMs: number): Promise<Outcome> {
+function exchange(socketPath: string, message: BoardRequest, timeoutMs: number): Promise<Outcome> {
   return new Promise((resolve) => {
     const connection = net.connect(socketPath);
     let received = "";
@@ -57,7 +57,7 @@ function exchange(socketPath: string, request: BoardRequest, timeoutMs: number):
     const timer = setTimeout(() => settle({ kind: "silent", sent }), timeoutMs);
     connection.setEncoding("utf8");
     connection.on("connect", () => {
-      connection.write(`${JSON.stringify(request)}\n`, () => {
+      connection.write(`${JSON.stringify(message)}\n`, () => {
         sent = true;
       });
     });
@@ -73,7 +73,8 @@ function exchange(socketPath: string, request: BoardRequest, timeoutMs: number):
       }
     });
     connection.on("error", (error: NodeJS.ErrnoException) => {
-      if (!sent && (error.code === "ENOENT" || error.code === "ECONNREFUSED")) settle({ kind: "absent" });
+      if (!sent && (error.code === "ENOENT" || error.code === "ECONNREFUSED"))
+        settle({ kind: "absent" });
       else settle({ kind: "silent", sent });
     });
   });
@@ -112,7 +113,10 @@ function prepareRuntimeDir(paths: BoardPaths): number {
 function readStartupError(paths: BoardPaths): Exit | null {
   if (!fs.existsSync(paths.startupError)) return null;
   try {
-    const { reason, fix } = JSON.parse(fs.readFileSync(paths.startupError, "utf8")) as { reason: string; fix: string };
+    const { reason, fix } = JSON.parse(fs.readFileSync(paths.startupError, "utf8")) as {
+      reason: string;
+      fix: string;
+    };
     return unavailable(reason, fix);
   } catch {
     return null;
@@ -171,7 +175,11 @@ async function terminate(pid: number): Promise<void> {
 async function killHung(config: BoardConfig, paths: BoardPaths): Promise<void> {
   const pid = readPidFile(paths.pid);
   const commandLine = pid === null ? "" : commandLineOf(pid);
-  if (pid === null || !commandLine.includes("board-server.js") || !commandLine.includes(config.state)) {
+  if (
+    pid === null ||
+    !commandLine.includes("board-server.js") ||
+    !commandLine.includes(config.state)
+  ) {
     throw unavailable(
       "看板服務沒有回應，而且找不到它的程序",
       `確認沒有別的程式佔著 ${paths.socket} 之後刪掉它再試`,
@@ -216,7 +224,8 @@ async function acquireStartLock(paths: BoardPaths): Promise<() => void> {
   while (!tryLock(lock)) {
     const holder = readPidFile(path.join(lock, "pid"));
     const expired = Date.now() > deadline;
-    if (holder === null ? expired : !isAlive(holder)) fs.rmSync(lock, { recursive: true, force: true });
+    if (holder === null ? expired : !isAlive(holder))
+      fs.rmSync(lock, { recursive: true, force: true });
     else if (expired) throw unavailable("另一個指令正在啟動看板服務，等太久了", "稍後再試一次");
     else await sleep(POLL_MS);
   }
@@ -300,9 +309,14 @@ function buildTopicRequest(sub: string, shape: CommandShape, args: string[]): Bo
       ...shape.positional.map((name) => `<${name}>`),
       ...(shape.required ?? []).map((name) => `--${name} <…>`),
     ].join(" ");
-    throw new Exit(EXIT_USAGE, `${sub} 的用法：fm-topic.sh ${sub} ${wanted}（fm-topic.sh --help 看用法）`);
+    throw new Exit(
+      EXIT_USAGE,
+      `${sub} 的用法：fm-topic.sh ${sub} ${wanted}（fm-topic.sh --help 看用法）`,
+    );
   }
-  const named = Object.fromEntries(shape.positional.map((name, index) => [name, parsed.positional[index]]));
+  const named = Object.fromEntries(
+    shape.positional.map((name, index) => [name, parsed.positional[index]]),
+  );
   return request(sub, withFlags(named, parsed));
 }
 
@@ -315,7 +329,11 @@ function finish(response: BoardResponse): never {
 }
 
 /** Sends a request to a board known to be running and maps the outcome to an exit. */
-async function send(config: BoardConfig, paths: BoardPaths, message: BoardRequest): Promise<BoardResponse> {
+async function send(
+  config: BoardConfig,
+  paths: BoardPaths,
+  message: BoardRequest,
+): Promise<BoardResponse> {
   let outcome = await exchange(paths.socket, message, READY_TIMEOUT_MS);
   if (outcome.kind === "absent") {
     // The board went away between the health check and the request; nothing was sent.
@@ -324,7 +342,10 @@ async function send(config: BoardConfig, paths: BoardPaths, message: BoardReques
   }
   if (outcome.kind === "answer") return outcome.response;
   if (outcome.kind === "silent" && outcome.sent) {
-    throw new Exit(EXIT_UNKNOWN_OUTCOME, "結果不明：要求已送出，但沒有收到回應。可以原樣重做一次。");
+    throw new Exit(
+      EXIT_UNKNOWN_OUTCOME,
+      "結果不明：要求已送出，但沒有收到回應。可以原樣重做一次。",
+    );
   }
   throw unavailable("看板服務沒有回應", "跑 fm-topic.sh status 看狀況");
 }
@@ -340,7 +361,10 @@ const VERSION_LABEL: Record<string, string> = {
 /** One line per home with how its code version compares to the main home's. */
 function homeLines(homes: unknown): string[] {
   if (!Array.isArray(homes)) return [];
-  return homes.map((home: { id: string; version: string }) => `home ${home.id}：${VERSION_LABEL[home.version] ?? home.version}`);
+  return homes.map(
+    (home: { id: string; version: string }) =>
+      `home ${home.id}：${VERSION_LABEL[home.version] ?? home.version}`,
+  );
 }
 
 function describeFiles(paths: BoardPaths): string[] {
@@ -397,24 +421,42 @@ async function restart(config: BoardConfig, paths: BoardPaths): Promise<never> {
 
 async function open(config: BoardConfig, paths: BoardPaths): Promise<never> {
   const running = await ensureRunning(config, paths);
-  return finish({ ok: true, line: `http://127.0.0.1:${running.port}/#t=${readTrimmed(paths.token)}` });
+  return finish({
+    ok: true,
+    line: `http://127.0.0.1:${running.port}/#t=${readTrimmed(paths.token)}`,
+  });
 }
 
 /** summary reads its text from stdin: `summary [--home <id>] <task-id> <kind> -`. */
-async function summaryCommand(config: BoardConfig, paths: BoardPaths, args: string[]): Promise<never> {
+async function summaryCommand(
+  config: BoardConfig,
+  paths: BoardPaths,
+  args: string[],
+): Promise<never> {
   const parsed = parseArgs(args, ["home"]);
   const [task, kind, dash] = parsed.positional;
   if (parsed.positional.length !== 3 || dash !== "-") {
-    throw new Exit(EXIT_USAGE, "summary 的用法：fm-topic.sh summary [--home <id>] <task-id> <kind> -（本文走 stdin）");
+    throw new Exit(
+      EXIT_USAGE,
+      "summary 的用法：fm-topic.sh summary [--home <id>] <task-id> <kind> -（本文走 stdin）",
+    );
   }
   const text = fs.readFileSync(0, "utf8");
   await ensureRunning(config, paths);
-  return finish(await send(config, paths, request("summary", withFlags({ task, kind, text }, parsed))));
+  return finish(
+    await send(config, paths, request("summary", withFlags({ task, kind, text }, parsed))),
+  );
 }
 
-async function topicCommand(config: BoardConfig, paths: BoardPaths, sub: string, args: string[]): Promise<never> {
+async function topicCommand(
+  config: BoardConfig,
+  paths: BoardPaths,
+  sub: string,
+  args: string[],
+): Promise<never> {
   const shape = TOPIC_COMMANDS[sub];
-  if (shape === undefined) throw new Exit(EXIT_USAGE, `不認得的子命令：${sub}（fm-topic.sh --help 看用法）`);
+  if (shape === undefined)
+    throw new Exit(EXIT_USAGE, `不認得的子命令：${sub}（fm-topic.sh --help 看用法）`);
   const message = buildTopicRequest(sub, shape, args);
   await ensureRunning(config, paths);
   return finish(await send(config, paths, message));
@@ -433,7 +475,9 @@ async function run(): Promise<never> {
   const [sub = "", ...args] = rest;
   if (sub === "summary") return summaryCommand(config, paths, args);
   const lifecycle = LIFECYCLE[sub];
-  return lifecycle === undefined ? topicCommand(config, paths, sub, args) : lifecycle(config, paths);
+  return lifecycle === undefined
+    ? topicCommand(config, paths, sub, args)
+    : lifecycle(config, paths);
 }
 
 run().catch((error: unknown) => {

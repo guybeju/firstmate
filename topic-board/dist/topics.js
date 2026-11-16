@@ -82,7 +82,7 @@ function mintId(state, name) {
     }
 }
 function queueOf(doc, id) {
-    return QUEUES.find((queue) => doc.queues[queue].includes(id)) ?? null;
+    return QUEUES.find((queue) => doc.queues[queue].includes(id));
 }
 function removeFromQueues(doc, id) {
     for (const queue of QUEUES) {
@@ -119,10 +119,11 @@ export function propose(state, input, now) {
     next.doc.topics[id] = topic;
     return changed(next, `ok ${id} 已提議，等使用者確認`);
 }
-function archivedRefusal(state, id) {
-    if (state.archive.topics[id] === undefined)
-        return null;
-    return refuse(`議題 ${id} 已封存，要先 reopen。`);
+/** Why a topic that is not live cannot be acted on: it is archived, or it does not exist. */
+function unusable(state, id, rawId) {
+    if (state.archive.topics[id] !== undefined)
+        return refuse(`議題 ${id} 已封存，要先 reopen。`);
+    return missing(rawId);
 }
 function missing(id) {
     return refuse(`沒有 ${id} 這個議題。用 list --all 看有哪些。`);
@@ -131,7 +132,7 @@ export function confirm(state, rawId, queue) {
     const id = resolveTopicId(state.doc, rawId);
     const topic = state.doc.topics[id];
     if (topic === undefined)
-        return archivedRefusal(state, id) ?? missing(rawId);
+        return unusable(state, id, rawId);
     if (topic.status === "confirmed")
         return unchanged(state, `ok ${id} 本來就已確認`);
     const next = clone(state);
@@ -140,7 +141,11 @@ export function confirm(state, rawId, queue) {
     confirmed.status = "confirmed";
     next.doc.queues[target].push(id);
     return changed(next, `ok ${id} 已確認，放進「${QUEUE_LABEL[target]}」`, [
-        { kind: "topic.confirmed", topic: id, text: `議題「${topic.name}」已確認，放進「${QUEUE_LABEL[target]}」` },
+        {
+            kind: "topic.confirmed",
+            topic: id,
+            text: `議題「${topic.name}」已確認，放進「${QUEUE_LABEL[target]}」`,
+        },
     ]);
 }
 export function merge(state, rawFrom, rawInto) {
@@ -153,12 +158,12 @@ export function merge(state, rawFrom, rawInto) {
     }
     const target = state.doc.topics[into];
     if (target === undefined)
-        return archivedRefusal(state, into) ?? missing(rawInto);
+        return unusable(state, into, rawInto);
     if (target.status !== "confirmed")
         return refuse(`${into} 還在提議中，只能併進已確認的議題。`);
     const source = state.doc.topics[from];
     if (source === undefined)
-        return archivedRefusal(state, from) ?? missing(rawFrom);
+        return unusable(state, from, rawFrom);
     const next = clone(state);
     delete next.doc.topics[from];
     removeFromQueues(next.doc, from);
@@ -171,7 +176,7 @@ function confirmedTopic(state, rawId) {
     const id = resolveTopicId(state.doc, rawId);
     const topic = state.doc.topics[id];
     if (topic === undefined)
-        return archivedRefusal(state, id) ?? missing(rawId);
+        return unusable(state, id, rawId);
     if (topic.status !== "confirmed")
         return refuse(`${id} 還在提議中，要先 confirm。`);
     return { id, topic };
@@ -227,7 +232,7 @@ function setText(state, rawId, field, value) {
     const id = resolveTopicId(state.doc, rawId);
     const topic = state.doc.topics[id];
     if (topic === undefined)
-        return archivedRefusal(state, id) ?? missing(rawId);
+        return unusable(state, id, rawId);
     const max = field === "name" ? NAME_MAX : GOAL_MAX;
     const label = field === "name" ? "名稱" : "目標";
     const text = oneLine(value, max);
@@ -271,21 +276,27 @@ export function reopen(state, rawId, queue) {
         return missing(rawId);
     }
     const next = clone(state);
-    const target = queue ?? "normal";
+    const target = queue === undefined ? "normal" : queue;
     const { archived_at: _dropped, ...kept } = archived;
     void _dropped;
     next.doc.topics[id] = { ...kept, status: "confirmed" };
     delete next.archive.topics[id];
     next.doc.queues[target].push(id);
     const dispatchable = target === "later" ? [] : [id];
-    return changed(next, `ok ${id} 已重開，放進「${QUEUE_LABEL[target]}」`, [{ kind: "topic.reopened", topic: id, text: `議題「${archived.name}」已重開，放進「${QUEUE_LABEL[target]}」` }], dispatchable);
+    return changed(next, `ok ${id} 已重開，放進「${QUEUE_LABEL[target]}」`, [
+        {
+            kind: "topic.reopened",
+            topic: id,
+            text: `議題「${archived.name}」已重開，放進「${QUEUE_LABEL[target]}」`,
+        },
+    ], dispatchable);
 }
 /** Turns down firstmate's proposal to close a topic. */
 export function keepOpen(state, rawId) {
     const id = resolveTopicId(state.doc, rawId);
     const topic = state.doc.topics[id];
     if (topic === undefined)
-        return archivedRefusal(state, id) ?? missing(rawId);
+        return unusable(state, id, rawId);
     if (topic.close_proposal === undefined)
         return unchanged(state, `ok ${id} 沒有關閉的提議`);
     const next = clone(state);

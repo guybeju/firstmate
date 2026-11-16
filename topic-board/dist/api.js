@@ -2,7 +2,7 @@
 // checks in http.ts. Topic operations are the same ones fm-topic.sh uses.
 import * as actions from "./actions.js";
 import { bindingOf } from "./confirm.js";
-import { stringField } from "./files.js";
+import { textField } from "./files.js";
 function ok(body = {}) {
     return { status: 200, body: { ok: true, ...body } };
 }
@@ -10,12 +10,14 @@ function fail(status, error, message) {
     return { status, body: { error, message } };
 }
 function field(body, name) {
-    return stringField(body, name) ?? "";
+    return textField(body, name);
 }
 function fromTopicOp(response) {
     if (response.ok)
         return ok({ line: response.line });
-    return response.code === "usage" ? fail(400, "usage", response.line) : fail(409, "refused", response.line);
+    return response.code === "usage"
+        ? fail(400, "usage", response.line)
+        : fail(409, "refused", response.line);
 }
 function fromAction(result) {
     return result.ok ? ok({ write_id: result.write.id }) : fail(409, "refused", result.line);
@@ -30,7 +32,9 @@ function topicRoute(op) {
 const state = (host, _body, query) => {
     host.touch();
     const current = `${host.bootId}:${host.version()}`;
-    return query.get("v") === current ? ok({ changed: false }) : ok({ changed: true, ...host.view() });
+    return query.get("v") === current
+        ? ok({ changed: false })
+        : ok({ changed: true, ...host.view() });
 };
 const refresh = async (host) => {
     host.touch();
@@ -59,8 +63,8 @@ const merge = (host, body) => {
     return twoStep(host, body, bindingOf("merge", from, into), () => fromTopicOp(host.topicOp("merge", { from, into })));
 };
 function holdQuestion(context, home, task) {
-    const holds = context.homes.find((entry) => entry.id === home)?.report?.holds ?? [];
-    return holds.find((hold) => hold.id === task)?.question ?? null;
+    const hold = actions.findHold(context, home, task);
+    return hold === undefined ? null : hold.question;
 }
 /** Answering closes or releases the hold and cannot be taken back, so it always takes two steps. */
 const answer = (host, body) => {
@@ -81,9 +85,10 @@ const answer = (host, body) => {
 /** Resending a write whose outcome is unknown may duplicate it, so that case takes two steps. */
 const resend = (host, body) => {
     const id = field(body, "write_id");
-    if (host.writes.records.get(id)?.state !== "unknown")
-        return fromProblem(host.writes.resend(id, false));
-    return twoStep(host, body, bindingOf("resend", id), () => fromProblem(host.writes.resend(id, true)));
+    const record = host.writes.records.get(id);
+    const unknown = record !== undefined && record.state === "unknown";
+    const act = () => fromProblem(host.writes.resend(id, unknown));
+    return unknown ? twoStep(host, body, bindingOf("resend", id), act) : act();
 };
 const ROUTES = {
     "GET state": state,
@@ -106,6 +111,8 @@ const ROUTES = {
 export function createApi(host) {
     return async (method, route, query, body) => {
         const handler = ROUTES[`${method} ${route}`];
-        return handler === undefined ? fail(404, "not-found", "沒有這個 API。") : handler(host, body, query);
+        return handler === undefined
+            ? fail(404, "not-found", "沒有這個 API。")
+            : handler(host, body, query);
     };
 }

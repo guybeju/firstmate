@@ -21,7 +21,10 @@ export function takeToken(): string {
 async function call(token: string, path: string, init: RequestInit): Promise<Reply> {
   const response = await fetch(`/api/${path}`, {
     ...init,
-    headers: { ...(init.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` },
+    headers: {
+      ...(init.headers as Record<string, string> | undefined),
+      Authorization: `Bearer ${token}`,
+    },
     cache: "no-store",
   });
   let data: Record<string, unknown> = {};
@@ -37,6 +40,14 @@ export function getJson(token: string, path: string): Promise<Reply> {
   return call(token, path, { method: "GET" });
 }
 
-export function postJson(token: string, path: string, body: Record<string, unknown>): Promise<Reply> {
-  return call(token, path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+export function postJson(
+  token: string,
+  path: string,
+  body: Record<string, unknown>,
+): Promise<Reply> {
+  return call(token, path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }

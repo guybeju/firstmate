@@ -26,7 +26,7 @@ function mainHome() {
         error: null,
         version: "unknown",
         reading: null,
-        dueAt: 0,
+        dueAt: Number.NEGATIVE_INFINITY,
     };
 }
 export class Poller {
@@ -75,7 +75,7 @@ export class Poller {
             .map((home) => ({ id: home.id, remote: home.remote, home: home.home }));
     }
     hasMainReport() {
-        return this.homes.get(MAIN_HOME)?.report != null;
+        return this.homes.get(MAIN_HOME).report !== null;
     }
     knows(home) {
         return this.homes.has(home);
@@ -123,14 +123,12 @@ export class Poller {
         return { kind: home.remote ? "read-remote" : "read-local", secondmate: home.id, offset, sha };
     }
     async readHome(home) {
-        let ok = false;
         const before = fingerprint(home);
         const eventsBefore = this.journal.events.length;
         for (let reads = 0; reads < MAX_CATCH_UP_READS; reads += 1) {
             const timeout = home.remote ? this.timings.remoteTimeoutMs : this.timings.localTimeoutMs;
             const result = await this.run(this.command(home), this.secondmates(), timeout);
             const more = result.code === 0 ? this.accept(home, result.stdout) : this.reject(home, result.stderr);
-            ok = home.error === null;
             if (!more)
                 break;
         }
@@ -138,7 +136,7 @@ export class Poller {
         // viewer would redraw the whole page on every poll.
         if (fingerprint(home) !== before || this.journal.events.length !== eventsBefore)
             this.onChange();
-        return ok;
+        return home.error === null;
     }
     reject(home, stderr) {
         const notOnFork = home.remote && NOT_ON_FORK.some((text) => stderr.includes(text));
@@ -178,7 +176,7 @@ export class Poller {
             this.offsets.set(home, { offset: 0, sha: "-" });
             return true;
         }
-        if (ledger.status === "delta" && ledger.lines.length > 0) {
+        if (ledger.status === "delta") {
             // Events first, cursor second: a crash in between re-reads this piece and
             // the journal drops the lines it already has.
             this.journal.appendLedger(home, ledger.lines);
@@ -188,14 +186,19 @@ export class Poller {
     }
     syncSecondmates(report) {
         const listed = new Set(report.secondmates.map((entry) => entry.id));
-        for (const id of [...this.homes.keys()]) {
+        for (const id of this.homes.keys()) {
             if (id !== MAIN_HOME && !listed.has(id))
                 this.homes.delete(id);
         }
         for (const entry of report.secondmates) {
             const known = this.homes.get(entry.id);
             if (known === undefined) {
-                this.homes.set(entry.id, { ...mainHome(), id: entry.id, remote: entry.remote, home: entry.home });
+                this.homes.set(entry.id, {
+                    ...mainHome(),
+                    id: entry.id,
+                    remote: entry.remote,
+                    home: entry.home,
+                });
             }
             else {
                 known.remote = entry.remote;
@@ -204,7 +207,8 @@ export class Poller {
         }
     }
     refreshVersions() {
-        const main = this.homes.get(MAIN_HOME)?.report?.code_commit ?? "";
+        const mainReport = this.homes.get(MAIN_HOME).report;
+        const main = mainReport === null ? "" : mainReport.code_commit;
         for (const home of this.homes.values()) {
             if (home.report !== null)
                 home.version = versionOf(home.id, home.report.code_commit, main);

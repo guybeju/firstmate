@@ -1,6 +1,6 @@
 // What the page remembers between renders, and the actions its buttons call.
-import type { Queue } from "../topics.js";
-import type { BoardView } from "../view.js";
+import type { Queue } from "#board/topics.js";
+import type { BoardView } from "#board/view.js";
 
 export interface WriteView {
   id: string;
@@ -16,7 +16,12 @@ export interface WriteView {
   created_at: number;
 }
 
-export type View = BoardView & { boot_id: string; version: string; polling: boolean; writes: WriteView[] };
+export type View = BoardView & {
+  boot_id: string;
+  version: string;
+  polling: boolean;
+  writes: WriteView[];
+};
 
 /** The first half of a two-step action, waiting for the captain to confirm. */
 export interface Pending {

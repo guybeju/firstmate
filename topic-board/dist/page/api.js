@@ -13,7 +13,10 @@ export function takeToken() {
 async function call(token, path, init) {
     const response = await fetch(`/api/${path}`, {
         ...init,
-        headers: { ...init.headers, Authorization: `Bearer ${token}` },
+        headers: {
+            ...init.headers,
+            Authorization: `Bearer ${token}`,
+        },
         cache: "no-store",
     });
     let data = {};
@@ -29,5 +32,9 @@ export function getJson(token, path) {
     return call(token, path, { method: "GET" });
 }
 export function postJson(token, path, body) {
-    return call(token, path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    return call(token, path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+    });
 }

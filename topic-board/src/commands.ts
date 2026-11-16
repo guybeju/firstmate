@@ -56,7 +56,8 @@ function refuse(reason: string): never {
 }
 
 function readArgs(command: ReadCommand): string[] {
-  if (!Number.isInteger(command.offset) || command.offset < 0) refuse("offset must be a non-negative integer");
+  if (!Number.isInteger(command.offset) || command.offset < 0)
+    refuse("offset must be a non-negative integer");
   if (!SHA.test(command.sha)) refuse("prefix hash must be 64 hex characters or '-'");
   return [String(command.offset), command.sha];
 }
@@ -98,18 +99,27 @@ function sendText(text: string): string {
 function answerLine(line: string): string {
   const fields = line.split("\t");
   const [task = "", answer = "", , mode = ""] = fields;
-  if (/[\r\n]/.test(line) || fields.length !== 4) refuse("an answer must be one line of four tab-separated fields");
-  if (!ID.test(task) || answer === "" || !ANSWER_MODES.includes(mode)) refuse("malformed answer line");
+  if (/[\r\n]/.test(line) || fields.length !== 4)
+    refuse("an answer must be one line of four tab-separated fields");
+  if (!ID.test(task) || answer === "" || !ANSWER_MODES.includes(mode))
+    refuse("malformed answer line");
   return `${line}\n`;
 }
 
 /** The secondmate argument a placed command needs: none for the main home. */
-function placed(command: { placement: Placement; secondmate?: string }, known: Secondmate[]): string {
+function placed(
+  command: { placement: Placement; secondmate?: string },
+  known: Secondmate[],
+): string {
   if (command.placement === "main") return "";
-  return secondmateArg(command.secondmate ?? "", command.placement === "remote", known);
+  const secondmate = command.secondmate === undefined ? "" : command.secondmate;
+  return secondmateArg(secondmate, command.placement === "remote", known);
 }
 
-function answerInvocation(command: Extract<WriteCommand, { kind: "answer" }>, known: Secondmate[]): Invocation {
+function answerInvocation(
+  command: Extract<WriteCommand, { kind: "answer" }>,
+  known: Secondmate[],
+): Invocation {
   const stdin = answerLine(command.line);
   const secondmate = placed(command, known);
   const answers = ["fm-captain-hold.sh", "answers", "--source", "topic-board"];
@@ -123,7 +133,10 @@ function answerInvocation(command: Extract<WriteCommand, { kind: "answer" }>, kn
   }
 }
 
-function tagInvocation(command: Extract<WriteCommand, { kind: "tag" }>, known: Secondmate[]): Invocation {
+function tagInvocation(
+  command: Extract<WriteCommand, { kind: "tag" }>,
+  known: Secondmate[],
+): Invocation {
   const tag = ["tag", idArg(command.task, "task id"), idArg(command.topic, "topic id")];
   const secondmate = placed(command, known);
   switch (command.placement) {
@@ -136,12 +149,22 @@ function tagInvocation(command: Extract<WriteCommand, { kind: "tag" }>, known: S
   }
 }
 
-function relayInvocation(command: Extract<WriteCommand, { kind: "relay" }>, known: Secondmate[]): Invocation {
-  if (!DELIVERY_ID.test(command.deliveryId)) refuse("delivery id must be 16 lowercase hex characters");
-  if (!known.some((entry) => entry.id === command.secondmate)) refuse(`unknown secondmate: ${command.secondmate}`);
+function relayInvocation(
+  command: Extract<WriteCommand, { kind: "relay" }>,
+  known: Secondmate[],
+): Invocation {
+  if (!DELIVERY_ID.test(command.deliveryId))
+    refuse("delivery id must be 16 lowercase hex characters");
+  if (!known.some((entry) => entry.id === command.secondmate))
+    refuse(`unknown secondmate: ${command.secondmate}`);
   return {
     script: "fm-send.sh",
-    args: [idArg(command.secondmate, "secondmate id"), "--fire-and-forget", command.deliveryId, sendText(command.text)],
+    args: [
+      idArg(command.secondmate, "secondmate id"),
+      "--fire-and-forget",
+      command.deliveryId,
+      sendText(command.text),
+    ],
   };
 }
 
@@ -157,7 +180,11 @@ function readInvocation(command: ReadCommand, known: Secondmate[]): Invocation {
     case "read-remote":
       return {
         script: "fm-on.sh",
-        args: [secondmateArg(command.secondmate, true, known), "fm-topic-board-read.sh", ...readArgs(command)],
+        args: [
+          secondmateArg(command.secondmate, true, known),
+          "fm-topic-board-read.sh",
+          ...readArgs(command),
+        ],
       };
   }
 }
@@ -166,9 +193,16 @@ function writeInvocation(command: WriteCommand, known: Secondmate[]): Invocation
   switch (command.kind) {
     case "note":
       if (!REQUEST_ID.test(command.requestId)) refuse("malformed request id");
-      return { script: "fm-inbox.sh", args: ["note", "--request-id", command.requestId, "-"], stdin: command.body };
+      return {
+        script: "fm-inbox.sh",
+        args: ["note", "--request-id", command.requestId, "-"],
+        stdin: command.body,
+      };
     case "send":
-      return { script: "fm-send.sh", args: [idArg(command.task, "task id"), sendText(command.text)] };
+      return {
+        script: "fm-send.sh",
+        args: [idArg(command.task, "task id"), sendText(command.text)],
+      };
     case "relay":
       return relayInvocation(command, known);
     case "answer":
@@ -187,7 +221,11 @@ export function invocationFor(command: AllowedCommand, known: Secondmate[]): Inv
     : writeInvocation(command as WriteCommand, known);
 }
 
-export type CommandRunner = (command: AllowedCommand, known: Secondmate[], timeoutMs: number) => Promise<CommandResult>;
+export type CommandRunner = (
+  command: AllowedCommand,
+  known: Secondmate[],
+  timeoutMs: number,
+) => Promise<CommandResult>;
 
 /** Builds the runner bound to one home and code root. */
 export function commandRunner(config: BoardConfig): CommandRunner {
@@ -211,9 +249,13 @@ export function commandRunner(config: BoardConfig): CommandRunner {
         },
         (error, stdout, stderr) => {
           const code = error === null ? 0 : typeof error.code === "number" ? error.code : null;
-          resolve({ code, stdout, stderr: error !== null && code === null ? `${stderr}${error.message}` : stderr });
+          resolve({
+            code,
+            stdout,
+            stderr: error !== null && code === null ? `${stderr}${error.message}` : stderr,
+          });
         },
       );
-      child.stdin?.end(invocation.stdin ?? "");
+      if (child.stdin !== null) child.stdin.end(invocation.stdin);
     });
 }
