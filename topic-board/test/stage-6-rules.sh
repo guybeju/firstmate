@@ -104,6 +104,30 @@ test_second_run_changes_nothing() {
   pass "install-rules is idempotent and status compares the block's content"
 }
 
+# A curation pass or an editor may reshape the marker lines without removing them.
+test_finds_reshaped_markers() {
+  local home out variant
+  for variant in indented trailing-space crlf end-suffix; do
+    home=$(tb_make_home "reshaped-$variant")
+    {
+      printf '# 前面\n\n'
+      case "$variant" in
+        indented) sed '1s/^/  /; $s/^/  /' "$RULES/captain.block.md.tmpl" ;;
+        trailing-space) sed '1s/$/ /; $s/$/  /' "$RULES/captain.block.md.tmpl" ;;
+        crlf) sed 's/$/\r/' "$RULES/captain.block.md.tmpl" ;;
+        end-suffix) sed '$s/$/ <!--P-->/' "$RULES/captain.block.md.tmpl" ;;
+      esac
+      printf '\n# 後面\n'
+    } > "$home/data/captain.md"
+    assert_contains "$(rules_line "$home")" "captain.md 和範本不同（v2）" "status must still find the $variant block"
+    out=$(install "$home") || fail "install-rules failed on $variant markers: $out"
+    assert_contains "$out" "captain.md：已更新" "the $variant block must be replaced in place"
+    assert_equals "$(printf '# 前面\n\n'; cat "$RULES/captain.block.md.tmpl"; printf '\n# 後面\n')" "$(cat "$home/data/captain.md")" \
+      "the $variant block must become exactly one clean block"
+  done
+  pass "a block whose marker lines were indented, padded, or suffixed is still found and replaced"
+}
+
 test_refuses_unpaired_markers() {
   local home out rc before variant
   for variant in begin-only end-only two-begins reversed; do
@@ -169,5 +193,5 @@ test_templates() {
 }
 
 fm_test_run test_creates_both_files test_keeps_everything_outside_the_block test_replaces_an_old_block_in_place \
-  test_second_run_changes_nothing test_refuses_unpaired_markers test_refuses_a_shared_file_with_a_bad_header \
+  test_second_run_changes_nothing test_finds_reshaped_markers test_refuses_unpaired_markers test_refuses_a_shared_file_with_a_bad_header \
   test_main_home_only test_templates
