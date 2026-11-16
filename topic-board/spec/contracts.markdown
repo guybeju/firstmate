@@ -84,12 +84,18 @@
       "close_proposal": { "at": "2026-11-17T01:00:00Z", "reason": "三個 PR 都已合併" }
     }
   },
-  "merged": { "old-id": "billing" }
+  "merged": { "old-id": "billing" },
+  "history": [
+    { "at": "2026-11-18T01:00:00Z", "kind": "renamed", "topic": "reports", "name": "帳務報表", "from_name": "報表" },
+    { "at": "2026-11-20T01:00:00Z", "kind": "merged", "topic": "billing", "name": "帳務重構",
+      "from": "reports", "from_name": "帳務報表" }
+  ]
 }
 ```
 
 - `queues` 的陣列順序就是顯示與派工順序。`status: "proposed"` 的議題不在任何佇列。
 - `merged` 是「舊 id → 新 id」，可以串接；讀到舊 id 的地方一律走到底。各 home 的標記檔不重寫。
+- `history` 是來歷紀錄，舊的在前，和議題的變動寫在同一次存檔裡。`kind` 是 `merged`、`renamed`、`archived`、`reopened`；`topic` 與 `name` 是變動之後留下來的議題，合併另記被併掉的 `from` 與 `from_name`，改名另記舊名字 `from_name`。沒有這個欄位的舊檔當成空的；讀不懂的項目略過。`fm-topic.sh find` 讀它。
 - `close_proposal` 沒有就省略。`proposed_by` 是 `firstmate` 或 `user`。
 - `next_seq` 是 `t<流水號>` 的下一個號碼，只增不減（採建議 C14）。
 - `data/topics-archive.json`：`{"v":1,"topics":{<id>:{…同上…,"archived_at":…}}}`。
@@ -175,7 +181,7 @@
 
 `state/topic-board/board.sock`，0600，不帶 token。一條連線一個要求：client 送一行 JSON `{"v":1,"op":"<名稱>","args":{…}}`，服務回一行 JSON `{"ok":true,"line":"<要印的那一行>",…}` 或 `{"ok":false,"code":"refused|usage|…","line":"<原因與修法>"}`，然後關閉連線。
 
-`op` 的清單：`health`、`status`、`stop`、`propose`、`confirm`、`merge`、`close-propose`、`move`、`rename`、`goal`、`archive`、`reopen`、`keep`（清掉關閉的提議；`fm-topic.sh` 沒有對應的子命令，頁面的「先不關」用它）、`summary`、`which`、`reset-token`。`open` 與 `restart` 由 client 用 `health` 與 `stop` 組出來。另有只給測試用的 `dump`、`test-write`、`test-resend`、`test-ignore`，只在服務的環境變數 `FM_TOPIC_BOARD_TEST=1` 時註冊，平常送這些 `op` 會得到「不認得的 op」。
+`op` 的清單：`health`、`status`、`stop`、`propose`、`confirm`、`merge`、`close-propose`、`move`、`rename`、`goal`、`archive`、`reopen`、`keep`（清掉關閉的提議；`fm-topic.sh` 沒有對應的子命令，頁面的「先不關」用它）、`summary`、`which`、`find`、`reset-token`。`open` 與 `restart` 由 client 用 `health` 與 `stop` 組出來。另有只給測試用的 `dump`、`test-write`、`test-resend`、`test-ignore`，只在服務的環境變數 `FM_TOPIC_BOARD_TEST=1` 時註冊，平常送這些 `op` 會得到「不認得的 op」。
 
 `health` 回 `{"ok":true,"pid":…,"port":…,"code_commit":…,"boot_id":…,"started_at":…}`。
 
@@ -198,7 +204,7 @@ API 的路徑與 body 由第五段定；這裡只定兩件事：
 - **輪詢**：`GET /api/state?v=<boot_id>:<版本>`。版本沒變回 `{"changed":false}`；`boot_id` 不同一律回全量。版本是一個字串：一個只在「看得到的東西真的變了」時才加一的計數，加上每個 home 是否過期的旗標。輪詢讀到一模一樣的結果不算變；某個 home 跨過過期線算變（那一刻沒有任何讀取會回報它）。
 - **兩步確認**：第一個請求回 `{"confirm":"<碼>","expires_at":…}`，碼約 2 分鐘有效、只能用一次、只存在記憶體；第二個請求帶碼才執行。碼綁定當時的對象，對象變了就拒絕。哪些動作要兩步，見第 8 節。
 
-生命週期的操作（`status`、`stop`、`restart`）與 `summary`、`which` 只在 socket 提供。`reset-token` 也只在 socket 提供。
+生命週期的操作（`status`、`stop`、`restart`）與 `summary`、`which`、`find` 只在 socket 提供。`reset-token` 也只在 socket 提供。
 
 ## 7. 指令白名單
 
@@ -257,7 +263,7 @@ API 的路徑與 body 由第五段定；這裡只定兩件事：
 
 例外：`--in-home <id> answers` 原樣傳回 `fm-captain-hold.sh` 的 exit code 與輸出。
 
-成功印一行 `ok <id> <做了什麼>`；`propose`、`summary`、`which`、`order`、`list`、`status`、`open` 各有自己的輸出。錯誤在 stderr 印一行原因與修法。只有 `list` 有 `--json`。
+成功印一行 `ok <id> <做了什麼>`；`propose`、`summary`、`which`、`find`、`order`、`list`、`status`、`open` 各有自己的輸出。錯誤在 stderr 印一行原因與修法。只有 `list` 有 `--json`。
 
 回 69 時 stderr 的那一行固定是「看板服務無法啟動：<原因>。<怎麼修>。這次的要求沒有寫入。」類別見第二段。
 

@@ -1,9 +1,23 @@
 // Loads and saves the topic files. The service is their only writer.
 import fs from "node:fs";
-import { isRecord, readJsonFile, stringRecord, textField, writeFileAtomic } from "./files.js";
+import {
+  isRecord,
+  readJsonFile,
+  stringField,
+  stringRecord,
+  textField,
+  writeFileAtomic,
+} from "./files.js";
 import type { BoardPaths } from "./layout.js";
-import { QUEUES, emptyState, isQueue } from "./topics.js";
-import type { ArchiveDoc, ArchivedTopic, Topic, TopicState, TopicsDoc } from "./topics.js";
+import { HISTORY_KINDS, QUEUES, emptyState, isQueue } from "./topics.js";
+import type {
+  ArchiveDoc,
+  ArchivedTopic,
+  HistoryEntry,
+  Topic,
+  TopicState,
+  TopicsDoc,
+} from "./topics.js";
 
 const FILE_MODE = 0o644;
 
@@ -49,6 +63,26 @@ function parseNextSeq(raw: unknown): number {
   return typeof raw === "number" && Number.isInteger(raw) ? Math.max(1, raw) : 1;
 }
 
+function parseHistoryEntry(raw: unknown): HistoryEntry | null {
+  if (!isRecord(raw)) return null;
+  const kind = HISTORY_KINDS.find((name) => name === raw["kind"]);
+  const at = stringField(raw, "at");
+  const topic = stringField(raw, "topic");
+  const name = stringField(raw, "name");
+  if (kind === undefined || at === null || topic === null || name === null) return null;
+  const entry: HistoryEntry = { at, kind, topic, name };
+  const from = stringField(raw, "from");
+  const fromName = stringField(raw, "from_name");
+  if (from !== null) entry.from = from;
+  if (fromName !== null) entry.from_name = fromName;
+  return entry;
+}
+
+function parseHistory(raw: unknown): HistoryEntry[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map(parseHistoryEntry).filter((entry): entry is HistoryEntry => entry !== null);
+}
+
 function parseDoc(raw: unknown): TopicsDoc {
   if (!isRecord(raw) || raw["v"] !== 1) throw new Error("expected an object with v: 1");
   const topics = raw["topics"];
@@ -58,6 +92,7 @@ function parseDoc(raw: unknown): TopicsDoc {
   const queues = isRecord(raw["queues"]) ? raw["queues"] : {};
   for (const queue of QUEUES) doc.queues[queue] = parseQueue(queues[queue], doc.topics);
   doc.merged = stringRecord(raw["merged"]);
+  doc.history = parseHistory(raw["history"]);
   doc.next_seq = parseNextSeq(raw["next_seq"]);
   return doc;
 }

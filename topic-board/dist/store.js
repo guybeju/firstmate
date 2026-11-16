@@ -1,7 +1,7 @@
 // Loads and saves the topic files. The service is their only writer.
 import fs from "node:fs";
-import { isRecord, readJsonFile, stringRecord, textField, writeFileAtomic } from "./files.js";
-import { QUEUES, emptyState, isQueue } from "./topics.js";
+import { isRecord, readJsonFile, stringField, stringRecord, textField, writeFileAtomic, } from "./files.js";
+import { HISTORY_KINDS, QUEUES, emptyState, isQueue } from "./topics.js";
 const FILE_MODE = 0o644;
 function parseCloseProposal(raw) {
     if (!isRecord(raw) || typeof raw["at"] !== "string" || typeof raw["reason"] !== "string")
@@ -42,6 +42,29 @@ function parseQueue(raw, topics) {
 function parseNextSeq(raw) {
     return typeof raw === "number" && Number.isInteger(raw) ? Math.max(1, raw) : 1;
 }
+function parseHistoryEntry(raw) {
+    if (!isRecord(raw))
+        return null;
+    const kind = HISTORY_KINDS.find((name) => name === raw["kind"]);
+    const at = stringField(raw, "at");
+    const topic = stringField(raw, "topic");
+    const name = stringField(raw, "name");
+    if (kind === undefined || at === null || topic === null || name === null)
+        return null;
+    const entry = { at, kind, topic, name };
+    const from = stringField(raw, "from");
+    const fromName = stringField(raw, "from_name");
+    if (from !== null)
+        entry.from = from;
+    if (fromName !== null)
+        entry.from_name = fromName;
+    return entry;
+}
+function parseHistory(raw) {
+    if (!Array.isArray(raw))
+        return [];
+    return raw.map(parseHistoryEntry).filter((entry) => entry !== null);
+}
 function parseDoc(raw) {
     if (!isRecord(raw) || raw["v"] !== 1)
         throw new Error("expected an object with v: 1");
@@ -55,6 +78,7 @@ function parseDoc(raw) {
     for (const queue of QUEUES)
         doc.queues[queue] = parseQueue(queues[queue], doc.topics);
     doc.merged = stringRecord(raw["merged"]);
+    doc.history = parseHistory(raw["history"]);
     doc.next_seq = parseNextSeq(raw["next_seq"]);
     return doc;
 }

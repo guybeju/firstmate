@@ -252,6 +252,24 @@ describe("store", () => {
     });
   });
 
+  it("loads a file written before the history existed, and drops history entries it cannot read", () => {
+    fs.mkdirSync(path.dirname(paths.topics), { recursive: true });
+    const base = { v: 1, next_seq: 1, topics: {}, queues: {}, merged: { old: "a" } };
+    fs.writeFileSync(paths.topics, JSON.stringify(base));
+    expect(loadTopicState(paths).doc.history).toEqual([]);
+    const good = { at: "T", kind: "merged", topic: "a", name: "A", from: "old", from_name: "Old" };
+    const history = [
+      good,
+      { at: "T", kind: "weird", topic: "a", name: "A" },
+      { kind: "merged" },
+      7,
+    ];
+    fs.writeFileSync(paths.topics, JSON.stringify({ ...base, history }));
+    expect(loadTopicState(paths).doc.history).toEqual([good]);
+    fs.writeFileSync(paths.topics, JSON.stringify({ ...base, history: "nope" }));
+    expect(loadTopicState(paths).doc.history).toEqual([]);
+  });
+
   it("repairs what it can and fills defaults", () => {
     const raw = {
       v: 1,

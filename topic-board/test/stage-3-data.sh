@@ -353,8 +353,34 @@ test_a_wrong_summary_can_be_retracted() {
 }
 
 setup_fleet
+# Runs last: it renames and merges topics the other tests rely on.
+test_find_traces_renames_merges_and_tasks() {
+  local out rc
+  t propose "Reports" --goal "monthly numbers" --id reports >/dev/null
+  t rename reports "Money reports" >/dev/null
+  t merge reports billing >/dev/null
+  out=$(t find reports) || fail "find failed: $out"
+  assert_equals "billing　Billing（一般）" "$(printf '%s\n' "$out" | head -n 1)" "find must lead with where the old id is now"
+  assert_contains "$out" "「Reports」改名為「Money reports」" "find must show the rename"
+  assert_contains "$out" "「Money reports」（reports）併入「Billing」" "find must show the merge"
+  assert_equals "$out" "$(t find 'money REP')" "an old name must find the same topic, ignoring case"
+  assert_contains "$(t find ship-a)" "task main/ship-a：Billing（2026-07-01）→ Login（2026-07-02）→ Billing（" \
+    "find must show every topic a task was tagged with, oldest first"
+  assert_contains "$(t find sm-work)" "task sm1/sm-work：" "find must look for the task in secondmate homes too"
+  assert_equals "找不到「nothing-here」。" "$(t find nothing-here)" "find must say when nothing matches"
+  rc=0
+  t find >/dev/null 2>&1 || rc=$?
+  assert_equals 2 "$rc" "find without a keyword is a usage error"
+  t restart >/dev/null
+  assert_equals "$out" "$(t find reports)" "the history must survive a restart"
+  assert_contains "$(t find ship-a)" "task main/ship-a：Billing（" "find must read the home afresh on a cold board"
+  assert_equals '["merged","renamed"]' "$(jq -c '[.history[].kind] | sort' "$MAIN/data/topics.json")" \
+    "the history must be stored in the topic file"
+  pass "find traces a topic through renames and merges, and a task through its tags"
+}
+
 fm_test_run test_agents_lights_and_placement test_holds_are_placed_and_ordered test_updates_and_topics \
   test_event_follows_the_tag_in_effect test_ledger_is_stored_once_and_survives_rewrites test_home_status \
   test_polling_follows_viewers test_summary_and_which test_summary_on_a_cold_board_reads_the_main_home_first \
   test_dump_is_test_only test_which_follows_a_retag_nobody_is_watching \
-  test_a_wrong_summary_can_be_retracted
+  test_a_wrong_summary_can_be_retracted test_find_traces_renames_merges_and_tasks

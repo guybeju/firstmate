@@ -270,6 +270,7 @@ const TOPIC_COMMANDS = {
     reopen: { positional: ["id"], valued: ["queue"] },
     "reset-token": { positional: [] },
     which: { positional: ["task"], valued: ["home"] },
+    find: { positional: ["query"] },
 };
 function buildTopicRequest(sub, shape, args) {
     const parsed = parseArgs(args, shape.valued ?? [], shape.bare ?? []);

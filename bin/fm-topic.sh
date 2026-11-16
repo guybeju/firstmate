@@ -22,6 +22,7 @@
 #   fm-topic.sh summary [--home <secondmate-id>] <task-id> <ready|report|failed|landed> -
 #   fm-topic.sh retract [--home <secondmate-id>] <task-id> <ready|report|failed|landed> -
 #   fm-topic.sh which [--home <secondmate-id>] <task-id>
+#   fm-topic.sh find <keyword>
 #   fm-topic.sh open | status | stop | restart | reset-token
 #   fm-topic.sh install-rules
 #
@@ -39,6 +40,12 @@
 # "<topic name>：", "未分類：" when the task has no topic, or "議題不明（<task-id>）："
 # when the task's home could not be read. which prints the same line without
 # storing anything. --home names the secondmate home the task lives in.
+#
+# find answers where a topic or task is now and how it got there, in a few
+# lines: it matches the keyword against topic ids, names, and goals, including
+# ids and names that were merged away or renamed, and prints each match under
+# its current id with its history. A keyword that is a task id also prints the
+# topics that task was tagged with, oldest first.
 #
 # retract takes the task's latest summary of that kind off the board when it
 # turned out to be wrong; stdin is the reason. The line stays in the file.
@@ -605,7 +612,7 @@ main() {
     setup) cmd_setup "$@" ;;
     install-rules) cmd_install_rules "$@" ;;
     propose | confirm | merge | close-propose | move | rename | goal | archive | reopen | \
-      summary | retract | which | open | status | stop | restart | reset-token)
+      summary | retract | which | find | open | status | stop | restart | reset-token)
       cmd_service "$sub" "$@"
       ;;
     *) usage_error "不認得的子命令：$sub" ;;
