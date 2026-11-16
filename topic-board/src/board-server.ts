@@ -39,7 +39,9 @@ import type { PollTimings } from "./poller.js";
 import { loadTopicState, saveTopicState } from "./store.js";
 import * as topics from "./topics.js";
 import type { MovePosition, Queue, TopicResult, TopicState } from "./topics.js";
-import { buildView, placeTask } from "./view.js";
+import { buildView, parseTags, placeTask } from "./view.js";
+import { findLines } from "./lineage.js";
+import type { TaskTags } from "./lineage.js";
 import { DEFAULT_WRITE_TIMINGS, WriteEngine } from "./writes.js";
 import type { WriteRecord, WriteTimings } from "./writes.js";
 
@@ -174,7 +176,7 @@ const TOPIC_HANDLERS: Record<string, TopicHandler> = {
     const from = stringField(args, "from");
     const into = stringField(args, "into");
     if (from === null || into === null) return { usage: "merge 需要兩個議題 id。" };
-    return topics.merge(service.state, from, into);
+    return topics.merge(service.state, from, into, now());
   },
   "close-propose": (service, args) => {
     const id = stringField(args, "id");
@@ -195,7 +197,7 @@ const TOPIC_HANDLERS: Record<string, TopicHandler> = {
     const id = stringField(args, "id");
     const value = stringField(args, "value");
     if (id === null || value === null) return { usage: "rename 需要議題 id 與名稱。" };
-    return topics.rename(service.state, id, value);
+    return topics.rename(service.state, id, value, now());
   },
   goal: (service, args) => {
     const id = stringField(args, "id");
@@ -216,7 +218,7 @@ const TOPIC_HANDLERS: Record<string, TopicHandler> = {
     const id = stringField(args, "id");
     const queue = optionalQueue(args);
     if (id === null || queue === null) return { usage: "reopen 需要議題 id。" };
-    return topics.reopen(service.state, id, queue);
+    return topics.reopen(service.state, id, queue, now());
   },
 };
 
@@ -344,6 +346,30 @@ async function which(service: Service, args: Record<string, unknown>): Promise<B
   const home = await homeArg(service, args);
   if (typeof home !== "string") return home;
   return { ok: true, line: await reminderPrefix(service, home, task) };
+}
+
+/** The tag files of every task named exactly `task`, across the homes the board reads. */
+function taskTags(service: Service, task: string): TaskTags[] {
+  const found: TaskTags[] = [];
+  for (const home of service.poller.snapshots()) {
+    const text = home.report?.topics[task];
+    if (text !== undefined) found.push({ home: home.id, task, tags: parseTags(text) });
+  }
+  return found;
+}
+
+/**
+ * Where a topic or task is now and how it got there. The main home is read
+ * afresh first, like `which`; other homes answer from their last read.
+ */
+async function find(service: Service, args: Record<string, unknown>): Promise<BoardResponse> {
+  const query = stringField(args, "query")?.trim() ?? "";
+  if (query === "" || [...query].length > topics.NAME_MAX)
+    return usage(`find 需要一個關鍵字，最多 ${topics.NAME_MAX} 個字。`);
+  const isTask = taskArg({ task: query }) !== null;
+  if (isTask) await withTimeout(service.poller.readFresh(MAIN_HOME), LOOKUP_WAIT_MS, false);
+  const tasks = isTask ? taskTags(service, query) : [];
+  return { ok: true, line: findLines(service.state, query, tasks).join("\n") };
 }
 
 function writeView(record: WriteRecord): Record<string, unknown> {
@@ -479,6 +505,7 @@ const SERVICE_HANDLERS: Record<string, AsyncHandler> = {
   summary,
   retract,
   which,
+  find,
   ...(TEST_MODE
     ? { dump, "test-write": testWrite, "test-resend": testResend, "test-ignore": testIgnore }
     : {}),

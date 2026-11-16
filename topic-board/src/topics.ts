@@ -23,12 +23,31 @@ export interface ArchivedTopic extends Topic {
   archived_at: string;
 }
 
+export const HISTORY_KINDS = ["merged", "renamed", "archived", "reopened"] as const;
+export type HistoryKind = (typeof HISTORY_KINDS)[number];
+
+/**
+ * One change to a topic's identity, kept so an old name or id can be traced.
+ * `topic` and `name` are the topic the change left behind; a merge also names
+ * the topic that went away (`from`, `from_name`), and a rename the old name.
+ */
+export interface HistoryEntry {
+  at: string;
+  kind: HistoryKind;
+  topic: string;
+  name: string;
+  from?: string;
+  from_name?: string;
+}
+
 export interface TopicsDoc {
   v: 1;
   next_seq: number;
   queues: Record<Queue, string[]>;
   topics: Record<string, Topic>;
   merged: Record<string, string>;
+  /** Oldest first. Files written before the history existed load with none. */
+  history: HistoryEntry[];
 }
 
 export interface ArchiveDoc {
@@ -73,7 +92,14 @@ const QUEUE_LABEL: Record<Queue, string> = { high: "高", normal: "一般", late
 
 export function emptyState(): TopicState {
   return {
-    doc: { v: 1, next_seq: 1, queues: { high: [], normal: [], later: [] }, topics: {}, merged: {} },
+    doc: {
+      v: 1,
+      next_seq: 1,
+      queues: { high: [], normal: [], later: [] },
+      topics: {},
+      merged: {},
+      history: [],
+    },
     archive: { v: 1, topics: {} },
   };
 }
@@ -246,7 +272,12 @@ export function confirm(state: TopicState, rawId: string, queue: Queue | undefin
   ]);
 }
 
-export function merge(state: TopicState, rawFrom: string, rawInto: string): TopicResult {
+export function merge(
+  state: TopicState,
+  rawFrom: string,
+  rawInto: string,
+  now: string,
+): TopicResult {
   const into = resolveTopicId(state.doc, rawInto);
   const from = resolveTopicId(state.doc, rawFrom);
   if (from === into) {
@@ -263,6 +294,14 @@ export function merge(state: TopicState, rawFrom: string, rawInto: string): Topi
   delete next.doc.topics[from];
   removeFromQueues(next.doc, from);
   next.doc.merged[from] = into;
+  next.doc.history.push({
+    at: now,
+    kind: "merged",
+    topic: into,
+    name: target.name,
+    from,
+    from_name: source.name,
+  });
   return changed(next, `ok ${from} 已併入 ${into}`, [
     { kind: "topic.merged", topic: into, text: `議題「${source.name}」已併入「${target.name}」` },
   ]);
@@ -344,6 +383,7 @@ function setText(
   rawId: string,
   field: "name" | "goal",
   value: string,
+  now = "",
 ): TopicResult {
   const id = resolveTopicId(state.doc, rawId);
   const topic = state.doc.topics[id];
@@ -355,11 +395,19 @@ function setText(
   if (topic[field] === text) return unchanged(state, `ok ${id} ${label}沒有變`);
   const next = clone(state);
   (next.doc.topics[id] as Topic)[field] = text;
+  if (field === "name")
+    next.doc.history.push({
+      at: now,
+      kind: "renamed",
+      topic: id,
+      name: text,
+      from_name: topic.name,
+    });
   return changed(next, `ok ${id} ${label}已改`);
 }
 
-export function rename(state: TopicState, rawId: string, name: string): TopicResult {
-  return setText(state, rawId, "name", name);
+export function rename(state: TopicState, rawId: string, name: string, now: string): TopicResult {
+  return setText(state, rawId, "name", name, now);
 }
 
 export function setGoal(state: TopicState, rawId: string, goal: string): TopicResult {
@@ -377,12 +425,18 @@ export function archive(state: TopicState, rawId: string, now: string): TopicRes
   next.archive.topics[id] = { ...kept, archived_at: now };
   delete next.doc.topics[id];
   removeFromQueues(next.doc, id);
+  next.doc.history.push({ at: now, kind: "archived", topic: id, name: topic.name });
   return changed(next, `ok ${id} 已封存`, [
     { kind: "topic.archived", topic: id, text: `議題「${topic.name}」已封存` },
   ]);
 }
 
-export function reopen(state: TopicState, rawId: string, queue: Queue | undefined): TopicResult {
+export function reopen(
+  state: TopicState,
+  rawId: string,
+  queue: Queue | undefined,
+  now: string,
+): TopicResult {
   const id = resolveTopicId(state.doc, rawId);
   const archived = state.archive.topics[id];
   if (archived === undefined) {
@@ -394,6 +448,7 @@ export function reopen(state: TopicState, rawId: string, queue: Queue | undefine
   const { archived_at: _dropped, ...kept } = archived;
   void _dropped;
   next.doc.topics[id] = { ...kept, status: "confirmed" };
+  next.doc.history.push({ at: now, kind: "reopened", topic: id, name: archived.name });
   delete next.archive.topics[id];
   next.doc.queues[target].push(id);
   const dispatchable = target === "later" ? [] : [id];

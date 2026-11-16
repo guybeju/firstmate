@@ -114,7 +114,7 @@ describe("propose", () => {
     ]) {
       expect(refusal(propose({ name: hidden }))).toContain("名稱");
       expect(refusal(propose({ goal: hidden }))).toContain("目標");
-      expect(refusal(topics.rename(state, "a", hidden))).toContain("名稱");
+      expect(refusal(topics.rename(state, "a", hidden, NOW))).toContain("名稱");
     }
     expect(propose({ name: "帳務 重構 😀 (v2) “quoted”", goal: "é ü ñ — ok" }).ok).toBe(true);
     for (const builtin of ["constructor", "__proto__", "toString"]) {
@@ -231,15 +231,17 @@ describe("move", () => {
 describe("rename, goal, and close-propose", () => {
   it("stores trimmed text and treats the same text as no change", () => {
     const state = fixture();
-    const renamed = done(topics.rename(state, "a", "  New  "));
+    const renamed = done(topics.rename(state, "a", "  New  ", NOW));
     expect(renamed.state.doc.topics["a"]?.name).toBe("New");
     expect(renamed.line).toBe("ok a 名稱已改");
-    expect(done(topics.rename(renamed.state, "a", "New")).changed).toBe(false);
+    expect(done(topics.rename(renamed.state, "a", "New", NOW)).changed).toBe(false);
     const goal = done(topics.setGoal(state, "p", "fresh goal"));
     expect(goal.state.doc.topics["p"]?.goal).toBe("fresh goal");
     expect(goal.line).toBe("ok p 目標已改");
-    expect(refusal(topics.rename(state, "a", ""))).toContain("名稱");
-    expect(refusal(topics.rename(state, "a", "x".repeat(topics.NAME_MAX + 1)))).toContain("名稱");
+    expect(refusal(topics.rename(state, "a", "", NOW))).toContain("名稱");
+    expect(refusal(topics.rename(state, "a", "x".repeat(topics.NAME_MAX + 1), NOW))).toContain(
+      "名稱",
+    );
     expect(topics.setGoal(state, "a", "x".repeat(topics.NAME_MAX + 1)).ok).toBe(true);
     expect(refusal(topics.setGoal(state, "a", "x".repeat(topics.GOAL_MAX + 1)))).toContain("目標");
     expect(refusal(topics.setGoal(state, "nope", "g"))).toContain("沒有 nope");
@@ -292,35 +294,35 @@ describe("archive and reopen", () => {
     expect(archived.events[0]?.kind).toBe("topic.archived");
     expect(done(topics.archive(archived.state, "b", "T2")).changed).toBe(false);
 
-    const reopened = done(topics.reopen(archived.state, "b", undefined));
+    const reopened = done(topics.reopen(archived.state, "b", undefined, NOW));
     expect(reopened.state.archive.topics["b"]).toBeUndefined();
     expect(reopened.state.doc.queues.normal).toEqual(["c", "b"]);
     expect(reopened.state.doc.topics["b"]).not.toHaveProperty("archived_at");
     expect(reopened.dispatchable).toEqual(["b"]);
     expect(reopened.line).toBe("ok b 已重開，放進「一般」");
-    expect(done(topics.reopen(archived.state, "b", "later")).dispatchable).toEqual([]);
-    expect(done(topics.reopen(archived.state, "b", "high")).state.doc.queues.high).toEqual([
+    expect(done(topics.reopen(archived.state, "b", "later", NOW)).dispatchable).toEqual([]);
+    expect(done(topics.reopen(archived.state, "b", "high", NOW)).state.doc.queues.high).toEqual([
       "a",
       "b",
     ]);
-    expect(done(topics.reopen(reopened.state, "b", undefined)).changed).toBe(false);
+    expect(done(topics.reopen(reopened.state, "b", undefined, NOW)).changed).toBe(false);
   });
 
   it("turns down a proposal by archiving it and accepts it on reopen", () => {
     const state = fixture();
     const dismissed = done(topics.archive(state, "p", NOW));
     expect(dismissed.state.archive.topics["p"]?.status).toBe("proposed");
-    const accepted = done(topics.reopen(dismissed.state, "p", "high"));
+    const accepted = done(topics.reopen(dismissed.state, "p", "high", NOW));
     expect(accepted.state.doc.topics["p"]?.status).toBe("confirmed");
     expect(refusal(topics.archive(state, "nope", NOW))).toContain("沒有 nope");
-    expect(refusal(topics.reopen(state, "nope", undefined))).toContain("沒有 nope");
+    expect(refusal(topics.reopen(state, "nope", undefined, NOW))).toContain("沒有 nope");
   });
 });
 
 describe("merge", () => {
   it("aliases the old id and removes the old topic", () => {
     const state = fixture();
-    const merged = done(topics.merge(state, "b", "a"));
+    const merged = done(topics.merge(state, "b", "a", NOW));
     expect(merged.state.doc.merged).toEqual({ b: "a" });
     expect(merged.state.doc.topics["b"]).toBeUndefined();
     expect(merged.state.doc.queues.normal).toEqual(["c"]);
@@ -330,32 +332,61 @@ describe("merge", () => {
       text: "議題「B」已併入「A」",
     });
     expect(topics.resolveTopicId(merged.state.doc, "b")).toBe("a");
-    expect(done(topics.merge(merged.state, "b", "a")).changed).toBe(false);
-    expect(done(topics.rename(merged.state, "b", "Via alias")).state.doc.topics["a"]?.name).toBe(
-      "Via alias",
-    );
+    expect(done(topics.merge(merged.state, "b", "a", NOW)).changed).toBe(false);
+    expect(
+      done(topics.rename(merged.state, "b", "Via alias", NOW)).state.doc.topics["a"]?.name,
+    ).toBe("Via alias");
   });
 
   it("follows chains and merges a proposal", () => {
-    const first = done(topics.merge(fixture(), "b", "a")).state;
-    const second = done(topics.merge(first, "a", "c")).state;
+    const first = done(topics.merge(fixture(), "b", "a", NOW)).state;
+    const second = done(topics.merge(first, "a", "c", NOW)).state;
     expect(topics.resolveTopicId(second.doc, "b")).toBe("c");
-    expect(done(topics.merge(second, "p", "b")).state.doc.merged["p"]).toBe("c");
+    expect(done(topics.merge(second, "p", "b", NOW)).state.doc.merged["p"]).toBe("c");
+  });
+
+  it("records merges, renames, archiving and reopening in the history, oldest first", () => {
+    let state = done(topics.rename(fixture(), "b", "Bee", "2026-11-17T00:00:00Z")).state;
+    state = done(topics.merge(state, "b", "a", "2026-11-18T00:00:00Z")).state;
+    state = done(topics.archive(state, "c", "2026-11-19T00:00:00Z")).state;
+    state = done(topics.reopen(state, "c", undefined, "2026-11-20T00:00:00Z")).state;
+    expect(state.doc.history).toEqual([
+      { at: "2026-11-17T00:00:00Z", kind: "renamed", topic: "b", name: "Bee", from_name: "B" },
+      {
+        at: "2026-11-18T00:00:00Z",
+        kind: "merged",
+        topic: "a",
+        name: "A",
+        from: "b",
+        from_name: "Bee",
+      },
+      { at: "2026-11-19T00:00:00Z", kind: "archived", topic: "c", name: "C" },
+      { at: "2026-11-20T00:00:00Z", kind: "reopened", topic: "c", name: "C" },
+    ]);
+  });
+
+  it("adds nothing to the history when an operation changes nothing or is refused", () => {
+    const state = fixture();
+    expect(done(topics.rename(state, "a", "A", NOW)).state.doc.history).toEqual([]);
+    expect(done(topics.setGoal(state, "a", "another goal")).state.doc.history).toEqual([]);
+    const merged = done(topics.merge(state, "b", "a", NOW)).state;
+    expect(done(topics.merge(merged, "b", "a", NOW)).state.doc.history).toHaveLength(1);
+    expect(done(topics.reopen(state, "a", undefined, NOW)).state.doc.history).toEqual([]);
   });
 
   it("refuses merging into itself, a proposal, an archived or an unknown topic", () => {
     const state = fixture();
-    expect(refusal(topics.merge(state, "a", "a"))).toContain("它自己");
-    expect(refusal(topics.merge(state, "a", "p"))).toContain("提議中");
-    expect(refusal(topics.merge(state, "nope", "a"))).toContain("沒有 nope");
-    expect(refusal(topics.merge(state, "a", "nope"))).toContain("沒有 nope");
+    expect(refusal(topics.merge(state, "a", "a", NOW))).toContain("它自己");
+    expect(refusal(topics.merge(state, "a", "p", NOW))).toContain("提議中");
+    expect(refusal(topics.merge(state, "nope", "a", NOW))).toContain("沒有 nope");
+    expect(refusal(topics.merge(state, "a", "nope", NOW))).toContain("沒有 nope");
     const archived = done(topics.archive(state, "b", NOW)).state;
-    expect(refusal(topics.merge(archived, "a", "b"))).toContain("已封存");
-    expect(refusal(topics.merge(archived, "b", "a"))).toContain("已封存");
+    expect(refusal(topics.merge(archived, "a", "b", NOW))).toContain("已封存");
+    expect(refusal(topics.merge(archived, "b", "a", NOW))).toContain("已封存");
     expect(
       refusal(
         topics.propose(
-          done(topics.merge(state, "b", "a")).state,
+          done(topics.merge(state, "b", "a", NOW)).state,
           { name: "B", goal: "g", id: "b", by: "user" },
           NOW,
         ),
@@ -373,6 +404,7 @@ describe("helpers", () => {
         queues: { high: [], normal: [], later: [] },
         topics: {},
         merged: {},
+        history: [],
       },
       archive: { v: 1, topics: {} },
     });

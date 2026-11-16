@@ -299,6 +299,7 @@ const TOPIC_COMMANDS: Record<string, CommandShape> = {
   reopen: { positional: ["id"], valued: ["queue"] },
   "reset-token": { positional: [] },
   which: { positional: ["task"], valued: ["home"] },
+  find: { positional: ["query"] },
 };
 
 function buildTopicRequest(sub: string, shape: CommandShape, args: string[]): BoardRequest {

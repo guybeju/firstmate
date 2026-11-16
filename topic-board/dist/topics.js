@@ -1,13 +1,21 @@
 // The topic model and every change the board can make to it. Pure: no I/O, no
 // clock. Callers pass the current time and persist the returned state.
 export const QUEUES = ["high", "normal", "later"];
+export const HISTORY_KINDS = ["merged", "renamed", "archived", "reopened"];
 export const NAME_MAX = 80;
 export const GOAL_MAX = 200;
 const ID_MAX = 64;
 const QUEUE_LABEL = { high: "高", normal: "一般", later: "待辦" };
 export function emptyState() {
     return {
-        doc: { v: 1, next_seq: 1, queues: { high: [], normal: [], later: [] }, topics: {}, merged: {} },
+        doc: {
+            v: 1,
+            next_seq: 1,
+            queues: { high: [], normal: [], later: [] },
+            topics: {},
+            merged: {},
+            history: [],
+        },
         archive: { v: 1, topics: {} },
     };
 }
@@ -152,7 +160,7 @@ export function confirm(state, rawId, queue) {
         },
     ]);
 }
-export function merge(state, rawFrom, rawInto) {
+export function merge(state, rawFrom, rawInto, now) {
     const into = resolveTopicId(state.doc, rawInto);
     const from = resolveTopicId(state.doc, rawFrom);
     if (from === into) {
@@ -172,6 +180,14 @@ export function merge(state, rawFrom, rawInto) {
     delete next.doc.topics[from];
     removeFromQueues(next.doc, from);
     next.doc.merged[from] = into;
+    next.doc.history.push({
+        at: now,
+        kind: "merged",
+        topic: into,
+        name: target.name,
+        from,
+        from_name: source.name,
+    });
     return changed(next, `ok ${from} 已併入 ${into}`, [
         { kind: "topic.merged", topic: into, text: `議題「${source.name}」已併入「${target.name}」` },
     ]);
@@ -232,7 +248,7 @@ export function move(state, rawId, queue, position) {
     const dispatchable = from === "later" && queue !== "later" ? [id] : [];
     return changed(next, `ok ${id} 已移到「${QUEUE_LABEL[queue]}」`, [], dispatchable);
 }
-function setText(state, rawId, field, value) {
+function setText(state, rawId, field, value, now = "") {
     const id = resolveTopicId(state.doc, rawId);
     const topic = state.doc.topics[id];
     if (topic === undefined)
@@ -246,10 +262,18 @@ function setText(state, rawId, field, value) {
         return unchanged(state, `ok ${id} ${label}沒有變`);
     const next = clone(state);
     next.doc.topics[id][field] = text;
+    if (field === "name")
+        next.doc.history.push({
+            at: now,
+            kind: "renamed",
+            topic: id,
+            name: text,
+            from_name: topic.name,
+        });
     return changed(next, `ok ${id} ${label}已改`);
 }
-export function rename(state, rawId, name) {
-    return setText(state, rawId, "name", name);
+export function rename(state, rawId, name, now) {
+    return setText(state, rawId, "name", name, now);
 }
 export function setGoal(state, rawId, goal) {
     return setText(state, rawId, "goal", goal);
@@ -267,11 +291,12 @@ export function archive(state, rawId, now) {
     next.archive.topics[id] = { ...kept, archived_at: now };
     delete next.doc.topics[id];
     removeFromQueues(next.doc, id);
+    next.doc.history.push({ at: now, kind: "archived", topic: id, name: topic.name });
     return changed(next, `ok ${id} 已封存`, [
         { kind: "topic.archived", topic: id, text: `議題「${topic.name}」已封存` },
     ]);
 }
-export function reopen(state, rawId, queue) {
+export function reopen(state, rawId, queue, now) {
     const id = resolveTopicId(state.doc, rawId);
     const archived = state.archive.topics[id];
     if (archived === undefined) {
@@ -284,6 +309,7 @@ export function reopen(state, rawId, queue) {
     const { archived_at: _dropped, ...kept } = archived;
     void _dropped;
     next.doc.topics[id] = { ...kept, status: "confirmed" };
+    next.doc.history.push({ at: now, kind: "reopened", topic: id, name: archived.name });
     delete next.archive.topics[id];
     next.doc.queues[target].push(id);
     const dispatchable = target === "later" ? [] : [id];
