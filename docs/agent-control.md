@@ -34,7 +34,7 @@ A recorded `harness=` is not always an exact adapter name: a task launched from 
 | --- | --- | --- |
 | `interrupt` | Deliver the harness's verified interrupt sequence while leaving the agent running. | Delivery succeeds while the endpoint still exists and the agent is still alive where the backend can classify that; cancellation is confirmed only from an adapter-owned acknowledgement and otherwise reports `cancel=unconfirmed`. |
 | `exit` | Stop the agent, preserving the endpoint, the worktree, and every uncommitted change. | The backend's recovery-grade classifier reports the agent gone. Already-stopped is idempotent success. An endpoint reading `missing` (or, on Rex, `unreadable`) goes through the same [absence proof](#reclaiming-a-task-whose-endpoint-is-gone) the reclaim uses before anything is claimed about it, and only Herdr and Rex can supply one (T3 Code refuses `exit` before reading anything): proven gone reports `endpoint-gone` (the agent went with it, and the endpoint this verb normally preserves did not survive), a pane that turns out to be there and idle is the ordinary `already-stopped`, one whose agent is back takes the ordinary interrupt-then-exit path. A tmux `missing` always refuses rather than claim a stop it cannot see. |
-| `relaunch` | Replace the running agent with a new one in the same worktree - and the same endpoint whenever that endpoint still exists - on the exact recorded adapter or an explicitly chosen harness, model, and effort. | The new agent is alive on the endpoint the task's record now names, and that record names the harness that is actually running. |
+| `relaunch` | Replace the running agent with a new one in the same worktree - and the same endpoint whenever that endpoint still exists - on the exact recorded adapter or an explicitly chosen harness, model, and effort; with `--mode`, also [switch a ship's delivery mode](#switching-a-ships-delivery-mode). | The new agent is alive on the endpoint the task's record now names, and that record names the harness that is actually running; after a `--mode` switch, the brief, the record, and the new agent's instructions all name the new mode. |
 
 An exit that delivers lifecycle input but cannot prove the agent stopped fails with `exit=unconfirmed`, reports the observed agent state and any interrupt cancellation claim, and never claims that nothing changed.
 Interrupt never rewrites busy state as proof of its own success.
@@ -100,6 +100,27 @@ A relaunch does take one session reference when the endpoint's own runtime recor
    [`docs/herdr-backend.md`](herdr-backend.md#agent-status-authority-and-relaunch) owns the mechanism and measured behavior.
 
 Switching harness is therefore one ordinary relaunch rather than a separate mechanism.
+
+### Switching a ship's delivery mode
+
+`relaunch --mode <no-mistakes|direct-PR>` is the one supported way to change a live ship's delivery mode, for example when work spawned for the validation pipeline must become a plain pull request.
+It is a relaunch because the brief is the durable instruction a replacement reads, so rewriting the brief and replacing the agent keeps the worker, the brief, and the record in agreement; a steer to the running agent would leave its loaded contract stale.
+Before the checkpoint, the brief's Setup step, rule 1, rule-6 ask-user escalation, and Definition of done are re-rendered for the new mode by [`fm_brief_switch_delivery`](../bin/fm-dod-lib.sh), the same renderers a fresh scaffold uses, and every other byte stays, including `## Captain's intent` and earlier progress notes.
+The progress note tells the replacement the mode changed, and `fm-spawn.sh --relaunch --mode` publishes the replacement's record with the new `mode=`, so [`bin/fm-pr-check.sh`](../bin/fm-pr-check.sh)'s ready line, `bin/fm-crew-state.sh`, and the `config/ready-after-green` gate read it from there.
+yolo, branch, base branch, forge, and upstream consent are unchanged, and the worktree and its commits are untouched.
+
+It refuses before anything stops, changing nothing, for:
+
+- a scout (promote it instead), a secondmate, or a no-op to the same mode;
+- local-only on either side, which publishes nothing and latches its accepted head for the local merge;
+- a task whose PR is registered or merged;
+- a no-mistakes run still active on the task's branch, naming the run and the `no-mistakes axi abort --run <id>` to stop first (an unreadable run status proceeds with a notice);
+- a forge, base branch, or PR-text posture the new mode cannot carry;
+- a publication to this repository that the [self-repository gate](../bin/fm-role-lib.sh) would refuse at spawn;
+- a brief that is a promoted scout's, or whose contract sections differ from what the current renderers write, which is how a hand-edited brief is recognized.
+
+A failure that keeps the prior record also restores the prior brief, so the two never name different modes.
+A switch inherits relaunch's backend limits.
 
 ### Reclaiming a task whose endpoint is gone
 

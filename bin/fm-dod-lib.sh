@@ -3,7 +3,9 @@
 # the named-head reachability gate that accepts a ship `done:` claim.
 # Sourced by bin/fm-brief.sh, which renders it into a generated ship brief, and by
 # bin/fm-promote.sh, which renders it into the ship instructions a promoted scout
-# receives. Both paths must hand the worker the same contract: a promoted
+# receives, and by bin/fm-control.sh, whose relaunch --mode re-renders a live
+# ship's contract for its new mode through fm_brief_switch_delivery. Every path
+# must hand the worker the same contract: a promoted
 # no-mistakes worker that never received the ask-user escalation rule or the
 # `--yes` ban is the exact delivery hole this single owner exists to close.
 # fm_dod_block <no-mistakes|direct-PR|local-only> <task-id> [branch] [<forge>]
@@ -314,6 +316,128 @@ fm_ship_rule_one() {  # <no-mistakes|direct-PR|local-only> <task-id> [branch] [<
       return 1
       ;;
   esac
+}
+
+# The mode-specific Setup step a ship brief lists after creating its branch:
+# the no-mistakes doctor/init step, or nothing. bin/fm-brief.sh and
+# fm_brief_switch_delivery both render it from here.
+fm_ship_setup_steps() {  # <mode>
+  [ "$1" = no-mistakes ] || return 0
+  printf '%s\n' "2. Run \`no-mistakes doctor\`; if it reports the repo is not initialized here, run \`no-mistakes init\`."
+}
+
+# Print the number of times <fragment> occurs in <text>.
+fm_brief_fragment_count() {  # <text> <fragment>
+  local rest=${1//"$2"/}
+  printf '%s\n' $(( (${#1} - ${#rest}) / ${#2} ))
+}
+
+# Read the contract a scaffolded ship brief records into its caller's locals:
+# from, forge, consent, from_pr (Delivery contract line), branch (Ship branch
+# line), and base (Base branch line). Refuses a promoted scout's brief and any
+# brief without exactly one contract and branch line.
+fm_brief_switch_parse() {  # <brief>
+  local brief=$1 count token contract
+  if grep -qx '# Current delivery mode contract' "$brief"; then
+    echo "error: $brief is a promoted scout's brief, whose delivery contract lives in its promotion section; a delivery-mode switch rewrites only the contract bin/fm-brief.sh scaffolds" >&2
+    return 1
+  fi
+  for token in 'Delivery contract' 'Ship branch'; do
+    count=$(grep -c "^$token: " "$brief" || true)
+    [ "$count" = 1 ] || {
+      echo "error: $brief records $count $token lines; a switch needs exactly one to know which contract it replaces" >&2
+      return 1
+    }
+  done
+  branch=$(sed -n 's/^Ship branch: //p' "$brief")
+  contract=$(sed -n 's/^Delivery contract: //p' "$brief")
+  for token in $contract; do
+    case "$token" in
+      mode=*) [ -z "$from" ] || { echo "error: $brief names its mode twice" >&2; return 1; }; from=${token#mode=} ;;
+      forge=*) forge=${token#forge=} ;;
+      shape=squash) ;;
+      upstream-consent=*) consent=${token#upstream-consent=} ;;
+      pr=*) from_pr=${token#pr=} ;;
+      *) echo "error: $brief has an unrecognized Delivery contract token '$token'" >&2; return 1 ;;
+    esac
+  done
+  [ -n "$from" ] || { echo "error: $brief's Delivery contract line names no mode" >&2; return 1; }
+  base=$(fm_brief_base_branches "$brief" || true)
+  case "$base" in
+    *$'\n'*) echo "error: $brief records more than one Base branch line" >&2; return 1 ;;
+  esac
+}
+
+# Set FM_BRIEF_SWITCH_SETUP, FM_BRIEF_SWITCH_ASK, and FM_BRIEF_SWITCH_DOD to the
+# three mode-dependent fragments bin/fm-brief.sh writes into a ship brief: the
+# branch step through Rule 1, the rule-6 ask-user slot, and the Definition of
+# done. Reads data, id, branch, forge, base, and consent from its caller,
+# fm_brief_switch_delivery.
+fm_brief_switch_render() {  # <mode> <pr>
+  local mode=$1 pr=$2 setup rule ask dod branch_q
+  rule=$(fm_ship_rule_one "$mode" "$id" "$branch" "$forge" "$base") || return 1
+  dod=$(fm_dod_block "$mode" "$id" "$branch" "$forge" "$base" "$consent" "$pr") || return 1
+  setup=$(fm_ship_setup_steps "$mode")
+  [ -z "$setup" ] || setup=$'\n'"$setup"
+  ask=
+  [ "$mode" != no-mistakes ] || ask=$(fm_ask_user_escalation_block "$data" "$id")
+  printf -v branch_q '%q' "$branch"
+  FM_BRIEF_SWITCH_SETUP=$'\n'"1. First action: create your branch: \`git checkout -b $branch_q --\`$setup"$'\n\n'"# Rules"$'\n'"$rule"$'\n'
+  FM_BRIEF_SWITCH_ASK="and stop. Firstmate will reply with the decision."$'\n'"$ask"$'\n'"   A decision or blocker you opened stays open"
+  FM_BRIEF_SWITCH_DOD=$'\n'"$dod"$'\n'
+}
+
+# fm_brief_switch_delivery <brief> <data-dir> <task-id> <to-mode> <to-pr>
+# Print <brief> with its delivery contract re-rendered for <to-mode>: the Setup
+# step and Rule 1, the rule-6 ask-user escalation, and the Definition of done,
+# each rendered by the same owners bin/fm-brief.sh uses. Every other byte -
+# `# Task` with `## Captain's intent`, appended progress notes, home additions -
+# is kept as it is. The current mode is left in FM_BRIEF_SWITCH_FROM, so call
+# this outside a command substitution. It refuses rather than guesses: the
+# fm_brief_switch_parse refusals, a no-op, local-only on either side, a forge,
+# base, or PR-text posture the new mode cannot carry, a no-mistakes target
+# without a Captain's intent, and any fragment that does not appear exactly once
+# as the current renderers would write it, which is how a hand-edited or
+# older-format brief is recognized.
+fm_brief_switch_delivery() {  # <brief> <data-dir> <task-id> <to-mode> <to-pr>
+  local brief=$1 data=$2 id=$3 to=$4 to_pr=$5
+  local from='' forge=none consent='' from_pr=auto branch='' base='' text count name old new
+  local old_setup old_ask old_dod new_setup new_ask new_dod
+  FM_BRIEF_SWITCH_FROM=
+  [ -f "$brief" ] || { echo "error: no instructions at $brief to switch" >&2; return 1; }
+  fm_brief_switch_parse "$brief" || return 1
+  FM_BRIEF_SWITCH_FROM=$from
+  [ "$from" != "$to" ] || { echo "error: the task already ships mode=$to; there is nothing to switch" >&2; return 1; }
+  for name in "$from" "$to"; do
+    case "$name" in
+      no-mistakes|direct-PR) ;;
+      local-only)
+        echo "error: switching to or from local-only is not supported: it publishes nothing, latches its accepted head for the local merge, and carries no forge, base branch, or upstream consent, so its record does not translate to a publishing mode" >&2
+        return 1 ;;
+      *) echo "error: unknown delivery mode '$name'" >&2; return 1 ;;
+    esac
+  done
+  if [ "$to" = no-mistakes ] \
+    && [ -z "$(fm_brief_task_heading_body "$brief" "## Captain's intent" | tr -d '[:space:]')" ]; then
+    echo "error: $brief has no ## Captain's intent subsection, which a no-mistakes run takes as its --intent" >&2
+    return 1
+  fi
+  fm_brief_switch_render "$to" "$to_pr" || return 1
+  new_setup=$FM_BRIEF_SWITCH_SETUP new_ask=$FM_BRIEF_SWITCH_ASK new_dod=$FM_BRIEF_SWITCH_DOD
+  fm_brief_switch_render "$from" "$from_pr" || return 1
+  old_setup=$FM_BRIEF_SWITCH_SETUP old_ask=$FM_BRIEF_SWITCH_ASK old_dod=$FM_BRIEF_SWITCH_DOD
+  text=$(cat "$brief" && printf x) || return 1
+  text=$'\n'"${text%x}"
+  for name in setup ask dod; do
+    old="old_$name" new="new_$name"
+    count=$(fm_brief_fragment_count "$text" "${!old}")
+    [ "$count" = 1 ] || {
+      echo "error: $brief does not carry its mode=$from $name section exactly as bin/fm-brief.sh renders it (found $count); it was edited by hand or scaffolded by another version, so the switch cannot tell which text to replace" >&2
+      return 1
+    }
+    text="${text%%"${!old}"*}${!new}${text#*"${!old}"}"
+  done
+  printf '%s' "${text#$'\n'}"
 }
 
 # Return 0 when a Task subsection still consists only of its scaffold

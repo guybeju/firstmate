@@ -2614,6 +2614,250 @@ test_spawn_relaunch_refuses_a_pane_outside_the_worktree() {
   pass "fm-spawn --relaunch: refuses to start a replacement outside the copy holding its work"
 }
 
+# --- 7a. switching a live ship's delivery mode ------------------------------
+
+# A fake no-mistakes whose `axi status` prints FM_FAKE_NM_STATUS, so a switch
+# never reads the host's real pipeline state.
+make_nm_stub() {  # <case-dir>
+  cat > "$1/fakebin/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+[ "$*" != 'axi status' ] || printf '%s\n' "${FM_FAKE_NM_STATUS:-}"
+exit 0
+SH
+  chmod +x "$1/fakebin/no-mistakes"
+}
+
+fill_switch_brief() {  # <brief>
+  perl -0pi -e 's/\{TASK\}/Switch this task between delivery modes.\nKeep these exact words: `--yes` stays banned./; s/\{FIRSTMATE_SPEC\}/Exercise the delivery-mode switch./' "$1"
+}
+
+# add_switch_task <case-dir> <id> <mode>: a live ship whose brief is a real
+# bin/fm-brief.sh scaffold for <mode>, with one committed change in its copy.
+add_switch_task() {
+  local dir=$1 id=$2 mode=$3 brief
+  add_ship_task "$dir" "$id" claude
+  make_nm_stub "$dir"
+  brief="$dir/home/data/$id/brief.md"
+  rm -f "$brief"
+  FM_HOME="$dir/home" "$BRIEF" "$id" proj --mode "$mode" >/dev/null \
+    || fail "could not scaffold the $mode brief for $id"
+  fill_switch_brief "$brief"
+  perl -pi -e "s/^mode=.*/mode=$mode/" "$dir/home/state/$id.meta"
+  printf 'work\n' > "$dir/wt/work.txt"
+  git -C "$dir/wt" add work.txt
+  git -C "$dir/wt" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit --quiet -m "task work"
+}
+
+# scaffold_expected_brief <case-dir> <id> <mode> -> the brief a fresh scaffold
+# of <mode> would write for this task, filled the same way.
+scaffold_expected_brief() {
+  local dir=$1 id=$2 mode=$3 brief="$1/home/data/$2/brief.md"
+  mv "$brief" "$brief.live"
+  FM_HOME="$dir/home" "$BRIEF" "$id" proj --mode "$mode" >/dev/null \
+    || fail "could not scaffold the expected $mode brief for $id"
+  fill_switch_brief "$brief"
+  cat "$brief"
+  mv "$brief.live" "$brief"
+}
+
+# Everything before the first appended progress note.
+brief_contract_part() {  # <brief>
+  awk '/^## Progress note \(/ { exit } { print }' "$1"
+}
+
+test_mode_switch_rewrites_the_brief_and_record_in_both_directions() {
+  local dir out rc brief head intent_before from to expected
+  for from in no-mistakes direct-PR; do
+    to=direct-PR
+    [ "$from" = no-mistakes ] || to=no-mistakes
+    dir=$(new_case "switch-$from")
+    add_switch_task "$dir" rl60 "$from"
+    brief="$dir/home/data/rl60/brief.md"
+    out=$(run_control "$dir" rl60 relaunch --note "first relaunch, same mode"); rc=$?
+    expect_code 0 "$rc" "$from: the setup relaunch should succeed"$'\n'"$out"
+    intent_before=$(bash -c '. "$1/bin/fm-dod-lib.sh"; fm_brief_task_heading_body "$2" "## Captain'\''s intent"' _ "$ROOT" "$brief")
+    head=$(git -C "$dir/wt" rev-parse HEAD)
+    expected=$(scaffold_expected_brief "$dir" rl60 "$to")
+
+    out=$(run_control "$dir" rl60 relaunch --mode "$to" --note "the captain moved this task to $to"); rc=$?
+    expect_code 0 "$rc" "$from -> $to: the switch should succeed"$'\n'"$out"
+    assert_contains "$out" "mode=$to from_mode=$from" "$from -> $to: the outcome should name the switch"
+    [ "$(meta_field "$dir" rl60 mode)" = "$to" ] || fail "$from -> $to: the record must carry mode=$to"
+    [ "$(meta_field "$dir" rl60 yolo)" = off ] || fail "$from -> $to: yolo must not change"
+    [ "$(grep -c '^Delivery contract: ' "$brief")" = 1 ] \
+      || fail "$from -> $to: the brief must keep exactly one Delivery contract line"
+    grep -qx "Delivery contract: mode=$to" "$brief" || fail "$from -> $to: the brief must name mode=$to"
+    [ "$(brief_contract_part "$brief")" = "$expected" ] \
+      || fail "$from -> $to: the switched brief must equal a fresh $to scaffold up to its progress notes"$'\n'"$(diff <(brief_contract_part "$brief") <(printf '%s\n' "$expected"))"
+    [ "$(bash -c '. "$1/bin/fm-dod-lib.sh"; fm_brief_task_heading_body "$2" "## Captain'\''s intent"' _ "$ROOT" "$brief")" = "$intent_before" ] \
+      || fail "$from -> $to: the Captain's intent must survive verbatim"
+    assert_grep 'first relaunch, same mode' "$brief" "$from -> $to: an earlier progress note must survive"
+    assert_grep "Its delivery mode changed from $from to $to" "$brief" \
+      "$from -> $to: the replacement must be told the mode changed"
+    assert_grep "the captain moved this task to $to" "$brief" "$from -> $to: the switch note must reach the brief"
+    grep -qx "Delivery contract: mode=$to" "$dir/home/data/rl60/launch-brief.md" \
+      || fail "$from -> $to: the replacement must launch on the $to contract"
+    if [ "$to" = no-mistakes ]; then
+      assert_grep '# Current no-mistakes intent contract' "$dir/home/data/rl60/launch-brief.md" \
+        "direct-PR -> no-mistakes: the replacement must receive the --intent overlay"
+      assert_grep 'For a no-mistakes ask-user gate specifically' "$brief" \
+        "direct-PR -> no-mistakes: the brief must gain the ask-user escalation"
+    else
+      assert_no_grep 'no-mistakes doctor' "$brief" "no-mistakes -> direct-PR: the doctor step must go"
+      assert_no_grep '# Current no-mistakes intent contract' "$dir/home/data/rl60/launch-brief.md" \
+        "no-mistakes -> direct-PR: the replacement must not receive the --intent overlay"
+    fi
+    [ "$(git -C "$dir/wt" rev-parse HEAD)" = "$head" ] || fail "$from -> $to: the task's commits must be untouched"
+    [ -f "$dir/wt/work.txt" ] || fail "$from -> $to: the task's work must be untouched"
+    [ "$(journal_field "$dir" rl60 phase)" = complete ] || fail "$from -> $to: the journal should end complete"
+    [ "$(journal_field "$dir" rl60 to_mode)" = "$to" ] || fail "$from -> $to: the journal should record the switch"
+  done
+  pass "fm-control relaunch --mode: no-mistakes and direct-PR switch both ways with brief, record, and launch in agreement"
+}
+
+# assert_switch_refused <case-dir> <id> <expected-text> <args...>: the switch
+# exits 1 naming <expected-text> and touches neither the agent, the record,
+# the brief, nor the journal.
+assert_switch_refused() {
+  local dir=$1 id=$2 expected=$3 out rc meta_before brief_before
+  shift 3
+  meta_before=$(cat "$dir/home/state/$id.meta" 2>/dev/null || true)
+  brief_before=$(cat "$dir/home/data/$id/brief.md" 2>/dev/null || true)
+  out=$(run_control "$dir" "$id" relaunch "$@" --note "switch attempt"); rc=$?
+  expect_code 1 "$rc" "the switch of $id ($*) should refuse"$'\n'"$out"
+  assert_contains "$out" "$expected" "the refusal of $id ($*) should name its reason"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "a refused switch of $id must leave its agent running"
+  assert_no_grep '/exit' "$dir/fake/literal" "a refused switch of $id must send no exit command"
+  [ "$(cat "$dir/home/state/$id.meta" 2>/dev/null || true)" = "$meta_before" ] \
+    || fail "a refused switch of $id must leave its record byte-identical"
+  [ "$(cat "$dir/home/data/$id/brief.md" 2>/dev/null || true)" = "$brief_before" ] \
+    || fail "a refused switch of $id must leave its brief byte-identical"
+  [ ! -e "$dir/home/state/$id.control-relaunch" ] || fail "a refused switch of $id must open no transaction"
+  [ ! -e "$dir/home/state/$id.control-relaunch.brief-next" ] || fail "a refused switch of $id must leave no staged brief"
+}
+
+test_mode_switch_refusals_change_nothing() {
+  local dir out rc
+  dir=$(new_case switch-refusals)
+  add_switch_task "$dir" rl61 no-mistakes
+  out=$(run_control "$dir" nosuch relaunch --mode direct-PR --note x); rc=$?
+  expect_code 1 "$rc" "an unknown task should refuse"
+  assert_contains "$out" "no task 'nosuch'" "the refusal should name the unknown task"
+  assert_switch_refused "$dir" rl61 "already ships mode=no-mistakes" --mode no-mistakes
+  assert_switch_refused "$dir" rl61 "registry policy, not a task mode" --mode no-mistakes-prod-only
+  assert_switch_refused "$dir" rl61 "to or from local-only is not supported" --mode local-only
+
+  printf 'pr=https://github.com/example/repo/pull/9\n' >> "$dir/home/state/rl61.meta"
+  assert_switch_refused "$dir" rl61 "already has its PR registered (https://github.com/example/repo/pull/9)" --mode direct-PR
+  : > "$dir/home/state/rl61.pr-poll-merge-notified"
+  assert_switch_refused "$dir" rl61 "is already merged" --mode direct-PR
+  rm -f "$dir/home/state/rl61.pr-poll-merge-notified"
+  perl -ni -e 'print unless /^pr=/' "$dir/home/state/rl61.meta"
+
+  FM_FAKE_NM_STATUS=$'run:\n  id: "01ACTIVE"\n  branch: fm/rl61\n  status: running\n  head: "abc1234"' \
+    assert_switch_refused "$dir" rl61 "no-mistakes run 01ACTIVE still active on fm/rl61" --mode direct-PR
+  FM_FAKE_NM_STATUS=$'run:\n  id: "01ACTIVE"\n  branch: fm/rl61\n  status: running\n  head: "abc1234"' \
+    assert_switch_refused "$dir" rl61 "no-mistakes axi abort --run 01ACTIVE" --mode direct-PR
+
+  perl -pi -e 's/^(Delivery contract: mode=no-mistakes)$/$1\nA firstmate hand edit./' "$dir/home/data/rl61/brief.md"
+  assert_switch_refused "$dir" rl61 "exactly as bin/fm-brief.sh renders it" --mode direct-PR
+
+  dir=$(new_case switch-local)
+  add_switch_task "$dir" rl62 local-only
+  assert_switch_refused "$dir" rl62 "to or from local-only is not supported" --mode direct-PR
+
+  dir=$(new_case switch-scout)
+  add_ship_task "$dir" rl63 claude
+  perl -pi -e 's/^kind=ship$/kind=scout/; s/^mode=.*\n//; s/^yolo=.*\n//' "$dir/home/state/rl63.meta"
+  assert_switch_refused "$dir" rl63 "promote it with bin/fm-promote.sh" --mode direct-PR
+
+  dir=$(new_case switch-secondmate)
+  add_ship_task "$dir" rl64 claude
+  perl -pi -e 's/^kind=ship$/kind=secondmate/' "$dir/home/state/rl64.meta"
+  assert_switch_refused "$dir" rl64 "has no delivery mode to switch" --mode direct-PR
+
+  # A ship on firstmate's own repository may switch only under the same
+  # publication authority a spawn would need; this home holds none.
+  dir=$(new_case switch-self-repo)
+  add_switch_task "$dir" rl65 no-mistakes
+  perl -pi -e "s|^project=.*|project=$ROOT|" "$dir/home/state/rl65.meta"
+  assert_switch_refused "$dir" rl65 "switch refused for rl65: this home runs as firstmate user/operator" --mode direct-PR
+
+  pass "fm-control relaunch --mode: every refusal leaves the agent, record, and brief untouched"
+}
+
+test_spawn_relaunch_accepts_a_mode_only_from_the_control_transaction() {
+  local dir out rc before
+  dir=$(new_case switch-direct-spawn)
+  add_switch_task "$dir" rl66 no-mistakes
+  printf 'zsh' > "$dir/fake/command"
+  before=$(cat "$dir/home/state/rl66.meta")
+  out=$(run_spawn "$dir" rl66 --relaunch --mode direct-PR); rc=$?
+  expect_code 1 "$rc" "a direct fm-spawn --relaunch --mode should refuse"$'\n'"$out"
+  assert_contains "$out" "bin/fm-control.sh rl66 relaunch --mode" "the refusal should name the supported path"
+  [ "$(cat "$dir/home/state/rl66.meta")" = "$before" ] || fail "a refused direct switch must leave the record untouched"
+  pass "fm-spawn --relaunch: --mode is accepted only from fm-control relaunch --mode"
+}
+
+# A launch that fails after the stop keeps the prior record, so the brief goes
+# back to the prior contract with it and the two still name one mode.
+test_mode_switch_launch_failure_restores_the_matching_brief() {
+  local dir out rc meta_before brief_before
+  dir=$(new_case switch-rollback)
+  add_switch_task "$dir" rl67 no-mistakes
+  meta_before=$(cat "$dir/home/state/rl67.meta")
+  brief_before=$(cat "$dir/home/data/rl67/brief.md")
+  printf '%s' "$dir/proj" > "$dir/fake/cwd"
+  out=$(run_control "$dir" rl67 relaunch --mode direct-PR --note "carry the switch forward"); rc=$?
+  expect_code 1 "$rc" "a failed switch launch should fail closed"$'\n'"$out"
+  assert_contains "$out" "restored to mode=no-mistakes" "the failure should say the instructions were restored"
+  [ "$(cat "$dir/home/state/rl67.meta")" = "$meta_before" ] || fail "a failed switch must keep the prior record"
+  [ "$(cat "$dir/home/data/rl67/brief.md")" = "$brief_before" ] \
+    || fail "a failed switch must restore the brief that matches the kept record"
+  [ "$(journal_field "$dir" rl67 rollback)" = prior-record-kept ] || fail "the journal should record the rollback"
+  assert_grep 'carry the switch forward' "$dir/home/state/rl67.control-relaunch.note" \
+    "the progress note must survive the rollback"
+  pass "fm-control relaunch --mode: a launch failure after the stop restores the brief matching the kept record"
+}
+
+# After a switch to direct-PR, PR registration in a secondmate home publishes
+# the ready line with the new mode, and the ready-after-green gate - which
+# withholds a no-mistakes ready line until CI is green - no longer applies.
+test_mode_switch_ready_line_carries_the_new_mode() {
+  local dir out rc url=https://github.com/example/repo/pull/12 parent channel
+  dir=$(new_case switch-ready)
+  add_switch_task "$dir" rl68 no-mistakes
+  out=$(run_control "$dir" rl68 relaunch --mode direct-PR --note "ship as a plain PR"); rc=$?
+  expect_code 0 "$rc" "the switch should succeed"$'\n'"$out"
+  git -C "$dir/wt" push --quiet origin "HEAD:refs/heads/fm/rl68"
+  parent="$dir/parent"
+  mkdir -p "$parent/state" "$parent/data" "$dir/home/config"
+  printf 'mate-x\n' > "$dir/home/.fm-secondmate-home"
+  printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' "$parent" > "$dir/home/.fm-secondmate-parent"
+  fm_write_secondmate_meta "$parent/state/mate-x.meta" "$dir/home"
+  printf -- '- mate-x - fixture scope (home: %s; scope: fixture; projects: alpha; added 2026-07-14)\n' \
+    "$dir/home" > "$parent/data/secondmates.md"
+  : > "$dir/home/config/ready-after-green"
+  printf 'done [at=%s]: PR %s\n' "$(date +%s)" "$url" >> "$dir/home/state/rl68.status"
+  cat > "$dir/fakebin/gh" <<SH
+#!/usr/bin/env bash
+case "\$*" in
+  *headRefOid*) git -C '$dir/wt' rev-parse HEAD ;;
+  *isDraft*) printf '%s\n' '{"isDraft":false}' ;;
+  *state*) printf '%s\n' OPEN ;;
+  *) exit 2 ;;
+esac
+SH
+  chmod +x "$dir/fakebin/gh"
+  out=$(env PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_STATE_OVERRIDE="$dir/home/state" "$ROOT/bin/fm-pr-check.sh" rl68 "$url" 2>&1); rc=$?
+  expect_code 0 "$rc" "PR registration after the switch should succeed"$'\n'"$out"
+  channel="$parent/state/mate-x.status"
+  assert_grep "child rl68 PR ready: $url mode=direct-PR yolo=off" "$channel" \
+    "the ready line must carry the switched mode and reach the parent without waiting for green"
+  pass "fm-control relaunch --mode: the PR-ready line and ready-after-green gate read the switched mode"
+}
+
 # --- 7. reclaiming a task whose endpoint is gone ----------------------------
 #
 # Before this, `missing` was a terminal state: fm-spawn --relaunch accepted only
@@ -3332,6 +3576,11 @@ test_spawn_relaunch_refuses_a_symlinked_task_record_before_inspection
 test_spawn_relaunch_keeps_its_early_meta_lock_continuous
 test_spawn_relaunch_refuses_a_pending_authoritative_close
 test_spawn_relaunch_refuses_contradicting_flags
+test_mode_switch_rewrites_the_brief_and_record_in_both_directions
+test_mode_switch_refusals_change_nothing
+test_spawn_relaunch_accepts_a_mode_only_from_the_control_transaction
+test_mode_switch_launch_failure_restores_the_matching_brief
+test_mode_switch_ready_line_carries_the_new_mode
 test_spawn_relaunch_refuses_an_unrecorded_task
 test_spawn_relaunch_refuses_a_pane_outside_the_worktree
 test_tmux_refuses_a_window_missing_from_its_session

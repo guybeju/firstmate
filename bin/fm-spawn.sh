@@ -64,7 +64,7 @@
 #   first in the private launch-brief overlay, including the exact task-owned
 #   steering inbox. This never rewrites a project's instruction files or a
 #   secondmate's charter.
-#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>] [--account <entry>]
+#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>] [--account <entry>] [--mode <no-mistakes|direct-PR>]
 #   --relaunch launches a replacement agent for an EXISTING task into that
 #   task's own recorded worktree, reusing its recorded endpoint when that
 #   endpoint still exists, instead of creating either from scratch. It is
@@ -76,7 +76,12 @@
 #   validated state/<id>.meta, so --backend, --scout, --secondmate, a project
 #   positional, and batch pairs are all refused alongside it; only harness,
 #   model, effort, and a declared Claude account may change, which is what
-#   makes a harness switch one ordinary relaunch. It refuses unless the
+#   makes a harness switch one ordinary relaunch. The one exception is a ship's
+#   delivery mode: --mode is accepted only from bin/fm-control.sh relaunch
+#   --mode, which owns that switch's refusals and rewrites the brief first, and
+#   the republished record carries it; the brief agreement check below then
+#   proves the brief and record name the same mode, and a brief with no
+#   Delivery contract line refuses instead of warning. It refuses unless the
 #   recorded endpoint is positively agent-free on a backend with both a
 #   recovery-grade agent-state classifier and replacement-agent support
 #   (tmux or herdr), and clears the previous harness's per-task wiring
@@ -1256,10 +1261,6 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: --relaunch reuses the task's recorded kind; --scout/--secondmate cannot override it" >&2
     exit 1
   }
-  [ "$MODE_SET" -eq 0 ] || {
-    echo "error: --relaunch reuses the task's recorded delivery mode; --mode cannot override it" >&2
-    exit 1
-  }
   [ "$YOLO_SET" -eq 0 ] || {
     echo "error: --relaunch reuses the task's recorded yolo posture; --yolo cannot override it" >&2
     exit 1
@@ -2312,6 +2313,10 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: another lifecycle action is already running for task $ID" >&2
     exit 1
   fi
+  if [ "$MODE_SET" -eq 1 ] && [ "$SPAWN_CONTROL_PARENT" != 1 ]; then
+    echo "error: --relaunch reuses the task's recorded delivery mode; change it with bin/fm-control.sh $ID relaunch --mode, which rewrites the instructions to match" >&2
+    exit 1
+  fi
 fi
 ORCA_LAUNCH_ENV_ENABLED=0
 ORCA_LAUNCH_ENV_ARGS=
@@ -2571,7 +2576,18 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: secondmate $ID's recorded endpoint is gone; its recovery is owned by the secondmate respawn path, not by relaunch (run bin/fm-spawn.sh $ID --secondmate, or let the session-start liveness sweep do it)" >&2
     exit 1
   fi
-  MODE=$(fm_meta_get "$RELAUNCH_META" mode)
+  RELAUNCH_RECORDED_MODE=$(fm_meta_get "$RELAUNCH_META" mode)
+  if [ "$MODE_SET" -eq 1 ]; then
+    case "$KIND:$RELAUNCH_RECORDED_MODE:$MODE" in
+    ship:no-mistakes:direct-PR | ship:direct-PR:no-mistakes) ;;
+    *)
+      echo "error: --relaunch --mode switches a ship between no-mistakes and direct-PR only; task $ID is kind=$KIND mode=${RELAUNCH_RECORDED_MODE:-none} and was asked for mode=$MODE" >&2
+      exit 1
+      ;;
+    esac
+  else
+    MODE=$RELAUNCH_RECORDED_MODE
+  fi
   YOLO=$(fm_meta_get "$RELAUNCH_META" yolo)
   UPSTREAM_CONSENT=$(fm_meta_get "$RELAUNCH_META" upstream_consent)
   if [ "$KIND" = ship ]; then
@@ -4448,7 +4464,10 @@ if [ "$KIND" = ship ]; then
   else
     echo "warning: $BRIEF records no ship branch; defaulting to legacy branch $BRANCH" >&2
   fi
-  if [ -z "$BRIEF_MODE" ]; then
+  if [ -z "$BRIEF_MODE" ] && [ "$RELAUNCH" -eq 1 ] && [ "$MODE_SET" -eq 1 ]; then
+    echo "error: $BRIEF records no delivery contract line, so a delivery-mode switch cannot prove the instructions match mode=$MODE" >&2
+    exit 1
+  elif [ -z "$BRIEF_MODE" ]; then
     echo "warning: $BRIEF records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode $MODE - confirm its definition of done matches" >&2
   elif [ "$BRIEF_MODE" != "$MODE" ]; then
     echo "error: delivery mismatch for $ID: the brief says mode=$BRIEF_MODE but this spawn passed --mode $MODE; correct the flag or re-scaffold the brief so the worker's instructions and the task record agree" >&2
