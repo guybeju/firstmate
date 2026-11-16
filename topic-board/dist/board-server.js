@@ -642,13 +642,60 @@ function loadService(boot) {
     void service.writes.resumeUnfinished();
     return service;
 }
-/** Runs one topic operation the way the socket does, for the browser API. */
-function topicOp(service, op, args) {
+// Decisions firstmate is waiting on or has to act on. A reopening is left out:
+// the dispatchable notice already covers it.
+const DECISION_EVENTS = ["topic.confirmed", "topic.merged", "topic.archived"];
+/** What the captain just decided on the page, as lines for firstmate; empty when it needs none. */
+function decisionLines(op, args, result) {
+    if (!result.changed)
+        return [];
+    const lines = result.events
+        .filter((event) => DECISION_EVENTS.includes(event.kind))
+        .map((event) => `${event.text}（id：${event.topic}）`);
+    const id = stringField(args, "id");
+    if (op !== "keep" || id === null)
+        return lines;
+    const kept = topics.resolveTopicId(result.state.doc, id);
+    return [`議題「${result.state.doc.topics[kept]?.name ?? kept}」先不關（id：${kept}）`];
+}
+/**
+ * Tells firstmate what the captain decided on the page. Firstmate proposes
+ * topics and closings and then waits; without this it would learn the outcome
+ * only by asking.
+ */
+function notifyDecision(service, lines, topic) {
+    if (lines.length === 0)
+        return;
+    const text = `使用者在看板上：${lines.join("；")}`;
+    service.writes.submit({
+        channel: "auto",
+        home: MAIN_HOME,
+        task: null,
+        topic,
+        text,
+        plan: {
+            type: "note",
+            requestId: `tb-decision-${crypto.randomBytes(8).toString("hex")}`,
+            body: text,
+        },
+    });
+}
+/**
+ * Runs one topic operation. `fromPage` is true for the browser API: only then
+ * is firstmate told, since over the socket it is firstmate itself asking.
+ */
+function topicOp(service, op, args, fromPage = false) {
     const handler = Object.hasOwn(TOPIC_HANDLERS, op) ? TOPIC_HANDLERS[op] : undefined;
     if (handler === undefined)
         return usage(`不認得的 op：${op}`);
     const result = handler(service, args);
-    return "usage" in result ? usage(result.usage) : commit(service, result);
+    if ("usage" in result)
+        return usage(result.usage);
+    const response = commit(service, result);
+    if (fromPage && result.ok) {
+        notifyDecision(service, decisionLines(op, args, result), result.events[0]?.topic ?? null);
+    }
+    return response;
 }
 /** Starts answering browser requests on the port this process already holds. */
 function serveBrowser(service) {
@@ -665,7 +712,7 @@ function serveBrowser(service) {
             view: () => boardView(service),
             touch: () => service.poller.touch(),
             refresh: () => service.poller.refreshAll(),
-            topicOp: (op, args) => topicOp(service, op, args),
+            topicOp: (op, args) => topicOp(service, op, args, true),
             actionContext: () => actionContext(service),
             writes: service.writes,
             confirm: service.confirm,
