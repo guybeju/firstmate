@@ -79,6 +79,10 @@ test_sections() {
   assert_contains "$out" 'bin/fm-tasks-axi.sh hold a1 --reason "topic-board：議題 gone 在封存"' \
     "an archived topic must say so in the hold reason"
   assert_contains "$out" "bin/fm-tasks-axi.sh unhold r1" "the release line must carry the command to run"
+  printf '%s\n' "$out" | awk '/^可派：/ { on = 1; next } /^[^ ]/ { on = 0 } on' | grep '^  r1	' | grep -q '先照「該解除」解除' ||
+    fail "a dispatchable item still under the board's hold must say so"
+  printf '%s\n' "$out" | awk '/^可派：/ { on = 1; next } /^[^ ]/ { on = 0 } on' | grep '^  h1	' | grep -q '解除' &&
+    fail "an item that is not held must not be marked as held"
   assert_contains "$out" "$(printf 'h1\t帳務重構\t高')" "lines must show the topic name and queue"
   assert_not_contains "$out" "running" "in-flight items must never be listed"
   assert_not_contains "$(section "$out" "可派：")" "o1" "an item held by something else must not be dispatchable"
@@ -97,6 +101,8 @@ test_falls_open_without_a_usable_topic_file() {
   assert_equals "n1 h1 h2 u1 p1 l1 a1 " "$(section "$out" "可派：")" \
     "without a topic file every unheld, unblocked item is dispatchable in backlog order"
   assert_equals "" "$(section "$out" "該 hold：")" "without a topic file nothing may be listed to hold"
+  assert_equals "" "$(section "$out" "該解除：")" "without a topic file nothing may be listed to release"
+  assert_equals "l2 r1 " "$(section "$out" "停著：")" "items the board held earlier must stay visible without a topic file"
   printf 'not json' > "$home/data/topics.json"
   out=$(tb_run "$home" "$TOPIC" order) || fail "order failed on an unreadable topic file"
   assert_contains "$out" "讀不懂" "order did not explain the unreadable topic file"

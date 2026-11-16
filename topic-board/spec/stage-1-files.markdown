@@ -63,6 +63,12 @@
 
 屬於「提議中」議題的項目，主 home 的 `tag` 不會接受，所以它們是沒標記的，排在一般之後。
 
+另外三件（2026-11-16 用真的 `tasks-axi` 0.2.6 試過之後定的）：
+
+- 「該解除」的項目同時列在「可派」，那一行後面標明「還被看板的 hold 擋著，先照『該解除』解除」。這樣一次就看得到它解除之後排在哪裡。
+- 被別的東西擋住的項目（captain hold、別的 hold、未解的 blocker）不列在任何一段：那些由上游自己的閘門決定。
+- 沒有可用的議題檔時，之前由看板 hold 住的項目仍列在「停著」，免得殘留的 hold 被忘掉。
+
 ### `setup`
 
 在自己的 home 建立 `config/fleet-ledger`（空檔），已存在就不動。印 `ok setup 帳本已開` 或 `ok setup 帳本本來就開著`。不需要 `jq`。不寫偏好檔。同機的 secondmate home 由主 home 跑 `bin/fm-topic.sh --in-home <id> setup`（採建議 C15）；遠端跑 `bin/fm-on.sh <id> fm-topic.sh setup`。

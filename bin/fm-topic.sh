@@ -49,7 +49,12 @@
 # order  Prints which queued backlog items to dispatch, hold, and release, in
 #        the board's queue order. Read-only: it never changes the backlog, and
 #        when the topic file or the backlog cannot be read it says so and lets
-#        dispatch proceed.
+#        dispatch proceed. An item under 該解除 is also listed under 可派, marked
+#        as still held, so its place in the order is visible before the hold is
+#        lifted. Items held by anything else (a captain hold, another hold, an
+#        unresolved blocker) are in no section: upstream's own gates decide
+#        those. Without a usable topic file, items the board held earlier are
+#        still listed under 停著 so that a leftover hold is not forgotten.
 # setup  Creates this home's config/fleet-ledger flag. Safe to repeat.
 #
 # install-rules writes the board's rules into this home's data/captain.md and
@@ -325,10 +330,10 @@ cmd_order() {
        | sort_by([rank, .at, .index])) as $ready
     | ($items | map(select(.parked and (.own_hold | not) and (.other_hold | not)))) as $to_hold
     | ($items | map(select($doc != null and .own_hold and (.parked | not)))) as $to_release
-    | ($items | map(select(.own_hold and .parked))) as $parked
+    | ($items | map(select(.own_hold and (.parked or $doc == null)))) as $parked
     | (if $note != "" then $note else empty end),
       "可派：",
-      ($ready[] | line),
+      ($ready[] | line + (if .own_hold then "\t← 還被看板的 hold 擋著，先照「該解除」解除" else "" end)),
       "該 hold：",
       ($to_hold[] | line + "\t→ bin/fm-tasks-axi.sh hold \(.id) --reason \"\($own)議題 \(.topic) 在\(if .queue == "archived" then "封存" else "待辦" end)\""),
       "該解除：",
