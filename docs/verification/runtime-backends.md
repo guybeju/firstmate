@@ -1533,15 +1533,15 @@ Its `ProgramArguments` ran `/run/current-system/sw/bin/zsh -l -c "exec /etc/prof
 No other herdr process existed for that session, and after 15 seconds the job remained running with pid 4806.
 After a guarded `herdr session stop`, the job reported `state = not running` and `last exit code = 0`, and it stayed at rest through the throttle interval.
 A second `launchctl kickstart -k gui/501/dev.fm-rca.herdr-fg` started pid 45574, which was also the new socket owner.
-This proves that a foreground process stays the launchd job, so the guard's final `exec` supplies the intended supervision and the earlier server that survived `launchctl bootout` was the unrelated SSH-bridge-born process.
-Since the session-leader change below, that foreground process is the guard's Perl supervisor and the server is its child.
+This proves that `herdr server` remains in the foreground as the launchd job, so the guard's final `exec` supplies the intended supervision and the earlier server that survived `launchctl bootout` was the unrelated SSH-bridge-born process.
+Since the session-leader change below, the guard's final `exec` is a Perl supervisor that waits on that foreground `herdr server` as its child.
 
 #### Session leadership and `herdr machine add`
 
 Herdr 0.9.5 reports the server capability `detached_server_daemon` as true only for a server process that leads its own POSIX session, and `herdr machine add` offers to restart a remote server that reports false ("the remote server was started by a herdr build that may not survive SSH connection loss").
-A launchd job is normally a process-group leader, which cannot call `setsid()`, so the guard execs `perl -MPOSIX` from the launch agent's `PATH` (macOS ships `/usr/bin/perl`) as a supervisor that keeps the job's pid, forks, calls `POSIX::setsid` in the child, and execs `herdr server --session <s>` there.
+The [guard's header](../../bin/fm-remote-herdr-guard.sh) owns how its supervisor starts the server as a session leader.
 
-Measured 2026-11-17 on Linux x86_64 with Herdr 0.9.5, on an isolated `fm-lab-` session prepared, stopped, and torn down through `bin/fm-herdr-lab.sh`: the guard was started as `bin/fm-remote-herdr-guard.sh "$(command -v herdr)" <lab-session> &`, then read with `fm-herdr-lab.sh run <lab-session> status --json | jq -c '{running: .server.running, detached_server_daemon: .server.capabilities.detached_server_daemon}'` and `ps -o pid,ppid,sid,pgid,tty,args -p <guard-pid>,<server-pid>`, then stopped with `fm-herdr-lab.sh stop <lab-session>` and `wait <guard-pid>`.
+Measured 2026-11-17 on Linux x86_64 with Herdr 0.9.5, on an isolated `fm-lab-` session prepared, stopped, and torn down through `bin/fm-herdr-lab.sh`: the guard was started as `env -u HERDR_SOCKET_PATH -u HERDR_PANE_ID -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID -u HERDR_SESSION -u HERDR_ENV bin/fm-remote-herdr-guard.sh "$(command -v herdr)" <lab-session> &`, then read with `fm-herdr-lab.sh run <lab-session> status --json | jq -c '{running: .server.running, detached_server_daemon: .server.capabilities.detached_server_daemon}'` and `ps -o pid,ppid,sid,pgid,tty,args -p <guard-pid>,<server-pid>`, then stopped with `fm-herdr-lab.sh stop <lab-session>` and `wait <guard-pid>`.
 With the guard from before this change (final `exec herdr server`):
 
 ```text
@@ -1560,6 +1560,8 @@ With the session-leader supervisor (Perl source elided):
 2216209 2216157 2216209 2216209 ?        ~/.local/bin/herdr server --session fm-lab-leader-measure-2216073-26352
 launch-agent process exit=0
 ```
+
+In a second lab run, `kill -TERM <guard-pid>` against the same supervisor shape ended the real server: the guard's process exited 0, `kill -0 <server-pid>` reported it gone, and the session read `{"running":false}`.
 
 Measured 2026-11-17 on macOS with Herdr 0.9.5 by the operator:
 

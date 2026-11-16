@@ -7,10 +7,16 @@
 # environment and ancestry carry the birth markers the guard reads. It pins
 # the decision table: no server -> start; an Aqua-born owner -> leave it; an
 # SSH-born or unprovable owner -> stop it, wait for the socket, and start, but
-# only on a start the operator's --fix authorized, else leave it. Nothing
-# here touches the runner's own herdr servers, launch agents, or login
-# session, and no live harness guard applies: the verdict comes from process
-# environment and ancestry, which are kernel facts rather than vendor output.
+# only on a start the operator's --fix authorized, else leave it. It also pins
+# the start shape: the server leads its own session as a child of the guard's
+# process, whose exit status is the server's and which forwards TERM to it.
+# Where herdr is installed, a final case starts one real server through the
+# guard on an isolated fm-lab- session that bin/fm-herdr-lab.sh prepares,
+# stops, and tears down, and reads its detached_server_daemon capability.
+# Nothing here touches the runner's own fleet herdr session, launch agents, or
+# login session, and no live harness guard applies: the birth verdict comes
+# from process environment and ancestry, which are kernel facts rather than
+# vendor output.
 set -u
 
 # shellcheck source=tests/lib.sh
