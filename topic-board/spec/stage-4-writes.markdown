@@ -46,7 +46,7 @@
 | W3 | exit 3（`fm-send.sh` 自己重試一次後仍未確認） | 遠端：重試中，同一個 delivery id；同機：失敗 |
 | W3 | 其他 | 失敗 |
 | W4、W5、W6 | 逐行讀輸出，不只看 exit code：有 `closed: <id>` | 已送達 |
-| 同上 | `skipped: <id> (already closed)` | 已由別處處理 |
+| 同上 | `skipped: <id> (already closed)`、`(task <id> records a different captain decision …)`、`(not held for the captain)`：別處已經回答或解除 | 已由別處處理 |
 | 同上 | 其他的 `skipped:`、`refused:` | 失敗，附那一行 |
 | W6、W9 | `fm-on.sh` 回 255 | 重試中 |
 | W7、W8、W9 | exit 0 | 已送達，並寫一筆 `agent.tagged` 系統紀錄 |

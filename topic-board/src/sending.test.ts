@@ -460,7 +460,8 @@ describe("answer", () => {
     );
     const refusedAway = await run(exit(1, "refused: call-1 (away posture)"));
     expect(refusedAway).toMatchObject({ state: "failed", error: "refused: call-1 (away posture)" });
-    expect((await run(exit(1, "skipped: call-1 (not held for the captain)"))).state).toBe("failed");
+    const released = await run(exit(1, "skipped: call-1 (not held for the captain)"));
+    expect(released).toMatchObject({ state: "handled_elsewhere", error: null });
     expect(
       (await run(exit(1, "closed: call-10\nskipped: other (already closed)", "tasks-axi missing")))
         .error,
