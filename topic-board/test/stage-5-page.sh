@@ -69,5 +69,38 @@ test_the_captains_path() {
   pass "the page works end to end in a real browser"
 }
 
-fm_test_run test_the_captains_path
+# profiles_of <pid>: the throwaway Firefox profiles a browser.mjs run owns.
+profiles_of() {
+  find "$HOME" -maxdepth 1 -name "tb-firefox-tmp-$1-*" 2>/dev/null
+}
+
+test_a_killed_run_leaves_no_profile_behind() {
+  local url pid tries dead stale
+  url=$("$TB_TOPIC" open)
+  printf 'export default () => new Promise(() => {});\n' > "$TMP_ROOT/hang.mjs"
+  node "$ROOT/topic-board/test/browser.mjs" "$url" "$TMP_ROOT/hang.mjs" >/dev/null 2>&1 &
+  pid=$!
+  for tries in $(seq 1 50); do
+    [ -n "$(profiles_of "$pid")" ] && break
+    sleep 0.1
+  done
+  [ -n "$(profiles_of "$pid")" ] || fail "the run never created its profile (after $tries tries)"
+  kill -TERM "$pid"
+  wait "$pid" 2>/dev/null
+  assert_equals "" "$(profiles_of "$pid")" "a terminated run must remove its Firefox profile"
+
+  # A run killed outright cannot clean up; the next run removes what it left.
+  sleep 0 &
+  dead=$!
+  wait "$dead"
+  stale="$HOME/tb-firefox-tmp-$dead-stale"
+  mkdir "$stale"
+  printf 'export default () => {};\n' > "$TMP_ROOT/noop.mjs"
+  node "$ROOT/topic-board/test/browser.mjs" "$url" "$TMP_ROOT/noop.mjs" >/dev/null 2>&1 ||
+    { rmdir "$stale" 2>/dev/null; fail "the follow-up run failed"; }
+  [ -e "$stale" ] && { rmdir "$stale"; fail "the next run must sweep a dead run's profile"; }
+  pass "a killed browser run leaves no profile in the home directory"
+}
+
+fm_test_run test_the_captains_path test_a_killed_run_leaves_no_profile_behind
 "$TB_TOPIC" stop >/dev/null

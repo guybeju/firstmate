@@ -31,7 +31,7 @@
 | `bin/fm-topic-lib.sh` | 上面兩支共用的函式（id 檢查、查同機 secondmate 的 home），只被 source | 一 |
 | `topic-board/src/` | TypeScript 原始碼：服務、node client、頁面腳本 | 二起 |
 | `topic-board/dist/` | `tsc` 的編譯結果，提交進 git；執行期只跑這裡的 `.js` | 二起 |
-| `topic-board/public/` | 靜態頁面：`index.html`、`board.css` | 五 |
+| `topic-board/public/` | 靜態頁面：`index.html`、`board.css`、`icon.svg` | 五 |
 | `topic-board/rules/` | 三個規則範本，副檔名 `.md.tmpl` | 六 |
 | `topic-board/spec/` | 這份 spec，副檔名 `.markdown` | 一 |
 | `topic-board/test/` | fork 自己的測試與 `run.sh` | 一起 |

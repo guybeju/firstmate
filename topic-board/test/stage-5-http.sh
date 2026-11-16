@@ -67,7 +67,7 @@ state() {
 }
 
 test_request_checks() {
-  local big
+  local big icon
   assert_equals 200 "$(status "$BASE/")" "the page itself needs no token"
   assert_equals 200 "$(status -H "Host: localhost:$PORT" "$BASE/")" "localhost with the right port is this board"
   assert_equals 403 "$(status -H 'Host: evil.example' "$BASE/")" "a foreign Host must be refused (DNS rebinding)"
@@ -95,6 +95,10 @@ test_request_checks() {
   assert_equals 404 "$(status "$BASE/assets/..%2f..%2fstate%2ftopic-board%2ftoken")" "an encoded path must not escape the assets"
   assert_equals 404 "$(status --path-as-is "$BASE/assets/../../state/topic-board/token")" "a dotted path must not escape the assets"
   assert_equals 404 "$(status "$BASE/assets/board-server.js")" "server code must not be served"
+  icon=$(curl -s -m 5 "$BASE/" | sed -n 's/.*<link rel="icon"[^>]* href="\([^"]*\)".*/\1/p')
+  assert_equals "/assets/icon.svg" "$icon" "the page must name its own icon, so the browser does not ask for /favicon.ico"
+  assert_equals "200 image/svg+xml" "$(curl -s -m 5 -o /dev/null -w '%{http_code} %{content_type}' "$BASE$icon")" \
+    "the icon the page names must be served"
   assert_equals 404 "$(status -H "$AUTH" "$BASE/api/nope")" "an unknown API route is 404"
   printf 'GET / HTTP/1.1\r\nHost: \xff\xfe\x00bad\r\n\r\n' | curl -s -m 5 "telnet://127.0.0.1:$PORT" >/dev/null 2>&1 || true
   printf 'NOT HTTP AT ALL\r\n\r\n' | curl -s -m 5 "telnet://127.0.0.1:$PORT" >/dev/null 2>&1 || true

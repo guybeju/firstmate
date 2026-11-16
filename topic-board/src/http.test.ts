@@ -73,6 +73,7 @@ beforeAll(async () => {
   fs.mkdirSync(path.join(dir, "page"));
   fs.writeFileSync(path.join(dir, "public", "index.html"), "<!doctype html><title>board</title>");
   fs.writeFileSync(path.join(dir, "public", "board.css"), "body{}");
+  fs.writeFileSync(path.join(dir, "public", "icon.svg"), "<svg/>");
   fs.writeFileSync(path.join(dir, "page", "board.js"), "export {};");
   fs.writeFileSync(path.join(dir, "page", "data.bin"), "bin");
   fs.writeFileSync(path.join(dir, "secret.js"), "SECRET");
@@ -111,6 +112,9 @@ describe("static files", () => {
     expect(index.headers["content-type"]).toBe("text/html; charset=utf-8");
     expect((await request({ path: "/assets/board.css" })).headers["content-type"]).toBe(
       "text/css; charset=utf-8",
+    );
+    expect((await request({ path: "/assets/icon.svg" })).headers["content-type"]).toBe(
+      "image/svg+xml",
     );
     const script = await request({ path: "/assets/board.js", host: `localhost:${port}` });
     expect(script).toMatchObject({ status: 200, body: "export {};" });

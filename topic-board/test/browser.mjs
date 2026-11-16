@@ -11,12 +11,46 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const [url, scriptFile] = process.argv.slice(2);
-// Snap-packaged Firefox cannot read hidden directories in the home directory.
-const profile = fs.mkdtempSync(path.join(os.homedir(), "tb-firefox-tmp-"));
-const port = 20000 + Math.floor(Math.random() * 20000);
-const firefox = spawn("firefox", ["--headless", "--no-remote", "--profile", profile, `--remote-debugging-port=${port}`, "about:blank"], { stdio: "ignore" });
-
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Snap-packaged Firefox cannot read hidden directories in the home directory,
+// so the throwaway profile sits directly in it, named after this process.
+const PROFILE_PREFIX = "tb-firefox-tmp-";
+
+function isRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+
+/** Removes the profiles of earlier runs that were killed before they could clean up. */
+function sweepStaleProfiles() {
+  for (const name of fs.readdirSync(os.homedir())) {
+    const owner = /^tb-firefox-tmp-(\d+)-/.exec(name);
+    if (owner === null || isRunning(Number(owner[1]))) continue;
+    fs.rmSync(path.join(os.homedir(), name), { recursive: true, force: true });
+  }
+}
+
+sweepStaleProfiles();
+const profile = fs.mkdtempSync(path.join(os.homedir(), `${PROFILE_PREFIX}${process.pid}-`));
+const port = 20000 + Math.floor(Math.random() * 20000);
+const firefoxArgs = ["--headless", "--no-remote", "--profile", profile];
+firefoxArgs.push(`--remote-debugging-port=${port}`, "about:blank");
+const firefox = spawn("firefox", firefoxArgs, { stdio: "ignore" });
+
+async function cleanUp() {
+  firefox.kill("SIGKILL");
+  await sleep(300);
+  fs.rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+}
+
+for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129]]) {
+  process.once(signal, () => void cleanUp().finally(() => process.exit(code)));
+}
 
 async function connect() {
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -97,8 +131,6 @@ try {
   console.error(`not ok - ${error.message}`);
   exitCode = 1;
 } finally {
-  firefox.kill("SIGKILL");
-  await sleep(300);
-  fs.rmSync(profile, { recursive: true, force: true });
+  await cleanUp();
 }
 process.exit(exitCode);

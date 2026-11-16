@@ -21,7 +21,7 @@
 - 頁面用無頭 Firefox 加 WebDriver BiDi 從頭到尾走過一遍（`topic-board/test/stage-5-page.sh`）：作答、確認提議、併入、拖曳、改名、送訊息、直送、封存與重開、服務停掉時的紅色橫幅與自動恢復，都通過。
 - 拖曳在這個測試裡用的是程式送出的 `dragstart`、`dragover`、`drop`、`dragend` 事件，驗到的是頁面自己的處理邏輯（即時換位、落點、沒放下就還原）。作業系統層級真的用滑鼠拖，仍要人手試一次。
 - 5-2（很多議題時的側欄）用「每個佇列內部可捲動」處理，還沒有用 40 個議題實際看過。
-- snap 版 Firefox 讀不到家目錄下的隱藏資料夾，測試工具把暫時的設定檔放在 `~/tb-firefox-tmp-*`，跑完就刪。
+- snap 版 Firefox 讀不到家目錄下的隱藏資料夾，測試工具把暫時的設定檔放在 `~/tb-firefox-tmp-<pid>-*`，跑完就刪；收到 SIGINT、SIGTERM、SIGHUP 也會刪，被直接殺掉留下的由下一次執行清掉（擁有它的行程已不在）。
 
 ## 要做的事
 
@@ -29,7 +29,7 @@
 
 照 [contracts](contracts.markdown) 第 6.2 節的七項檢查實作，寫成每個請求最先經過的一層。第二段綁住的埠在這一段開始提供內容。
 
-靜態檔：`GET /` 回 `topic-board/public/index.html`；`GET /assets/<檔名>` 回 `public/` 的 CSS 與 `dist/page/` 的頁面腳本，檔名只接受 `[a-z0-9.-]+`，對照寫死的清單，不做路徑拼接。CSP 是 `default-src 'self'`，所以頁面沒有行內的 `<script>`、沒有 `<style>` 區塊、也不用 `style="…"` 屬性（這個 CSP 三種都會擋；原型大量使用 `style` 屬性，搬過來時要改成 class）。樣式全在 `board.css`；腳本需要動態改樣式時用 `element.style.x = …` 或切換 class，這不受 CSP 限制。不載入任何外部資源，不用任何前端函式庫。
+靜態檔：`GET /` 回 `topic-board/public/index.html`；`GET /assets/<檔名>` 回 `public/` 的 CSS、圖示（`icon.svg`，`index.html` 用 `<link rel="icon">` 指過去，瀏覽器就不會去要 `/favicon.ico`）與 `dist/page/` 的頁面腳本，檔名只接受 `[a-z0-9.-]+`，對照寫死的清單，不做路徑拼接。CSP 是 `default-src 'self'`，所以頁面沒有行內的 `<script>`、沒有 `<style>` 區塊、也不用 `style="…"` 屬性（這個 CSP 三種都會擋；原型大量使用 `style` 屬性，搬過來時要改成 class）。樣式全在 `board.css`；腳本需要動態改樣式時用 `element.style.x = …` 或切換 class，這不受 CSP 限制。不載入任何外部資源，不用任何前端函式庫。
 
 ### API
 
