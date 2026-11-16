@@ -8,31 +8,39 @@ const QUEUE_LABEL = { high: "高", normal: "一般", later: "待辦" };
 function nameOf(state, id) {
     return state.doc.topics[id]?.name ?? state.archive.topics[id]?.name ?? null;
 }
-function placeOf(state, id) {
-    if (state.archive.topics[id] !== undefined)
-        return "已封存";
-    const topic = state.doc.topics[id];
-    if (topic === undefined)
-        return "已不存在";
+/** Where a live topic sits now. */
+function placeOf(state, id, topic) {
     if (topic.status === "proposed")
         return "提議中";
     const queue = QUEUES.find((name) => state.doc.queues[name].includes(id));
     return queue === undefined ? "沒有排進佇列" : QUEUE_LABEL[queue];
 }
+function header(state, id) {
+    const archived = state.archive.topics[id];
+    if (archived !== undefined)
+        return `${id}　${archived.name}（已封存）`;
+    const topic = state.doc.topics[id];
+    if (topic === undefined)
+        return `${id}　（已不存在）`;
+    return `${id}　${topic.name}（${placeOf(state, id, topic)}）`;
+}
+/** The line for a merge, rename, or split, which name the topic the change started from. */
+function describeMove(entry, kind) {
+    const oldName = `「${entry.from_name ?? "？"}」`;
+    const oldId = `（${entry.from ?? "？"}）`;
+    if (kind === "renamed")
+        return `${oldName}改名為「${entry.name}」`;
+    if (kind === "merged")
+        return `${oldName}${oldId}併入「${entry.name}」`;
+    return `從${oldName}${oldId}拆出「${entry.name}」（${entry.topic}）`;
+}
 function describe(entry) {
     const day = entry.at.slice(0, 10);
-    switch (entry.kind) {
-        case "merged":
-            return `${day} 「${entry.from_name ?? ""}」（${entry.from ?? ""}）併入「${entry.name}」`;
-        case "renamed":
-            return `${day} 「${entry.from_name ?? ""}」改名為「${entry.name}」`;
-        case "split":
-            return `${day} 從「${entry.from_name ?? ""}」（${entry.from ?? ""}）拆出「${entry.name}」（${entry.topic}）`;
-        case "archived":
-            return `${day} 封存`;
-        case "reopened":
-            return `${day} 重開`;
-    }
+    if (entry.kind === "archived")
+        return `${day} 封存`;
+    if (entry.kind === "reopened")
+        return `${day} 重開`;
+    return `${day} ${describeMove(entry, entry.kind)}`;
 }
 /** True when the entry is part of how `id` came to be what it is. */
 function concerns(state, entry, id) {
@@ -68,7 +76,7 @@ function topicLines(state, id) {
     const unrecorded = Object.keys(state.doc.merged).filter((old) => resolveTopicId(state.doc, old) === id && !recorded.has(old));
     const older = history.length - MAX_HISTORY;
     return [
-        `${id}　${nameOf(state, id) ?? ""}（${placeOf(state, id)}）`,
+        header(state, id),
         ...(older > 0 ? [`  還有 ${older} 筆更早的紀錄`] : []),
         ...history.slice(-MAX_HISTORY).map((entry) => `  ${describe(entry)}`),
         ...unrecorded.map((old) => `  ${old} 併入這裡（沒有當時的紀錄）`),

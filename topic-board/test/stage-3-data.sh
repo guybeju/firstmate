@@ -407,7 +407,7 @@ test_split_moves_the_named_tasks_to_a_new_topic() {
 
 # Runs last: it renames and merges topics the other tests rely on.
 test_find_traces_renames_merges_and_tasks() {
-  local out rc
+  local out rc refusal
   t propose "Reports" --goal "monthly numbers" --id reports >/dev/null
   t rename reports "Money reports" >/dev/null
   t merge reports billing >/dev/null
@@ -423,6 +423,10 @@ test_find_traces_renames_merges_and_tasks() {
   rc=0
   t find >/dev/null 2>&1 || rc=$?
   assert_equals 2 "$rc" "find without a keyword is a usage error"
+  rc=0
+  refusal=$(t find "$(printf 'a\033[31mb')" 2>&1) || rc=$?
+  assert_equals 2 "$rc" "find must refuse a keyword with control characters"
+  assert_not_contains "$refusal" "$(printf '\033')" "the refusal must not echo the control characters"
   t restart >/dev/null
   assert_equals "$out" "$(t find reports)" "the history must survive a restart"
   assert_contains "$(t find ship-a)" "task main/ship-a：Billing（" "find must read the home afresh on a cold board"

@@ -418,6 +418,15 @@ describe("merge", () => {
     );
   });
 
+  it("splits again under a new id once the earlier split-off topic is archived", () => {
+    const input = { from: "b", name: "Exports", goal: "export files" };
+    const once = done(topics.split(fixture(), input, NOW)).state;
+    const archived = done(topics.archive(once, "exports", NOW)).state;
+    const again = done(topics.split(archived, input, NOW));
+    expect(again.line).toBe("ok exports-2 已從 b 拆出，放進「一般」");
+    expect(again.state.doc.queues.normal).toEqual(["b", "exports-2", "c"]);
+  });
+
   it("refuses a split from a topic that is not confirmed, or with a bad name, goal, or id", () => {
     const state = fixture();
     const input = { from: "b", name: "Exports", goal: "g" };

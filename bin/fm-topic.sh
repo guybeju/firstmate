@@ -380,7 +380,7 @@ split_task_data() {
         return 1
       fi
       home=$(tb_local_secondmate_home "$DATA/secondmates.md" "${spec%%/*}") || {
-        printf '%s\n' "$spec：split 只能搬主 home 和本機 secondmate 的 task；遠端的請那個 secondmate 自己跑 tag。" >&2
+        printf '%s\n' "$spec：split 只能搬主 home 和已註冊的本機 secondmate 的 task；遠端 secondmate 的請它自己跑 tag。" >&2
         return 1
       }
       printf '%s\n' "$home/data"

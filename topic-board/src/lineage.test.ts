@@ -146,6 +146,61 @@ describe("findLines", () => {
     expect(findLines(state, "billing", [])).toEqual(["billing　帳務重構（高）", line]);
   });
 
+  it("marks what a hand-edited history entry leaves out instead of failing", () => {
+    const state = fixture();
+    state.doc.history = [
+      { at: "2026-11-18T00:00:00Z", kind: "renamed", topic: "login", name: "登入" },
+      { at: "2026-11-19T00:00:00Z", kind: "merged", topic: "login", name: "登入" },
+      { at: "2026-11-20T00:00:00Z", kind: "split", topic: "login", name: "登入" },
+    ];
+    expect(findLines(state, "login", [])).toEqual([
+      "login　登入（一般）",
+      "  2026-11-18 「？」改名為「登入」",
+      "  2026-11-19 「？」（？）併入「登入」",
+      "  2026-11-20 從「？」（？）拆出「登入」（login）",
+    ]);
+  });
+
+  it("says when a confirmed topic sits in no queue", () => {
+    const state = fixture();
+    state.doc.queues.normal = [];
+    expect(findLines(state, "login", [])).toEqual(["login　登入（沒有排進佇列）"]);
+  });
+
+  it("keeps empty old names as they are and leaves unrelated history out", () => {
+    const state = chained();
+    state.doc.history.push({
+      at: "2026-12-03T00:00:00Z",
+      kind: "merged",
+      topic: "login",
+      name: "登入",
+      from: "",
+      from_name: "",
+    });
+    expect(findLines(state, "login", [])).toEqual([
+      "login　登入（一般）",
+      "  2026-12-03 「」（）併入「登入」",
+    ]);
+  });
+
+  it("prints no leftover note at exactly the caps, and counts one past them", () => {
+    let state = topics.emptyState();
+    const add = (index: number): void => {
+      state = done(
+        topics.propose(state, { name: `同 ${index}`, goal: "g", id: `t${index}`, by: "user" }, "T"),
+      );
+    };
+    for (let index = 0; index < 5; index += 1) add(index);
+    for (let index = 0; index < 8; index += 1) {
+      state = done(topics.rename(state, "t0", `同 0 版${index}`, "2026-11-18T00:00:00Z"));
+    }
+    expect(findLines(state, "同", [])).toHaveLength(5 + 8);
+    state = done(topics.rename(state, "t0", "同 0 版8", "2026-11-18T00:00:00Z"));
+    expect(findLines(state, "t0", [])[1]).toBe("  還有 1 筆更早的紀錄");
+    add(5);
+    expect(findLines(state, "同", []).at(-1)).toBe("還有 1 個議題符合，請用更長的關鍵字。");
+  });
+
   it("treats the query as plain text, not as a pattern", () => {
     expect(findLines(fixture(), ".*", [])).toEqual(["找不到「.*」。"]);
   });

@@ -56,7 +56,7 @@ function codePoints(text) {
 // that reorder the text around them: a name is printed in terminals and tables.
 const NOT_PLAIN_TEXT = /[\p{Cc}\u202A-\u202E\u2066-\u2069]/u;
 /** Trims `text` and returns it when it is one non-empty line of plain text within `max` code points. */
-function oneLine(text, max) {
+export function oneLine(text, max) {
     const trimmed = text.trim();
     if (trimmed === "" || NOT_PLAIN_TEXT.test(trimmed) || codePoints(trimmed) > max)
         return null;
