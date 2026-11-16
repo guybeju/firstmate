@@ -301,6 +301,83 @@ EOF
   pass "T3e a legacy remote advance still restarts the live remote mate"
 }
 
+# --- T3f: a remote refusal the transport reports as success names its reason --
+# A transport that drops the exit status delivers the host's refusal as exit 0
+# with no result line; the parent must still skip and show the host's own words.
+test_remote_refusal_without_result_names_reason() {
+  local w err fake_ssh long_word
+  w=$(new_world t3f)
+  fake_ssh="$w/fakebin/fake-ssh"
+  cat > "$fake_ssh" <<'SH'
+#!/usr/bin/env bash
+set -u
+cat > /dev/null
+while [ "$#" -gt 0 ]; do
+  case "$1" in -o) shift 2 ;; --) shift; break ;; *) exit 90 ;; esac
+done
+shift 2
+argv_b64=$4
+decode() { printf '%s' "$1" | base64 --decode 2>/dev/null || printf '%s' "$1" | base64 -D; }
+rargs=()
+while IFS= read -r -d '' a; do rargs+=("$a"); done < <(decode "$argv_b64")
+case "${rargs[1]:-}" in
+  update)
+    [ -z "${FM_FAKE_REFUSAL_EMPTY:-}" ] || exit 0
+    {
+      printf '%s\n' "${FM_FAKE_REFUSAL_PREFIX:-}"
+      printf 'firstmate: skipped: on carry,   expected main\n'
+      printf '\terror: remote code root did not complete a safe origin update  \n'
+    } >&2
+    ;;
+  state) printf 'alive\n' ;;
+  *) exit 91 ;;
+esac
+SH
+  chmod +x "$fake_ssh"
+  cat > "$w/home/state/sm1.meta" <<EOF
+window=remote:sm1
+endpoint_task_id=sm1
+worktree=/srv/sm1
+project=/srv/sm1
+harness=claude
+kind=secondmate
+home=/srv/sm1
+remote_host=remote-mac
+remote_backend=herdr
+EOF
+  printf -- '- sm1 - remote domain (host: remote-mac; root: /srv/fm; home: /srv/sm1; scope: things; projects: p; added 2026-09-03)\n' \
+    > "$w/home/data/secondmates.md"
+
+  err=$(PATH="$w/fakebin:$PATH" FM_FAKE_DIR="$w/fake" FM_SSH_BIN="$fake_ssh" \
+    FM_ROOT_OVERRIDE="$w/main" FM_HOME="$w/home" "$UPDATE" 2>&1 >"$w/out")
+
+  assert_contains "$err" \
+    "remote secondmate sm1: skipped on remote-mac: firstmate: skipped: on carry, expected main error: remote code root did not complete a safe origin update" \
+    "the host's own refusal must be the reason, on one whitespace-normalised line"
+  assert_not_contains "$err" "malformed update result" "the host's reason must replace the generic message"
+  assert_equals "$(printf '%s\n' "$err" | grep -c 'remote secondmate sm1:')" 1 \
+    "the refusal must be reported on exactly one line"
+  assert_not_contains "$(cat "$w/out")" "remote secondmate sm1: updated" "a refusal must never read as an update"
+  assert_contains "$(cat "$w/out")" "restart-secondmates: none" "a skipped remote mate must not restart"
+  assert_contains "$(cat "$w/out")" "nudge-secondmates: none" "a skipped remote mate must not be nudged"
+
+  long_word=$(printf 'x%.0s' $(seq 1 600))
+  err=$(PATH="$w/fakebin:$PATH" FM_FAKE_DIR="$w/fake" FM_SSH_BIN="$fake_ssh" \
+    FM_FAKE_REFUSAL_PREFIX="$long_word" \
+    FM_ROOT_OVERRIDE="$w/main" FM_HOME="$w/home" "$UPDATE" 2>&1 >/dev/null)
+  err=$(printf '%s\n' "$err" | grep 'remote secondmate sm1:')
+  [ "${#err}" -le 400 ] || fail "an oversized remote reason must be bounded, got ${#err} chars"
+  assert_contains "$err" "on carry, expected main error: remote code root did not complete" \
+    "bounding must keep the end of the host's reason, where its verdict is"
+
+  err=$(PATH="$w/fakebin:$PATH" FM_FAKE_DIR="$w/fake" FM_SSH_BIN="$fake_ssh" \
+    FM_FAKE_REFUSAL_EMPTY=1 \
+    FM_ROOT_OVERRIDE="$w/main" FM_HOME="$w/home" "$UPDATE" 2>&1 >/dev/null)
+  assert_contains "$err" "remote secondmate sm1: skipped on remote-mac: no update result" \
+    "a silent host must still be reported as a skip with a stated reason"
+  pass "T3f a remote refusal reported as success is skipped with the host's reason"
+}
+
 # --- T4: dirty secondmate is skipped, its edit preserved -------------------
 test_dirty_secondmate_skipped() {
   local w out
@@ -697,6 +774,7 @@ test_bin_only_advance_restarts
 test_unprovable_runtime_gets_fallback_nudge
 test_dead_secondmate_gets_no_action
 test_legacy_remote_advance_restarts
+test_remote_refusal_without_result_names_reason
 test_dirty_secondmate_skipped
 test_diverged_secondmate_skipped
 test_squash_merged_divergence_reconciles

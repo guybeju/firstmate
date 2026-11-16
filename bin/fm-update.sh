@@ -322,7 +322,15 @@ if [ -f "$SECONDMATES_MD" ]; then
               claim_settled_secondmate "$id"
             fi
             ;;
-          *) echo "remote secondmate $id: skipped on $SECONDMATE_REGISTRY_HOST: malformed update result" >&2 ;;
+          *)
+            # A transport that drops the exit status delivers the host's refusal
+            # here; show its own words on one bounded line, keeping the end
+            # where the host states its verdict.
+            remote_reason=$(printf '%s' "$remote_out" | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')
+            [ -n "$remote_reason" ] || remote_reason="no update result"
+            [ "${#remote_reason}" -le 300 ] || remote_reason="...${remote_reason: -297}"
+            echo "remote secondmate $id: skipped on $SECONDMATE_REGISTRY_HOST: $remote_reason" >&2
+            ;;
         esac
       else
         echo "remote secondmate $id: skipped on $SECONDMATE_REGISTRY_HOST: ${remote_out%%$'\n'*}" >&2
