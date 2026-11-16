@@ -100,6 +100,18 @@ export default async function run(page) {
   await page.waitFor("the reopened topic in its queue", queueHas("normal", "Billing X"));
   if (process.env.TB_SHOTS) await page.screenshot(`${process.env.TB_SHOTS}/home.png`);
 
+  // A tab left in the background does not poll; it catches up the moment it is shown again,
+  // also when the board was restarted meanwhile.
+  const setHidden = (hidden) =>
+    `(() => { Object.defineProperty(document, "hidden", { configurable: true, get: () => ${hidden} }); document.dispatchEvent(new Event("visibilitychange")); return true; })()`;
+  await page.evaluate(setHidden(true));
+  topic("propose", "背景分頁提議", "--goal", "分頁在背景時提的");
+  topic("restart");
+  await new Promise((resolve) => setTimeout(resolve, 7000));
+  if (await page.evaluate(has("背景分頁提議"))) throw new Error("a hidden tab must not poll");
+  await page.evaluate(setHidden(false));
+  await page.waitFor("the proposal made while the tab was hidden", has("背景分頁提議"), 5000);
+
   // The board stops answering: the page says so, refuses to send, and recovers by itself.
   topic("stop");
   await page.waitFor("the service-down banner", has("看板服務沒有回應"), 30000);
