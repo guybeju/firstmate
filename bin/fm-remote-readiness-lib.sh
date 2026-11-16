@@ -4,15 +4,23 @@
 # Source this file and call:
 #   fm_remote_readiness_ensure <bin-dir> <secondmate-id> [backend]
 #
-# It runs bin/fm-remote-doctor.sh on that route's configured host, and when the
-# read-only run reports any gap it runs the doctor again with --fix --automatic
-# and then a third read-only time. --automatic is what makes this unattended
-# repair safe on a shared host: it never stops, reloads, replaces, or takes over
-# a running Herdr server or a loaded Herdr launch agent, and leaves those
-# repairs to an operator's explicit --fix. That last read-only run is the
+# Every verdict below is an exit status carried back by bin/fm-on.sh, so it
+# first checks that the transport returns one: it sends the doctor an argument
+# the doctor refuses with its usage status before any check runs, and requires
+# that refusal to come back non-zero. Only this calling side can see what the
+# SSH server does to a remote exit status, so this is the one check that lives
+# here. A refusal that arrives as exit 0 is reported as the transport-exit-status
+# human gap and no doctor verdict is requested; exit 255 is unknown completion.
+#
+# It then runs bin/fm-remote-doctor.sh on that route's configured host, and when
+# the read-only run reports any gap it runs the doctor again with --fix
+# --automatic and then a third read-only time. --automatic is what makes this
+# unattended repair safe on a shared host: it never stops, reloads, replaces, or
+# takes over a running Herdr server or a loaded Herdr launch agent, and leaves
+# those repairs to an operator's explicit --fix. That last read-only run is the
 # verdict, so a repair is never trusted on its own word. bin/fm-remote-doctor.sh
-# remains the single owner of every check, every repair, and every message;
-# nothing here restates them.
+# remains the single owner of every other check, every repair, and every
+# message; nothing here restates them.
 #
 # <backend> is herdr, rex, or any (the default). A concrete backend is passed
 # to the doctor's --backend flag; `any` invokes it bare, which resolves
@@ -42,10 +50,30 @@ fm_remote_readiness_probe() { # <bin-dir> <secondmate-id> [doctor-args...]
   return "$rc"
 }
 
+# Every doctor version rejects this argument with its usage status before it
+# inspects or changes anything, so it is a remote command that must fail.
+FM_REMOTE_READINESS_REFUSED_ARG=--refused-transport-exit-status-probe
+
+fm_remote_readiness_transport() { # <bin-dir> <secondmate-id>
+  local bin_dir=$1 id=$2 rc
+  fm_remote_readiness_probe "$bin_dir" "$id" "$FM_REMOTE_READINESS_REFUSED_ARG"
+  rc=$?
+  [ "$rc" -ne 255 ] || return 255
+  [ "$rc" -eq 0 ] || return 0
+  FM_REMOTE_READINESS_OUT="check transport-exit-status=human: a remote command that must fail returned exit 0 through fm-on.sh to $id, so the SSH server there does not return remote exit status and every failed remote command would look successful
+action: transport-exit-status: point that route's SSH alias at a server that returns the remote command's exit status, then confirm ssh <alias> 'exit 3'; echo \$? prints 3 (docs/remote-secondmates.md, SSH access from the primary)
+error: this host is not ready for a remote second mate; unresolved: transport-exit-status"
+  return 1
+}
+
 fm_remote_readiness_ensure() { # <bin-dir> <secondmate-id> [backend]
   local bin_dir=$1 id=$2 backend=${3:-any} rc
   local -a doctor_args=()
   [ "$backend" = any ] || doctor_args=(--backend "$backend")
+
+  fm_remote_readiness_transport "$bin_dir" "$id"
+  rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
 
   fm_remote_readiness_probe "$bin_dir" "$id" ${doctor_args[@]+"${doctor_args[@]}"}
   rc=$?

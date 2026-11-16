@@ -171,6 +171,9 @@ IFS=$'\t' read -r command_name _command_action command_rel <<EOF
 $command_fields
 EOF
 if [ "$command_name" = fm-remote-doctor.sh ]; then
+  # Like the real doctor, an argument it does not know gets the usage status
+  # before any check; readiness sends one to prove the transport carries it.
+  case "${_command_action:-}" in ''|--fix|--backend|--backend=*) ;; *) exit 2 ;; esac
   printf 'check herdr=ok: /usr/bin/herdr\n'
   printf 'ok: remote second-mate readiness confirmed on this host\n'
   exit 0

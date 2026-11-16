@@ -900,6 +900,12 @@ command_fields=$(perl -MMIME::Base64=decode_base64 -e '
 IFS=$'\t' read -r command_name _command_action command_rel <<EOF
 $command_fields
 EOF
+# Like the real doctor, an argument it does not know gets the usage status
+# before any check; readiness sends one to prove the transport carries it.
+case "$command_name:$_command_action" in
+  fm-remote-doctor.sh:|fm-remote-doctor.sh:--fix|fm-remote-doctor.sh:--backend*) ;;
+  fm-remote-doctor.sh:*) exit 2 ;;
+esac
 printf '%s %s %s\n' "$command_name" "$_command_action" "$command_rel" >> "${FM_FAKE_SSH_LOG:?}"
 case "$command_name:$_command_action" in
   fm-remote-doctor.sh:*)

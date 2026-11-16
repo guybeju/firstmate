@@ -173,6 +173,9 @@ esac
 # owns the doctor's real behavior against controlled account fixtures; this
 # boundary owns only what the callers do with its verdict.
 if [ "$command_name" = fm-remote-doctor.sh ]; then
+  # Like the real doctor, an argument it does not know gets the usage status
+  # before any check; readiness sends one to prove the transport carries it.
+  case "${_command_action:-}" in ''|--fix|--backend|--backend=*) ;; *) exit 2 ;; esac
   printf '%s %s\n' "${FM_FAKE_SSH_MODE:-normal}" "${_command_action:--}" >> "$FM_FAKE_DOCTOR_LOG"
   case "${FM_FAKE_SSH_MODE:-normal}" in
     unreachable) exit 255 ;;

@@ -15,7 +15,8 @@
 # because remote staging captures stdin to EOF and an open caller stream would
 # block staging indefinitely; a payload caller passes --stdin to forward its
 # own stream as the job's bounded input. stdout and stderr remain separate, and
-# ssh's exit status is returned unchanged. OpenSSH never receives an auto-retry
+# ssh's exit status is returned unchanged; bin/fm-remote-readiness-lib.sh
+# verifies that the SSH server carries it. OpenSSH never receives an auto-retry
 # instruction here. Exit 255 therefore means unavailable transport or unknown
 # remote completion and must be reconciled by the semantic caller, never
 # blindly repeated by this layer.
@@ -45,7 +46,7 @@ PROTOCOL=1
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
-usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 encode_base64() {
   base64 | tr -d '\n'
