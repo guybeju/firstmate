@@ -427,6 +427,22 @@ describe("merge", () => {
     expect(again.state.doc.queues.normal).toEqual(["b", "exports-2", "c"]);
   });
 
+  it("recognizes a split asked for again after its source was merged elsewhere", () => {
+    const input = { from: "b", name: "Exports", goal: "export files" };
+    const once = done(topics.split(fixture(), input, NOW)).state;
+    const merged = done(topics.merge(once, "b", "c", NOW)).state;
+    const again = done(topics.split(merged, input, NOW));
+    expect(again.changed).toBe(false);
+    expect(again.line).toBe("ok exports 本來就已從 c 拆出");
+  });
+
+  it("refuses to split a confirmed topic that sits in no queue", () => {
+    const state = fixture();
+    state.doc.queues.normal = ["c"];
+    const line = refusal(topics.split(state, { from: "b", name: "Exports", goal: "g" }, NOW));
+    expect(line).toContain("不在任何佇列");
+  });
+
   it("refuses a split from a topic that is not confirmed, or with a bad name, goal, or id", () => {
     const state = fixture();
     const input = { from: "b", name: "Exports", goal: "g" };

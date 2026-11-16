@@ -313,7 +313,8 @@ async function which(service, args) {
 function taskTags(service, task) {
     const found = [];
     for (const home of service.poller.snapshots()) {
-        const text = home.report?.topics[task];
+        const tagFiles = home.report?.topics ?? {};
+        const text = Object.hasOwn(tagFiles, task) ? tagFiles[task] : undefined;
         if (text !== undefined)
             found.push({ home: home.id, task, tags: parseTags(text) });
     }
