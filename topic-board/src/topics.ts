@@ -331,15 +331,17 @@ export function split(state: TopicState, input: SplitInput, now: string): TopicR
   const earlier = state.doc.history.find(
     (entry) =>
       entry.kind === "split" &&
-      entry.from === found.id &&
+      entry.from !== undefined &&
+      resolveTopicId(state.doc, entry.from) === found.id &&
       state.doc.topics[entry.topic]?.name === name,
   );
   if (earlier !== undefined)
     return unchanged(state, `ok ${earlier.topic} 本來就已從 ${found.id} 拆出`);
+  const queue = QUEUES.find((entry) => state.doc.queues[entry].includes(found.id));
+  if (queue === undefined) return refuse(`${found.id} 不在任何佇列裡，先用 move 把它排進去。`);
   const next = clone(state);
   const id = chooseId(next, name, input.id);
   if (typeof id !== "string") return id;
-  const queue = QUEUES.find((entry) => next.doc.queues[entry].includes(found.id)) as Queue;
   next.doc.topics[id] = { name, goal, status: "confirmed", created_at: now, proposed_by: "user" };
   const order = next.doc.queues[queue];
   order.splice(order.indexOf(found.id) + 1, 0, id);

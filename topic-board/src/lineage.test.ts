@@ -97,6 +97,10 @@ describe("findLines", () => {
     expect(findLines(state, "exp-1", [{ home: "sm1", task: "exp-1", tags }])).toEqual([
       "task sm1/exp-1：財務（2026-11-19，原 reports）→ 登入（2026-12-05）→ gone（不認得的議題）",
     ]);
+    const undated = [{ topic: "login", atMs: 0 }];
+    expect(findLines(state, "exp-2", [{ home: "main", task: "exp-2", tags: undated }])).toEqual([
+      "task main/exp-2：登入（時間不明）",
+    ]);
     expect(findLines(state, "exp-1", [{ home: "main", task: "exp-1", tags: [] }])).toEqual([
       "task main/exp-1：沒有標過議題",
     ]);

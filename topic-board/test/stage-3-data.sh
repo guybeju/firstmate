@@ -396,6 +396,17 @@ test_split_moves_the_named_tasks_to_a_new_topic() {
     "the split must be recorded once"
   assert_contains "$(t find docs-api)" "從「Docs」（docs）拆出「Docs API」（docs-api）" "find must show where the topic came from"
 
+  t tag sp-4 docs >/dev/null
+  chmod 444 "$MAIN/data/sp-4/topic"
+  rc=0
+  out=$(t split docs "Docs API" --goal "the API pages" sp-4 2>&1) || rc=$?
+  chmod 644 "$MAIN/data/sp-4/topic"
+  assert_equals 1 "$rc" "a task that could not be tagged must fail the split"
+  assert_not_contains "$out" "ok sp-4" "a task that could not be tagged must not be reported as moved"
+  assert_contains "$out" "再跑一次" "the failure must say the command can be run again"
+  assert_equals docs "$(last_topic "$MAIN" sp-4)" "a failed tag must leave the tag file as it was"
+  t split docs "Docs API" --goal "the API pages" sp-4 >/dev/null || fail "the rerun after a failed tag failed"
+  assert_equals docs-api "$(last_topic "$MAIN" sp-4)" "the rerun must move the task"
   rc=0
   t split docs >/dev/null 2>&1 || rc=$?
   assert_equals 2 "$rc" "split without a name is a usage error"
@@ -420,6 +431,7 @@ test_find_traces_renames_merges_and_tasks() {
     "find must show every topic a task was tagged with, oldest first"
   assert_contains "$(t find sm-work)" "task sm1/sm-work：" "find must look for the task in secondmate homes too"
   assert_equals "找不到「nothing-here」。" "$(t find nothing-here)" "find must say when nothing matches"
+  assert_equals "找不到「constructor」。" "$(t find constructor)" "find must not trip over names every object inherits"
   rc=0
   t find >/dev/null 2>&1 || rc=$?
   assert_equals 2 "$rc" "find without a keyword is a usage error"

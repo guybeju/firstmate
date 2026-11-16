@@ -95,6 +95,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SELF="$SCRIPT_DIR/fm-topic.sh"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
@@ -414,13 +415,18 @@ split_task_problem() {
     printf '%s\n' "$spec：現在標的是 $current，不在 $source 裡。"
 }
 
+# The topic id in the board's answer to a split: the second word of its first line.
+split_new_id() {
+  printf '%s\n' "$1" | awk 'NR == 1 { print $2 }'
+}
+
 # split <source> <name> --goal <line> [--id <id>] [<task-spec>...]: split a new
 # topic off <source> and retag the named tasks to it. The tasks are checked
 # before anything is written. Tagging happens after the topic exists, so a run
 # that stops halfway is finished by running the same command again.
 cmd_split() {
-  local goal="" id="" plan new source spec problem problems="" failed=0
-  local -a words=() request=()
+  local goal="" id="" plan made new source spec problem problems="" failed=0
+  local -a words=() request=() tasks=()
   require_main_home split
   require_jq split
   while [ "$#" -gt 0 ]; do
@@ -442,22 +448,30 @@ cmd_split() {
   fi
   request=(split "${words[0]}" "${words[1]}" --goal "$goal")
   [ -z "$id" ] || request+=(--id "$id")
-  plan=$( (cmd_service "${request[@]}" --dry) ) || exit $?
-  new=$(printf '%s\n' "$plan" | awk 'NR == 1 { print $2 }')
+  [ "${#words[@]}" -le 2 ] || tasks=("${words[@]:2}")
+  # Each step below runs this script again as its own process. Called as a
+  # function behind "||", a step would run with errexit off and could carry on
+  # after a failure.
+  plan=$("$SELF" split-topic "${request[@]}" --dry) || exit $?
   source=$(resolve_confirmed_topic "${words[0]}")
-  for spec in "${words[@]:2}"; do
-    problem=$(split_task_problem "$spec" "$source" "$new")
+  for spec in ${tasks[@]+"${tasks[@]}"}; do
+    problem=$(split_task_problem "$spec" "$source" "$(split_new_id "$plan")")
     [ -z "$problem" ] || problems+="$problem"$'\n'
   done
   if [ -n "$problems" ]; then
     printf '%s' "$problems" >&2
     tb_die 1 "有 task 不能搬，什麼都沒有改。"
   fi
-  (cmd_service "${request[@]}") || exit $?
-  for spec in "${words[@]:2}"; do
+  # The id comes from the split that was really made: another writer may have
+  # taken the planned id since the check.
+  made=$("$SELF" split-topic "${request[@]}") || exit $?
+  printf '%s\n' "$made"
+  new=$(split_new_id "$made")
+  tb_valid_id "$new" || tb_die 1 "看不懂看板回的議題 id，沒有搬任何 task：$made"
+  for spec in ${tasks[@]+"${tasks[@]}"}; do
     case "$spec" in
-      */*) (cmd_in_home "${spec%%/*}" tag "${spec#*/}" "$new") || failed=1 ;;
-      *) (cmd_tag "$spec" "$new") || failed=1 ;;
+      */*) "$SELF" --in-home "${spec%%/*}" tag "${spec#*/}" "$new" || failed=1 ;;
+      *) "$SELF" tag "$spec" "$new" || failed=1 ;;
     esac
   done
   [ "$failed" -eq 0 ] || tb_die 1 "有 task 沒有標成功；修好之後原樣再跑一次同一個指令就會接著做完。"
@@ -711,6 +725,8 @@ main() {
     --in-home) cmd_in_home "$@" ;;
     tag) cmd_tag "$@" ;;
     split) cmd_split "$@" ;;
+    # Internal: the board's own split operation, without the task handling.
+    split-topic) cmd_service "$@" ;;
     list) cmd_list "$@" ;;
     order) cmd_order "$@" ;;
     setup) cmd_setup "$@" ;;

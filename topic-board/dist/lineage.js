@@ -88,7 +88,7 @@ function taskLine(state, entry) {
         const name = nameOf(state, id);
         if (name === null)
             return `${tag.topic}（不認得的議題）`;
-        const day = new Date(tag.atMs).toISOString().slice(0, 10);
+        const day = tag.atMs === 0 ? "時間不明" : new Date(tag.atMs).toISOString().slice(0, 10);
         return `${name}（${day}${tag.topic === id ? "" : `，原 ${tag.topic}`}）`;
     });
     const path = steps.length === 0 ? "沒有標過議題" : steps.join("→ ");
