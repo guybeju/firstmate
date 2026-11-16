@@ -16,6 +16,7 @@
 #   fm-topic.sh close-propose <topic-id> --reason <text>
 #   fm-topic.sh move <topic-id> <queue> [--before <topic-id> | --first]
 #   fm-topic.sh rename <topic-id> <name>
+#   fm-topic.sh split <topic-id> <name> --goal <one line> [--id <new-id>] [<task-id> | <secondmate-id>/<task-id>]...
 #   fm-topic.sh goal <topic-id> <one line>
 #   fm-topic.sh archive <topic-id>
 #   fm-topic.sh reopen <topic-id> [--queue <queue>]
@@ -40,6 +41,13 @@
 # "<topic name>：", "未分類：" when the task has no topic, or "議題不明（<task-id>）："
 # when the task's home could not be read. which prints the same line without
 # storing anything. --home names the secondmate home the task lives in.
+#
+# split makes a new confirmed topic out of part of <topic-id>, right after it
+# in the same queue, and retags the named tasks to it. Every task must be
+# tagged with <topic-id> now; a task of a local secondmate is written as
+# <secondmate-id>/<task-id>, and a remote secondmate's task cannot be moved this
+# way. The tasks are checked before anything is written. If tagging stops
+# halfway, run the same command again: the topic is reused and the rest moved.
 #
 # find answers where a topic or task is now and how it got there, in a few
 # lines: it matches the keyword against topic ids, names, and goals, including
@@ -360,6 +368,101 @@ cmd_order() {
   }
 }
 
+# The data directory holding <task-spec>'s tag file: this home's for "<task>",
+# a local secondmate's for "<secondmate-id>/<task>". Prints nothing and returns
+# 1, after explaining, when the spec is malformed or the home is remote.
+split_task_data() {
+  local spec=$1 home
+  case "$spec" in
+    */*)
+      if ! tb_valid_id "${spec%%/*}" || ! tb_valid_id "${spec#*/}"; then
+        printf '%s\n' "$spec：task 要寫成 <task-id> 或 <secondmate-id>/<task-id>。" >&2
+        return 1
+      fi
+      home=$(tb_local_secondmate_home "$DATA/secondmates.md" "${spec%%/*}") || {
+        printf '%s\n' "$spec：split 只能搬主 home 和本機 secondmate 的 task；遠端的請那個 secondmate 自己跑 tag。" >&2
+        return 1
+      }
+      printf '%s\n' "$home/data"
+      ;;
+    *)
+      tb_valid_id "$spec" || {
+        printf '%s\n' "$spec：task id 格式不對。" >&2
+        return 1
+      }
+      printf '%s\n' "$DATA"
+      ;;
+  esac
+}
+
+# Why <task-spec> cannot move from topic <source> to <new>, or nothing when it can.
+split_task_problem() {
+  local spec=$1 source=$2 new=$3 data file current
+  data=$(split_task_data "$spec" 2>&1) || {
+    printf '%s\n' "$data"
+    return 0
+  }
+  file="$data/${spec#*/}/topic"
+  [ -s "$file" ] || {
+    printf '%s\n' "$spec：沒有議題標記，不在 $source 裡。"
+    return 0
+  }
+  current=$(tail -n 1 "$file")
+  current=${current%% *}
+  [ "$current" = "$new" ] && return 0
+  [ "$(resolve_confirmed_topic "$current")" = "$source" ] ||
+    printf '%s\n' "$spec：現在標的是 $current，不在 $source 裡。"
+}
+
+# split <source> <name> --goal <line> [--id <id>] [<task-spec>...]: split a new
+# topic off <source> and retag the named tasks to it. The tasks are checked
+# before anything is written. Tagging happens after the topic exists, so a run
+# that stops halfway is finished by running the same command again.
+cmd_split() {
+  local goal="" id="" plan new source spec problem problems="" failed=0
+  local -a words=() request=()
+  require_main_home split
+  require_jq split
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --goal | --id)
+        [ "$#" -ge 2 ] || usage_error "$1 後面要有值"
+        if [ "$1" = --goal ]; then goal=$2; else id=$2; fi
+        shift 2
+        ;;
+      --*) usage_error "split 不認得 $1" ;;
+      *)
+        words+=("$1")
+        shift
+        ;;
+    esac
+  done
+  if [ "${#words[@]}" -lt 2 ] || [ -z "$goal" ]; then
+    usage_error "split 的用法是 <來源議題> <新名稱> --goal <一行> [--id <id>] [<task>|<secondmate-id>/<task>]…"
+  fi
+  request=(split "${words[0]}" "${words[1]}" --goal "$goal")
+  [ -z "$id" ] || request+=(--id "$id")
+  plan=$( (cmd_service "${request[@]}" --dry) ) || exit $?
+  new=$(printf '%s\n' "$plan" | awk 'NR == 1 { print $2 }')
+  source=$(resolve_confirmed_topic "${words[0]}")
+  for spec in "${words[@]:2}"; do
+    problem=$(split_task_problem "$spec" "$source" "$new")
+    [ -z "$problem" ] || problems+="$problem"$'\n'
+  done
+  if [ -n "$problems" ]; then
+    printf '%s' "$problems" >&2
+    tb_die 1 "有 task 不能搬，什麼都沒有改。"
+  fi
+  (cmd_service "${request[@]}") || exit $?
+  for spec in "${words[@]:2}"; do
+    case "$spec" in
+      */*) (cmd_in_home "${spec%%/*}" tag "${spec#*/}" "$new") || failed=1 ;;
+      *) (cmd_tag "$spec" "$new") || failed=1 ;;
+    esac
+  done
+  [ "$failed" -eq 0 ] || tb_die 1 "有 task 沒有標成功；修好之後原樣再跑一次同一個指令就會接著做完。"
+}
+
 cmd_in_home() {
   local id home
   [ "$#" -ge 2 ] || usage_error "--in-home 的用法是 --in-home <secondmate-id> <tag|answers|setup> …"
@@ -607,6 +710,7 @@ main() {
       ;;
     --in-home) cmd_in_home "$@" ;;
     tag) cmd_tag "$@" ;;
+    split) cmd_split "$@" ;;
     list) cmd_list "$@" ;;
     order) cmd_order "$@" ;;
     setup) cmd_setup "$@" ;;

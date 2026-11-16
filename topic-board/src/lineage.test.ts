@@ -95,7 +95,7 @@ describe("findLines", () => {
       { topic: "gone", atMs: 0 },
     ];
     expect(findLines(state, "exp-1", [{ home: "sm1", task: "exp-1", tags }])).toEqual([
-      "task sm1/exp-1：財務（2026-11-19）→ 登入（2026-12-05）→ gone（不認得的議題）",
+      "task sm1/exp-1：財務（2026-11-19，原 reports）→ 登入（2026-12-05）→ gone（不認得的議題）",
     ]);
     expect(findLines(state, "exp-1", [{ home: "main", task: "exp-1", tags: [] }])).toEqual([
       "task main/exp-1：沒有標過議題",
@@ -132,6 +132,18 @@ describe("findLines", () => {
           `  2026-11-18 「${index === 0 ? "同名 0" : `同名 0 第${index - 1}版`}」改名為「同名 0 第${index}版」`,
       ),
     ]);
+  });
+
+  it("shows a split under both the source and the topic that was split off", () => {
+    const result = topics.split(
+      fixture(),
+      { from: "billing", name: "帳務匯出", goal: "g", id: "exports" },
+      "2026-12-02T03:00:00Z",
+    );
+    const state = done(result);
+    const line = "  2026-12-02 從「帳務重構」（billing）拆出「帳務匯出」（exports）";
+    expect(findLines(state, "exports", [])).toEqual(["exports　帳務匯出（高）", line]);
+    expect(findLines(state, "billing", [])).toEqual(["billing　帳務重構（高）", line]);
   });
 
   it("treats the query as plain text, not as a pattern", () => {

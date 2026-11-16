@@ -23,13 +23,14 @@ export interface ArchivedTopic extends Topic {
   archived_at: string;
 }
 
-export const HISTORY_KINDS = ["merged", "renamed", "archived", "reopened"] as const;
+export const HISTORY_KINDS = ["merged", "renamed", "split", "archived", "reopened"] as const;
 export type HistoryKind = (typeof HISTORY_KINDS)[number];
 
 /**
  * One change to a topic's identity, kept so an old name or id can be traced.
  * `topic` and `name` are the topic the change left behind; a merge also names
- * the topic that went away (`from`, `from_name`), and a rename the old name.
+ * the topic that went away (`from`, `from_name`), a rename the old name, and
+ * a split the topic it was split off from.
  */
 export interface HistoryEntry {
   at: string;
@@ -63,6 +64,7 @@ export interface TopicState {
 export type SystemEventKind =
   | "topic.confirmed"
   | "topic.merged"
+  | "topic.split"
   | "topic.close_proposed"
   | "topic.archived"
   | "topic.reopened";
@@ -304,6 +306,53 @@ export function merge(
   });
   return changed(next, `ok ${from} 已併入 ${into}`, [
     { kind: "topic.merged", topic: into, text: `議題「${source.name}」已併入「${target.name}」` },
+  ]);
+}
+
+export interface SplitInput {
+  from: string;
+  name: string;
+  goal: string;
+  id?: string;
+}
+
+/**
+ * Splits a new confirmed topic off `input.from`, placed right after it in the
+ * same queue so work moved to it keeps its priority. Moving the tasks is the
+ * caller's job; the history records only that the topic was split off.
+ */
+export function split(state: TopicState, input: SplitInput, now: string): TopicResult {
+  const found = confirmedTopic(state, input.from);
+  if ("ok" in found) return found;
+  const name = oneLine(input.name, NAME_MAX);
+  const goal = oneLine(input.goal, GOAL_MAX);
+  if (name === null) return refuse(`名稱要是一行、不能是空的、最多 ${NAME_MAX} 個字。`);
+  if (goal === null) return refuse(`目標要是一行、不能是空的、最多 ${GOAL_MAX} 個字。`);
+  const earlier = state.doc.history.find(
+    (entry) =>
+      entry.kind === "split" &&
+      entry.from === found.id &&
+      state.doc.topics[entry.topic]?.name === name,
+  );
+  if (earlier !== undefined)
+    return unchanged(state, `ok ${earlier.topic} 本來就已從 ${found.id} 拆出`);
+  const next = clone(state);
+  const id = chooseId(next, name, input.id);
+  if (typeof id !== "string") return id;
+  const queue = QUEUES.find((entry) => next.doc.queues[entry].includes(found.id)) as Queue;
+  next.doc.topics[id] = { name, goal, status: "confirmed", created_at: now, proposed_by: "user" };
+  const order = next.doc.queues[queue];
+  order.splice(order.indexOf(found.id) + 1, 0, id);
+  next.doc.history.push({
+    at: now,
+    kind: "split",
+    topic: id,
+    name,
+    from: found.id,
+    from_name: found.topic.name,
+  });
+  return changed(next, `ok ${id} 已從 ${found.id} 拆出，放進「${QUEUE_LABEL[queue]}」`, [
+    { kind: "topic.split", topic: id, text: `從議題「${found.topic.name}」拆出「${name}」` },
   ]);
 }
 

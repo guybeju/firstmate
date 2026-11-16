@@ -1,7 +1,7 @@
 // The topic model and every change the board can make to it. Pure: no I/O, no
 // clock. Callers pass the current time and persist the returned state.
 export const QUEUES = ["high", "normal", "later"];
-export const HISTORY_KINDS = ["merged", "renamed", "archived", "reopened"];
+export const HISTORY_KINDS = ["merged", "renamed", "split", "archived", "reopened"];
 export const NAME_MAX = 80;
 export const GOAL_MAX = 200;
 const ID_MAX = 64;
@@ -190,6 +190,46 @@ export function merge(state, rawFrom, rawInto, now) {
     });
     return changed(next, `ok ${from} 已併入 ${into}`, [
         { kind: "topic.merged", topic: into, text: `議題「${source.name}」已併入「${target.name}」` },
+    ]);
+}
+/**
+ * Splits a new confirmed topic off `input.from`, placed right after it in the
+ * same queue so work moved to it keeps its priority. Moving the tasks is the
+ * caller's job; the history records only that the topic was split off.
+ */
+export function split(state, input, now) {
+    const found = confirmedTopic(state, input.from);
+    if ("ok" in found)
+        return found;
+    const name = oneLine(input.name, NAME_MAX);
+    const goal = oneLine(input.goal, GOAL_MAX);
+    if (name === null)
+        return refuse(`名稱要是一行、不能是空的、最多 ${NAME_MAX} 個字。`);
+    if (goal === null)
+        return refuse(`目標要是一行、不能是空的、最多 ${GOAL_MAX} 個字。`);
+    const earlier = state.doc.history.find((entry) => entry.kind === "split" &&
+        entry.from === found.id &&
+        state.doc.topics[entry.topic]?.name === name);
+    if (earlier !== undefined)
+        return unchanged(state, `ok ${earlier.topic} 本來就已從 ${found.id} 拆出`);
+    const next = clone(state);
+    const id = chooseId(next, name, input.id);
+    if (typeof id !== "string")
+        return id;
+    const queue = QUEUES.find((entry) => next.doc.queues[entry].includes(found.id));
+    next.doc.topics[id] = { name, goal, status: "confirmed", created_at: now, proposed_by: "user" };
+    const order = next.doc.queues[queue];
+    order.splice(order.indexOf(found.id) + 1, 0, id);
+    next.doc.history.push({
+        at: now,
+        kind: "split",
+        topic: id,
+        name,
+        from: found.id,
+        from_name: found.topic.name,
+    });
+    return changed(next, `ok ${id} 已從 ${found.id} 拆出，放進「${QUEUE_LABEL[queue]}」`, [
+        { kind: "topic.split", topic: id, text: `從議題「${found.topic.name}」拆出「${name}」` },
     ]);
 }
 function confirmedTopic(state, rawId) {
