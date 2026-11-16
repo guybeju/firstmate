@@ -35,6 +35,8 @@ function describe(entry: HistoryEntry): string {
       return `${day} 「${entry.from_name ?? ""}」（${entry.from ?? ""}）併入「${entry.name}」`;
     case "renamed":
       return `${day} 「${entry.from_name ?? ""}」改名為「${entry.name}」`;
+    case "split":
+      return `${day} 從「${entry.from_name ?? ""}」（${entry.from ?? ""}）拆出「${entry.name}」（${entry.topic}）`;
     case "archived":
       return `${day} 封存`;
     case "reopened":
@@ -72,7 +74,9 @@ function matchingTopics(state: TopicState, needle: string): string[] {
 
 function topicLines(state: TopicState, id: string): string[] {
   const history = state.doc.history.filter((entry) => concerns(state, entry, id));
-  const recorded = new Set(history.map((entry) => entry.from));
+  const recorded = new Set(
+    history.filter((entry) => entry.kind === "merged").map((entry) => entry.from),
+  );
   const unrecorded = Object.keys(state.doc.merged).filter(
     (old) => resolveTopicId(state.doc, old) === id && !recorded.has(old),
   );
@@ -90,7 +94,8 @@ function taskLine(state: TopicState, entry: TaskTags): string {
     const id = resolveTopicId(state.doc, tag.topic);
     const name = nameOf(state, id);
     if (name === null) return `${tag.topic}（不認得的議題）`;
-    return `${name}（${new Date(tag.atMs).toISOString().slice(0, 10)}）`;
+    const day = new Date(tag.atMs).toISOString().slice(0, 10);
+    return `${name}（${day}${tag.topic === id ? "" : `，原 ${tag.topic}`}）`;
   });
   const path = steps.length === 0 ? "沒有標過議題" : steps.join("→ ");
   return `task ${entry.home}/${entry.task}：${path}`;

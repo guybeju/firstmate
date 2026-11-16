@@ -294,6 +294,12 @@ const TOPIC_COMMANDS: Record<string, CommandShape> = {
   "close-propose": { positional: ["id"], valued: ["reason"], required: ["reason"] },
   move: { positional: ["id", "queue"], valued: ["before"], bare: ["first"] },
   rename: { positional: ["id", "value"] },
+  split: {
+    positional: ["from", "name"],
+    valued: ["goal", "id"],
+    bare: ["dry"],
+    required: ["goal"],
+  },
   goal: { positional: ["id", "value"] },
   archive: { positional: ["id"] },
   reopen: { positional: ["id"], valued: ["queue"] },

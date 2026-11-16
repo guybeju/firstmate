@@ -143,6 +143,22 @@ const TOPIC_HANDLERS = {
         }
         return topics.move(service.state, id, queue, position);
     },
+    split: (service, args) => {
+        const from = stringField(args, "from");
+        const name = stringField(args, "name");
+        const goal = stringField(args, "goal");
+        const id = args["id"];
+        if (from === null || name === null || goal === null)
+            return { usage: "split 需要來源議題、新名稱與 --goal。" };
+        if (id !== undefined && typeof id !== "string")
+            return { usage: "--id 要是字串。" };
+        const input = id === undefined ? { from, name, goal } : { from, name, goal, id };
+        const result = topics.split(service.state, input, now());
+        // --dry answers what the split would do, so the caller can check its tasks first.
+        if (args["dry"] !== true || !result.ok)
+            return result;
+        return { ...result, state: service.state, changed: false, events: [] };
+    },
     rename: (service, args) => {
         const id = stringField(args, "id");
         const value = stringField(args, "value");

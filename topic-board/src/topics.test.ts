@@ -374,6 +374,63 @@ describe("merge", () => {
     expect(done(topics.reopen(state, "a", undefined, NOW)).state.doc.history).toEqual([]);
   });
 
+  it("splits a new confirmed topic off, right after its source in the same queue", () => {
+    const state = fixture();
+    const split = done(
+      topics.split(state, { from: "b", name: " Exports ", goal: "export files", id: "exp" }, NOW),
+    );
+    expect(split.line).toBe("ok exp 已從 b 拆出，放進「一般」");
+    expect(split.state.doc.queues.normal).toEqual(["b", "exp", "c"]);
+    expect(split.state.doc.topics["exp"]).toEqual({
+      name: "Exports",
+      goal: "export files",
+      status: "confirmed",
+      created_at: NOW,
+      proposed_by: "user",
+    });
+    expect(split.state.doc.history).toEqual([
+      { at: NOW, kind: "split", topic: "exp", name: "Exports", from: "b", from_name: "B" },
+    ]);
+    expect(split.events).toEqual([
+      { kind: "topic.split", topic: "exp", text: "從議題「B」拆出「Exports」" },
+    ]);
+    expect(split.dispatchable).toEqual([]);
+    expect(state.doc.topics["exp"]).toBeUndefined();
+  });
+
+  it("mints an id for a split when none is given, and follows a merged-away source", () => {
+    const merged = done(topics.merge(fixture(), "c", "b", NOW)).state;
+    const split = done(topics.split(merged, { from: "c", name: "Side work", goal: "g" }, NOW));
+    expect(split.line).toBe("ok side-work 已從 b 拆出，放進「一般」");
+    expect(split.state.doc.queues.normal).toEqual(["b", "side-work"]);
+  });
+
+  it("changes nothing when the same split is asked for again", () => {
+    const input = { from: "b", name: "Exports", goal: "export files" };
+    const once = done(topics.split(fixture(), input, NOW));
+    const again = done(topics.split(once.state, input, "2026-12-01T00:00:00Z"));
+    expect(again.changed).toBe(false);
+    expect(again.line).toBe("ok exports 本來就已從 b 拆出");
+    expect(again.state.doc.history).toHaveLength(1);
+    const renamed = done(topics.rename(once.state, "exports", "Other", NOW)).state;
+    expect(done(topics.split(renamed, input, NOW)).line).toBe(
+      "ok exports-2 已從 b 拆出，放進「一般」",
+    );
+  });
+
+  it("refuses a split from a topic that is not confirmed, or with a bad name, goal, or id", () => {
+    const state = fixture();
+    const input = { from: "b", name: "Exports", goal: "g" };
+    expect(refusal(topics.split(state, { ...input, from: "p" }, NOW))).toContain("提議中");
+    expect(refusal(topics.split(state, { ...input, from: "nope" }, NOW))).toContain("沒有 nope");
+    const archived = done(topics.archive(state, "b", NOW)).state;
+    expect(refusal(topics.split(archived, input, NOW))).toContain("已封存");
+    expect(refusal(topics.split(state, { ...input, name: "" }, NOW))).toContain("名稱");
+    expect(refusal(topics.split(state, { ...input, goal: "a\nb" }, NOW))).toContain("目標");
+    expect(refusal(topics.split(state, { ...input, id: "a" }, NOW))).toContain("a");
+    expect(refusal(topics.split(state, { ...input, id: "bad id" }, NOW))).toContain("id");
+  });
+
   it("refuses merging into itself, a proposal, an archived or an unknown topic", () => {
     const state = fixture();
     expect(refusal(topics.merge(state, "a", "a", NOW))).toContain("它自己");
