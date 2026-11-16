@@ -408,11 +408,13 @@ status_without_node() {
 
 # Where the rules block sits in <file>: prints "none", "ok <begin-line>
 # <end-line>", or "broken <what is wrong>" when the two markers do not form
-# exactly one block.
+# exactly one block. A marker line may be indented or carry text after the
+# marker, so a block that an editor or a curation pass reshaped is still found.
 rules_block() {
   awk -v begin="$RULES_BEGIN" -v end="$RULES_END" '
-    index($0, begin) == 1 { begins = begins " " NR; b++ }
-    $0 == end { ends = ends " " NR; e++ }
+    { line = $0; sub(/^[ \t]+/, "", line) }
+    index(line, begin) == 1 { begins = begins " " NR; b++ }
+    index(line, end) == 1 { ends = ends " " NR; e++ }
     END {
       if (b == 0 && e == 0) print "none"
       else if (b == 1 && e == 1 && begins + 0 < ends + 0) print "ok" begins ends
