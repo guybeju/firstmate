@@ -32,6 +32,7 @@ section{margin-bottom:20px}
 .row .grow{flex:1;min-width:0}
 .side{display:grid;grid-template-columns:260px 1fr;gap:16px}
 .narrow{max-width:860px}
+@media (max-width:640px){.side{grid-template-columns:1fr}.side>:first-child{order:2}}
 textarea,input[type=text],select{font:inherit;padding:5px;border:1px solid var(--line);border-radius:4px;width:100%}
 select.auto,input.auto{width:auto}
 button{font:inherit;padding:4px 10px;border:1px solid var(--line);border-radius:4px;background:#fff;cursor:pointer}
