@@ -319,6 +319,7 @@ cmd_order() {
         | place($topic) as $p
         | {id: $r.id, index: $index, topic: $topic, queue: $p.queue, at: ($p.at // 0),
            name: ($p.name // "（未分類）"),
+           decision: ($r.kind == "captain"),
            own_hold: (($r.hold_reason // "") | startswith($own)),
            other_hold: ($r.hold_reason != null and ((($r.hold_reason // "") | startswith($own)) | not)),
            blocked: (($r.unresolved_blocker_ids // []) | length > 0),
@@ -333,7 +334,9 @@ cmd_order() {
     | ($items | map(select(.own_hold and (.parked or $doc == null)))) as $parked
     | (if $note != "" then $note else empty end),
       "可派：",
-      ($ready[] | line + (if .own_hold then "\t← 還被看板的 hold 擋著，先照「該解除」解除" else "" end)),
+      ($ready[] | line
+        + (if .own_hold then "\t← 還被看板的 hold 擋著，先照「該解除」解除" else "" end)
+        + (if .decision then "\t← 決定事項，使用者已經回答；沒有工作要派，照回答處理後關掉" else "" end)),
       "該 hold：",
       ($to_hold[] | line + "\t→ bin/fm-tasks-axi.sh hold \(.id) --reason \"\($own)議題 \(.topic) 在\(if .queue == "archived" then "封存" else "待辦" end)\""),
       "該解除：",

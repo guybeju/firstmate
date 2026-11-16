@@ -329,13 +329,15 @@ function describeFiles(paths) {
 function readTrimmed(file) {
     return fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim() : "（沒有）";
 }
-async function status(paths) {
+async function status(config, paths) {
     const state = await health(paths);
     const lines = [];
     if (state.kind === "running") {
         const outcome = await exchange(paths.socket, request("status"), HEALTH_TIMEOUT_MS);
         const data = outcome.kind === "answer" ? (outcome.response.data ?? {}) : {};
-        lines.push("看板服務：在跑", `pid：${state.data.pid}`, `埠：${state.data.port}`, `程式版本：${state.data.code_commit}`, `啟動時間：${state.data.started_at}`, `輪詢：${data["polling"] === true ? "進行中" : "沒在跑"}`, ...homeLines(data["homes"]));
+        lines.push("看板服務：在跑", `pid：${state.data.pid}`, `埠：${state.data.port}`, `程式版本：${state.data.code_commit}`, ...(state.data.code_commit === config.commit
+            ? []
+            : [`目前的程式是 ${config.commit}；下一個指令或 restart 會換成新版`]), `啟動時間：${state.data.started_at}`, `輪詢：${data["polling"] === true ? "進行中" : "沒在跑"}`, ...homeLines(data["homes"]));
     }
     else {
         lines.push(state.kind === "hung" ? "看板服務：沒有回應" : "看板服務：沒在跑", `上次的 pid：${readTrimmed(paths.pid)}`, `上次的埠：${readTrimmed(paths.port)}`);
@@ -385,7 +387,7 @@ async function topicCommand(config, paths, sub, args) {
     return finish(await send(config, paths, message));
 }
 const LIFECYCLE = {
-    status: (_config, paths) => status(paths),
+    status,
     stop: (_config, paths) => stop(paths),
     restart,
     open,

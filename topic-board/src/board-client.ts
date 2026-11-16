@@ -379,7 +379,7 @@ function readTrimmed(file: string): string {
   return fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim() : "（沒有）";
 }
 
-async function status(paths: BoardPaths): Promise<never> {
+async function status(config: BoardConfig, paths: BoardPaths): Promise<never> {
   const state = await health(paths);
   const lines: string[] = [];
   if (state.kind === "running") {
@@ -390,6 +390,9 @@ async function status(paths: BoardPaths): Promise<never> {
       `pid：${state.data.pid}`,
       `埠：${state.data.port}`,
       `程式版本：${state.data.code_commit}`,
+      ...(state.data.code_commit === config.commit
+        ? []
+        : [`目前的程式是 ${config.commit}；下一個指令或 restart 會換成新版`]),
       `啟動時間：${state.data.started_at}`,
       `輪詢：${data["polling"] === true ? "進行中" : "沒在跑"}`,
       ...homeLines(data["homes"]),
@@ -463,7 +466,7 @@ async function topicCommand(
 }
 
 const LIFECYCLE: Record<string, (config: BoardConfig, paths: BoardPaths) => Promise<never>> = {
-  status: (_config, paths) => status(paths),
+  status,
   stop: (_config, paths) => stop(paths),
   restart,
   open,

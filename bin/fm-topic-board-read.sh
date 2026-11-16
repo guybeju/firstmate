@@ -194,7 +194,8 @@ main() {
         tasks: [ $snap.tasks[]
                  | {id, kind, state: (.current_state.state // "unknown"),
                     source: (.current_state.source // ""), detail: (.current_state.detail // ""),
-                    reported: (.paths.status_log.present // false)} ],
+                    unstarted: (.current_state.state == "working"
+                                and .current_state.detail == "harness busy (fm-spawn)")} ],
         holds: [ $snap.backlog.records[]
                  | select(.structured == true and .hold_kind == "captain"
                           and .hold_reason != null and .state != "done")

@@ -125,6 +125,9 @@ function noteOutcome(result: CommandResult): Outcome {
     : { kind: "failed", error: errorText(result) };
 }
 
+// fm-captain-hold.sh's reasons for skipping a hold that someone already answered.
+const ANSWERED_ELSEWHERE = ["(already closed)", "records a different captain decision"];
+
 /** Reads fm-captain-hold.sh answers output for the line about `task`. */
 function answerOutcome(result: CommandResult, task: string, remote: boolean): Outcome | "closed" {
   const lines = result.stdout.split("\n").map((line) => line.trim());
@@ -132,7 +135,8 @@ function answerOutcome(result: CommandResult, task: string, remote: boolean): Ou
   const verdict = lines.find(
     (line) => line.startsWith(`skipped: ${task} `) || line.startsWith(`refused: ${task} `),
   );
-  if (verdict === `skipped: ${task} (already closed)`) return { kind: "handled_elsewhere" };
+  if (verdict !== undefined && ANSWERED_ELSEWHERE.some((mark) => verdict.includes(mark)))
+    return { kind: "handled_elsewhere" };
   if (verdict !== undefined) return { kind: "failed", error: verdict };
   if (remote && result.code === 255) return { kind: "retry", error: errorText(result) };
   return { kind: "failed", error: errorText(result) };

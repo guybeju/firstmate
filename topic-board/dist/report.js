@@ -63,7 +63,7 @@ function parseTask(raw) {
         state: stateOf(raw),
         source: textField(raw, "source"),
         detail: textField(raw, "detail"),
-        reported: raw["reported"] !== false,
+        unstarted: raw["unstarted"] === true,
     }));
 }
 function parseSecondmate(raw) {

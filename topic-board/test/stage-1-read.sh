@@ -54,13 +54,9 @@ test_first_read_reports_the_whole_home() {
     "code_commit must be the code root's commit"
   assert_equals false "$(printf '%s' "$out" | jq -r '.ledger_enabled')" "ledger must be reported closed"
   assert_equals absent "$(printf '%s' "$out" | jq -r '.ledger.status')" "a missing ledger must be absent"
-  assert_equals 'run-a|ship|unknown|true' \
-    "$(printf '%s' "$out" | jq -r '.tasks[] | "\(.id)|\(.kind)|\(.state)|\(.reported)"')" \
-    "tasks must carry id, kind, state, and whether the worker ever reported"
-  mv "$home/state/run-a.status" "$home/state/run-a.status.aside"
-  assert_equals false "$(read_board "$home" 0 - | jq -r '.tasks[] | select(.id == "run-a") | .reported')" \
-    "a worker with no status file has never reported"
-  mv "$home/state/run-a.status.aside" "$home/state/run-a.status"
+  assert_equals 'run-a|ship|unknown|false' \
+    "$(printf '%s' "$out" | jq -r '.tasks[] | "\(.id)|\(.kind)|\(.state)|\(.unstarted)"')" \
+    "tasks must carry id, kind, state, and whether the harness is still on its spawn seed"
   assert_equals 'live-hold|live|run-a|choose a route|Live call' \
     "$(printf '%s' "$out" | jq -r '.holds[] | select(.id == "live-hold") | "\(.id)|\(.hold_bucket)|\(.origin)|\(.question)|\(.title)"')" \
     "a live captain hold must carry its bucket, origin, question, and title"
@@ -185,5 +181,22 @@ test_usage_and_failure() {
   pass "bad arguments are usage errors and a failed snapshot prints nothing"
 }
 
+test_a_spawn_seeded_worker_is_unstarted() {
+  local home root
+  home=$(tb_make_home read-unstarted)
+  write_fleet "$home"
+  root="$TMP_ROOT/read-unstarted-root"
+  mkdir -p "$root/bin"
+  cp "$ROOT"/bin/fm-topic-board-read.sh "$ROOT"/bin/fm-topic-lib.sh "$ROOT"/bin/fm-primary-scope-lib.sh \
+    "$ROOT"/bin/fm-secondmate-registry-lib.sh "$root/bin/"
+  tb_seed_unstarted "$root" run-a
+  assert_equals 'run-a|working|true' \
+    "$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-topic-board-read.sh" 0 - |
+      jq -r '.tasks[] | "\(.id)|\(.state)|\(.unstarted)"')" \
+    "a worker still on fm-spawn's busy seed has not started"
+  pass "a worker whose harness never took its first turn is reported as unstarted"
+}
+
 fm_test_run test_first_read_reports_the_whole_home test_ledger_delta_and_continuity \
-  test_large_ledger_is_read_in_bounded_pieces test_secondmates_and_in_home test_usage_and_failure
+  test_large_ledger_is_read_in_bounded_pieces test_secondmates_and_in_home test_usage_and_failure \
+  test_a_spawn_seeded_worker_is_unstarted

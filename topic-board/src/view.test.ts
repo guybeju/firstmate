@@ -195,7 +195,7 @@ describe("agents", () => {
     state,
     source: "s",
     detail: `detail ${id}`,
-    reported: true,
+    unstarted: false,
   });
   const ledger = (taskId: string, event: string, ts: number, homeId = "main"): JournalEvent => ({
     src: "ledger",
@@ -251,7 +251,7 @@ describe("agents", () => {
       unsorted_reason: null,
       updated_at: T0 + 9,
       stale: false,
-      reported: true,
+      unstarted: false,
     });
     expect(view.agents.find((agent) => agent.task === "t-done")).toMatchObject({
       topic: null,
@@ -260,23 +260,23 @@ describe("agents", () => {
     });
   });
 
-  it("marks a running task that never reported, and no ended one", () => {
+  it("marks a task whose harness never took its first turn, and no ended one", () => {
     const view = buildView(
       input({
         homes: [
           home("main", {
             report: report({
-              tasks: [{ ...task("quiet", "working"), reported: false }, task("spoke", "working")],
+              tasks: [{ ...task("quiet", "working"), unstarted: true }, task("spoke", "working")],
             }),
           }),
         ],
         events: [ledger("quiet", "task.dispatched", T0), ledger("gone", "task.merged", T0 + 1)],
       }),
     );
-    expect(view.agents.map((agent) => `${agent.task}:${agent.reported}`).toSorted()).toEqual([
-      "gone:true",
-      "quiet:false",
-      "spoke:true",
+    expect(view.agents.map((agent) => `${agent.task}:${agent.unstarted}`).toSorted()).toEqual([
+      "gone:false",
+      "quiet:true",
+      "spoke:false",
     ]);
   });
 

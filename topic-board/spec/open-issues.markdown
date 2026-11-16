@@ -165,9 +165,18 @@ brief 與帳本研究都說待決事項從 snapshot 的 `decisions_open` 讀。�
 
 ### C32　卡在啟動畫面的 worker 顯示成「進行中」
 
-第一次實測時兩個 worker 停在 harness 的確認畫面，從沒開始工作。上游的 crew-state 對這種 pane 回的是 `working`（harness busy），看板照著顯示「進行中」；watcher 有發現，但它的訊號不在 snapshot 裡。**做法**：彙整腳本多帶一個欄位 `reported`（snapshot 的 `paths.status_log.present`）。在跑的 worker 如果從沒寫過任何 status，那一列加一個警示：「<派出時間> 派出後還沒有任何回報，可能卡在啟動畫面」。燈號不變，仍然照 crew-state。還沒換到這一版的 home 沒有這個欄位，當成有回報過。
+第一次實測時兩個 worker 停在 harness 的確認畫面，從沒開始工作。上游的 crew-state 對這種 pane 回的是 `working`，看板照著顯示「進行中」；watcher 有發現，但它的訊號不在 snapshot 裡。**做法**：上游在派出時會先寫一筆 busy 紀錄（來源 `fm-spawn`），harness 的 hook 第一次觸發後才換成別的來源（`bin/fm-busy-lib.sh` 的檔頭）。crew-state 的 detail 還是 `harness busy (fm-spawn)`，就表示 harness 連第一輪都還沒開始。彙整腳本把這個判斷帶成欄位 `unstarted`，頁面在那一列加警示：「<派出時間> 派出後還沒開始第一輪，停太久就是卡在啟動畫面」。燈號不變。剛派出的幾秒內正常的 worker 也會短暫出現這個警示。還沒換到這一版的 home 沒有這個欄位，當成已經開始。
 
-沒有做的：讀 watcher 的 wake 紀錄（格式是上游內部的，會變），以及「有回報過、但很久沒動」的情況（目前列上沒有最後活動時間）。crew-state 把等人的 pane 報成 `working` 是上游的行為，要不要向上游反映由使用者決定。
+第一版用的是「從沒寫過 status」，實測發現正常的 worker 在第一個里程碑之前也沒有 status，會誤報好幾分鐘，已經換掉。
+
+沒有做的：讀 watcher 的 wake 紀錄（格式是上游內部的，會變），以及「開始之後很久沒動」的情況。crew-state 把等人的 pane 報成 `working` 是上游的行為，要不要向上游反映由使用者決定。
+
+### C33　第一次實測找到的其他幾條
+
+- 直送訊息開頭是空白加 `/`，或是 `!`，原本會送出去。現在前面有空白也算，`!` 也擋。
+- 看板與終端機同時回答同一個 hold、終端機先到時，看板那一筆顯示「失敗」加一段上游的英文。現在算「已在別處處理」。
+- 回答後選「讓工作繼續」的決定事項會出現在 `order` 的「可派」。現在那一行會註明它是決定事項、沒有工作要派。
+- 程式更新後、服務還沒換版之前，`status` 看不出來。現在會多一行說目前的程式是哪個 commit。
 
 ### C28　使用者的 ub-mode 與全域規範裡沒有做到的
 

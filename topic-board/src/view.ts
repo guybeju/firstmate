@@ -54,8 +54,8 @@ export interface AgentView {
   unsorted_reason: string | null;
   updated_at: number | null;
   stale: boolean;
-  /** False for a running worker that has never written a status line. */
-  reported: boolean;
+  /** True for a worker whose harness has not taken its first turn since it was spawned. */
+  unstarted: boolean;
 }
 
 export interface HoldView {
@@ -288,7 +288,7 @@ function agentMaker(
       unsorted_reason: placement.reason,
       updated_at: lastEvent === undefined ? null : lastEvent.ts,
       stale,
-      reported: task.reported,
+      unstarted: task.unstarted,
     };
   };
 }
@@ -316,7 +316,7 @@ function agentsOf(
       const outcome =
         event.event === "task.merged" || event.event === "task.cleaned_up" ? "done" : "unknown";
       const gone = { id: event.task, kind: "", state: outcome, source: "", detail: "" };
-      return agent({ ...gone, reported: true }, outcome);
+      return agent({ ...gone, unstarted: false }, outcome);
     });
   return [...running, ...ended];
 }

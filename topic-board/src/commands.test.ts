@@ -133,8 +133,19 @@ describe("write commands", () => {
     }
     expect(directTextProblem("")).toBe("訊息不能是空的。");
     expect(directTextProblem("/x")).toContain("會被當成指令");
+    for (const text of [
+      " /exit",
+      "\t$HOME",
+      "\n-x",
+      "!rm -rf x",
+      "  !ls",
+      "\u00a0/clear",
+      "\u3000/clear",
+    ]) {
+      expect(`${JSON.stringify(text)} ${directTextProblem(text)}`).toContain("會被當成指令");
+    }
+    expect(directTextProblem("看一下 /tmp 和 $HOME，然後回報！")).toBeNull();
     expect(directTextProblem("a /b $c -d")).toBeNull();
-    expect(directTextProblem(" /leading space")).toBeNull();
   });
 
   it("builds the three answer shapes with a newline-terminated line", () => {
