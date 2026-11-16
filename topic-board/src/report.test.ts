@@ -43,11 +43,33 @@ function ok(raw: unknown) {
 }
 
 describe("parseReport", () => {
+  it("takes a task as silent only when the report says it never reported", () => {
+    const tasks = ok({
+      ...FULL,
+      tasks: [
+        { id: "quiet", reported: false },
+        { id: "spoke", reported: true },
+        { id: "old-script" },
+        { id: "odd", reported: "no" },
+      ],
+    }).tasks.map((task) => `${task.id}:${task.reported}`);
+    expect(tasks).toEqual(["quiet:false", "spoke:true", "old-script:true", "odd:true"]);
+  });
+
   it("keeps well-formed entries and drops the rest", () => {
     expect(ok(FULL)).toEqual({
       code_commit: "abc",
       ledger_enabled: true,
-      tasks: [{ id: "t1", kind: "ship", state: "working", source: "pane", detail: "busy" }],
+      tasks: [
+        {
+          id: "t1",
+          kind: "ship",
+          state: "working",
+          source: "pane",
+          detail: "busy",
+          reported: true,
+        },
+      ],
       holds: [
         {
           id: "h1",
@@ -87,7 +109,7 @@ describe("parseReport", () => {
     expect(report).toEqual({
       code_commit: "",
       ledger_enabled: false,
-      tasks: [{ id: "t", kind: "", state: "unknown", source: "", detail: "" }],
+      tasks: [{ id: "t", kind: "", state: "unknown", source: "", detail: "", reported: true }],
       holds: [
         {
           id: "h",

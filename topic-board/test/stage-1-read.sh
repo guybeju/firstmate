@@ -54,8 +54,13 @@ test_first_read_reports_the_whole_home() {
     "code_commit must be the code root's commit"
   assert_equals false "$(printf '%s' "$out" | jq -r '.ledger_enabled')" "ledger must be reported closed"
   assert_equals absent "$(printf '%s' "$out" | jq -r '.ledger.status')" "a missing ledger must be absent"
-  assert_equals 'run-a|ship|unknown' \
-    "$(printf '%s' "$out" | jq -r '.tasks[] | "\(.id)|\(.kind)|\(.state)"')" "tasks must carry id, kind, and state"
+  assert_equals 'run-a|ship|unknown|true' \
+    "$(printf '%s' "$out" | jq -r '.tasks[] | "\(.id)|\(.kind)|\(.state)|\(.reported)"')" \
+    "tasks must carry id, kind, state, and whether the worker ever reported"
+  mv "$home/state/run-a.status" "$home/state/run-a.status.aside"
+  assert_equals false "$(read_board "$home" 0 - | jq -r '.tasks[] | select(.id == "run-a") | .reported')" \
+    "a worker with no status file has never reported"
+  mv "$home/state/run-a.status.aside" "$home/state/run-a.status"
   assert_equals 'live-hold|live|run-a|choose a route|Live call' \
     "$(printf '%s' "$out" | jq -r '.holds[] | select(.id == "live-hold") | "\(.id)|\(.hold_bucket)|\(.origin)|\(.question)|\(.title)"')" \
     "a live captain hold must carry its bucket, origin, question, and title"
