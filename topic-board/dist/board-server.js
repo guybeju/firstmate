@@ -221,19 +221,17 @@ async function homeArg(service, args) {
         : refused(`--home ${home} 不是已註冊的 secondmate。`);
 }
 /**
- * The line firstmate puts in front of a chat reminder about `task`. A home that
- * cannot be read gives "議題不明", never "未分類": not knowing is not the same
- * as knowing the task has no topic.
+ * The line firstmate puts in front of a chat reminder about `task`. The home is
+ * read afresh, because nothing keeps the board current while no page is open
+ * and a tag may have changed since. When that read fails, a tag seen earlier
+ * still answers; without one the line is "議題不明", never "未分類": not
+ * knowing is not the same as knowing the task has no topic.
  */
 async function reminderPrefix(service, home, task) {
-    const place = () => placeTask(service.state, service.poller.snapshots(), home, task);
-    let placement = place();
-    if (placement.reason === "no-tag") {
-        const read = await withTimeout(service.poller.readFresh(home), LOOKUP_WAIT_MS, false);
-        if (!read)
-            return `議題不明（${task}）：`;
-        placement = place();
-    }
+    const read = await withTimeout(service.poller.readFresh(home), LOOKUP_WAIT_MS, false);
+    const placement = placeTask(service.state, service.poller.snapshots(), home, task);
+    if (!read && placement.reason === "no-tag")
+        return `議題不明（${task}）：`;
     if (placement.topic === null)
         return "未分類：";
     const name = service.state.doc.topics[placement.topic]?.name ??
@@ -394,7 +392,9 @@ const SERVICE_HANDLERS = {
         : {}),
 };
 async function handle(service, request) {
-    const serviceHandler = SERVICE_HANDLERS[request.op];
+    const serviceHandler = Object.hasOwn(SERVICE_HANDLERS, request.op)
+        ? SERVICE_HANDLERS[request.op]
+        : undefined;
     if (serviceHandler !== undefined)
         return serviceHandler(service, request.args);
     return topicOp(service, request.op, request.args);
@@ -582,7 +582,7 @@ function loadService(boot) {
 }
 /** Runs one topic operation the way the socket does, for the browser API. */
 function topicOp(service, op, args) {
-    const handler = TOPIC_HANDLERS[op];
+    const handler = Object.hasOwn(TOPIC_HANDLERS, op) ? TOPIC_HANDLERS[op] : undefined;
     if (handler === undefined)
         return usage(`不認得的 op：${op}`);
     const result = handler(service, args);

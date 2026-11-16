@@ -103,6 +103,23 @@ describe("propose", () => {
     expect(propose({ name: "x".repeat(topics.NAME_MAX) }).ok).toBe(true);
     expect(refusal(propose({ goal: "two\nlines" }))).toContain("目標");
     expect(refusal(propose({ goal: "x".repeat(topics.GOAL_MAX + 1) }))).toContain("目標");
+    for (const hidden of [
+      "a\tb",
+      "a\u001b[31mb",
+      "a\u0007b",
+      "a\u007fb",
+      "a\u0085b",
+      "a\u202eb",
+      "a\u2066b",
+    ]) {
+      expect(refusal(propose({ name: hidden }))).toContain("名稱");
+      expect(refusal(propose({ goal: hidden }))).toContain("目標");
+      expect(refusal(topics.rename(state, "a", hidden))).toContain("名稱");
+    }
+    expect(propose({ name: "帳務 重構 😀 (v2) “quoted”", goal: "é ü ñ — ok" }).ok).toBe(true);
+    for (const builtin of ["constructor", "__proto__", "toString"]) {
+      expect(refusal(propose({ id: builtin }))).toContain("格式");
+    }
     expect(refusal(propose({ id: "-lead" }))).toContain("格式");
     expect(refusal(propose({ id: ".hidden" }))).toContain("格式");
     expect(refusal(propose({ id: "has space" }))).toContain("格式");
