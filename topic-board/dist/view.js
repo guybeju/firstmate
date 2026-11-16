@@ -129,20 +129,21 @@ function lastEvents(events) {
 }
 /** Builds agent entries for one home; everything that does not vary per task is bound here. */
 function agentMaker(home, stale, placer, last) {
-    return (task, kind, light, state, detail) => {
-        const placement = placer.current(home.id, task);
-        const lastEvent = last.get(`${home.id}\n${task}`);
+    return (task, light) => {
+        const placement = placer.current(home.id, task.id);
+        const lastEvent = last.get(`${home.id}\n${task.id}`);
         return {
             home: home.id,
-            task,
-            kind,
+            task: task.id,
+            kind: task.kind,
             light: stale ? "unknown" : light,
-            state,
-            detail,
+            state: task.state,
+            detail: task.detail,
             topic: placement.topic,
             unsorted_reason: placement.reason,
             updated_at: lastEvent === undefined ? null : lastEvent.ts,
             stale,
+            reported: task.reported,
         };
     };
 }
@@ -154,14 +155,15 @@ function agentsOf(home, stale, placer, last) {
     const deciding = new Set(report.holds.filter((hold) => hold.hold_bucket === "live").map((hold) => hold.id));
     const running = report.tasks
         .filter((task) => task.kind !== "secondmate")
-        .map((task) => agent(task.id, task.kind, deciding.has(task.id) ? "decide" : lightFor(task.state), task.state, task.detail));
+        .map((task) => agent(task, deciding.has(task.id) ? "decide" : lightFor(task.state)));
     // A cleaned-up task is gone from the snapshot; its last ledger event says how it ended.
     const known = new Set(report.tasks.map((task) => task.id));
     const ended = [...last.values()]
         .filter((event) => event.home === home.id && !known.has(event.task))
         .map((event) => {
         const outcome = event.event === "task.merged" || event.event === "task.cleaned_up" ? "done" : "unknown";
-        return agent(event.task, "", outcome, outcome, "");
+        const gone = { id: event.task, kind: "", state: outcome, source: "", detail: "" };
+        return agent({ ...gone, reported: true }, outcome);
     });
     return [...running, ...ended];
 }

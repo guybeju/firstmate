@@ -1,7 +1,7 @@
 // Computes what the board shows from what the service knows. Pure: the same
 // inputs always give the same view.
 import type { JournalEvent, LedgerEvent, Summary } from "./journal.js";
-import type { HomeReport, ReportHold } from "./report.js";
+import type { HomeReport, ReportHold, ReportTask } from "./report.js";
 import { orNull } from "./files.js";
 import { QUEUES, resolveTopicId } from "./topics.js";
 import type { Queue, TopicState } from "./topics.js";
@@ -54,6 +54,8 @@ export interface AgentView {
   unsorted_reason: string | null;
   updated_at: number | null;
   stale: boolean;
+  /** False for a running worker that has never written a status line. */
+  reported: boolean;
 }
 
 export interface HoldView {
@@ -272,20 +274,21 @@ function agentMaker(
   placer: Placer,
   last: Map<string, LedgerEvent>,
 ) {
-  return (task: string, kind: string, light: Light, state: string, detail: string): AgentView => {
-    const placement = placer.current(home.id, task);
-    const lastEvent = last.get(`${home.id}\n${task}`);
+  return (task: ReportTask, light: Light): AgentView => {
+    const placement = placer.current(home.id, task.id);
+    const lastEvent = last.get(`${home.id}\n${task.id}`);
     return {
       home: home.id,
-      task,
-      kind,
+      task: task.id,
+      kind: task.kind,
       light: stale ? "unknown" : light,
-      state,
-      detail,
+      state: task.state,
+      detail: task.detail,
       topic: placement.topic,
       unsorted_reason: placement.reason,
       updated_at: lastEvent === undefined ? null : lastEvent.ts,
       stale,
+      reported: task.reported,
     };
   };
 }
@@ -304,15 +307,7 @@ function agentsOf(
   );
   const running = report.tasks
     .filter((task) => task.kind !== "secondmate")
-    .map((task) =>
-      agent(
-        task.id,
-        task.kind,
-        deciding.has(task.id) ? "decide" : lightFor(task.state),
-        task.state,
-        task.detail,
-      ),
-    );
+    .map((task) => agent(task, deciding.has(task.id) ? "decide" : lightFor(task.state)));
   // A cleaned-up task is gone from the snapshot; its last ledger event says how it ended.
   const known = new Set(report.tasks.map((task) => task.id));
   const ended = [...last.values()]
@@ -320,7 +315,8 @@ function agentsOf(
     .map((event) => {
       const outcome =
         event.event === "task.merged" || event.event === "task.cleaned_up" ? "done" : "unknown";
-      return agent(event.task, "", outcome, outcome, "");
+      const gone = { id: event.task, kind: "", state: outcome, source: "", detail: "" };
+      return agent({ ...gone, reported: true }, outcome);
     });
   return [...running, ...ended];
 }

@@ -229,6 +229,12 @@ export function light(agent: AgentView): Child {
   return [h("span", { class: `dot l-${agent.light}` }), LIGHT_LABEL[agent.light] ?? agent.light];
 }
 
+/** What to say about a running worker that has never written a status line. */
+function silentNote(agent: AgentView): string {
+  const since = agent.updated_at === null ? "" : `${when(agent.updated_at)} 派出後`;
+  return `${since}還沒有任何回報，可能卡在啟動畫面`;
+}
+
 export function agentRow(view: View, actions: Actions, agent: AgentView): Child {
   return h(
     "div",
@@ -240,6 +246,7 @@ export function agentRow(view: View, actions: Actions, agent: AgentView): Child 
       h("b", {}, agent.task),
       " ",
       h("span", { class: "note" }, `${agent.state} ${agent.detail}`),
+      agent.reported ? null : [" ", h("span", { class: "pill warn" }, silentNote(agent))],
     ),
     h("span", { class: "pill" }, agent.home),
     agent.stale ? h("span", { class: "pill warn" }, "資料過期") : null,

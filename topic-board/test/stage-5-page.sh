@@ -49,8 +49,14 @@ mkdir -p "$MAIN/projects/ship-a" "$MAIN/data/ship-a" "$MAIN/data/call-1"
 fm_write_meta "$MAIN/state/ship-a.meta" "window=firstmate:fm-ship-a" "worktree=$MAIN/projects/ship-a" \
   "project=sample" "harness=claude" "kind=ship" "mode=ship" "yolo=off"
 printf 'working: on it\n' > "$MAIN/state/ship-a.status"
+# A second worker that was spawned and never wrote a status line.
+mkdir -p "$MAIN/projects/quiet-b"
+fm_write_meta "$MAIN/state/quiet-b.meta" "window=firstmate:fm-quiet-b" "worktree=$MAIN/projects/quiet-b" \
+  "project=sample" "harness=claude" "kind=ship" "mode=ship" "yolo=off"
 printf 'billing 2026-07-01T00:00:00Z\n' > "$MAIN/data/ship-a/topic"
 printf 'billing 2026-07-01T00:00:00Z\n' > "$MAIN/data/call-1/topic"
+mkdir -p "$MAIN/data/quiet-b"
+printf 'parked 2026-07-01T00:00:00Z\n' > "$MAIN/data/quiet-b/topic"
 : > "$MAIN/config/fleet-ledger"
 printf 'PR 開好了，等你看。' | "$TB_TOPIC" summary ship-a ready - >/dev/null
 "$TB_TOPIC" propose "Side idea" --goal "merge me" --id side >/dev/null

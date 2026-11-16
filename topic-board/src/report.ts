@@ -11,6 +11,8 @@ export interface ReportTask {
   state: string;
   source: string;
   detail: string;
+  /** False only when the home says the worker has never written a status line. */
+  reported: boolean;
 }
 
 export interface ReportHold {
@@ -119,6 +121,7 @@ function parseTask(raw: Record<string, unknown>): ReportTask | null {
     state: stateOf(raw),
     source: textField(raw, "source"),
     detail: textField(raw, "detail"),
+    reported: raw["reported"] !== false,
   }));
 }
 
