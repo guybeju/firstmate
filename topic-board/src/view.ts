@@ -267,6 +267,43 @@ function lastEvents(events: LedgerEvent[]): Map<string, LedgerEvent> {
   return last;
 }
 
+/** What the ledger says about a task's current run: its kind, and whether it landed. */
+interface Run {
+  kind: string;
+  merged: boolean;
+}
+
+/** The run each (home, task) is on: everything since its latest dispatch. */
+function currentRuns(events: LedgerEvent[]): Map<string, Run> {
+  const runs = new Map<string, Run>();
+  for (const event of events) {
+    const key = `${event.home}\n${event.task}`;
+    if (event.event === "task.dispatched") {
+      const kind = event.fields["kind"];
+      runs.set(key, { kind: typeof kind === "string" ? kind : "", merged: false });
+    } else if (event.event === "task.merged") {
+      runs.set(key, { kind: runs.get(key)?.kind ?? "", merged: true });
+    }
+  }
+  return runs;
+}
+
+const DISCARDED = { state: "discarded", detail: "已收掉，帳本裡沒有落地紀錄" } as const;
+
+/**
+ * How a task that is gone from the snapshot ended, from its last ledger event.
+ * Teardown records the same event whether the work landed or was thrown away,
+ * so a ship task cleaned up with no merge in its run is not shown as done.
+ */
+function endedTask(event: LedgerEvent, run: Run | undefined): { task: ReportTask; light: Light } {
+  const base = { id: event.task, kind: run?.kind ?? "", source: "", detail: "", unstarted: false };
+  const cleaned = event.event === "task.cleaned_up";
+  if (cleaned && run?.kind === "ship" && !run.merged)
+    return { task: { ...base, ...DISCARDED }, light: "unknown" };
+  const light = cleaned || event.event === "task.merged" ? "done" : "unknown";
+  return { task: { ...base, state: light }, light };
+}
+
 /** Builds agent entries for one home; everything that does not vary per task is bound here. */
 function agentMaker(
   home: HomeSnapshot,
@@ -298,6 +335,7 @@ function agentsOf(
   stale: boolean,
   placer: Placer,
   last: Map<string, LedgerEvent>,
+  runs: Map<string, Run>,
 ): AgentView[] {
   const report = home.report;
   if (report === null) return [];
@@ -313,10 +351,8 @@ function agentsOf(
   const ended = [...last.values()]
     .filter((event) => event.home === home.id && !known.has(event.task))
     .map((event) => {
-      const outcome =
-        event.event === "task.merged" || event.event === "task.cleaned_up" ? "done" : "unknown";
-      const gone = { id: event.task, kind: "", state: outcome, source: "", detail: "" };
-      return agent({ ...gone, unstarted: false }, outcome);
+      const gone = endedTask(event, runs.get(`${event.home}\n${event.task}`));
+      return agent(gone.task, gone.light);
     });
   return [...running, ...ended];
 }
@@ -459,6 +495,7 @@ export function buildView(input: ViewInput): BoardView {
   const placer = new Placer(input.topics, input.homes);
   const ledger = ledgerEvents(input);
   const last = lastEvents(ledger);
+  const runs = currentRuns(ledger);
   const homes = input.homes.map((home) => homeView(home, input));
   const view: BoardView = {
     homes,
@@ -479,7 +516,7 @@ export function buildView(input: ViewInput): BoardView {
   const ranked: RankedHold[] = [];
   input.homes.forEach((home, index) => {
     const stale = (homes[index] as HomeView).stale;
-    view.agents.push(...agentsOf(home, stale, placer, last));
+    view.agents.push(...agentsOf(home, stale, placer, last, runs));
     ranked.push(...holdsOf(home, stale, placer));
     if (home.report === null) return;
     for (const question of home.report.status_decisions) {

@@ -312,6 +312,48 @@ describe("agents", () => {
     ]);
   });
 
+  it("tells a ship task that was cleaned up without landing from one that landed", () => {
+    const dispatched = (taskId: string, kind: string, ts: number): JournalEvent => ({
+      src: "ledger",
+      home: "main",
+      ts,
+      event: "task.dispatched",
+      task: taskId,
+      fields: { kind },
+    });
+    const view = buildView(
+      input({
+        homes: [home("main", { report: report() })],
+        events: [
+          dispatched("landed", "ship", T0),
+          ledger("landed", "task.merged", T0 + 1),
+          ledger("landed", "task.cleaned_up", T0 + 2),
+          dispatched("dropped", "ship", T0 + 3),
+          ledger("dropped", "task.status", T0 + 4),
+          ledger("dropped", "task.cleaned_up", T0 + 5),
+          dispatched("scouted", "scout", T0 + 6),
+          ledger("scouted", "task.cleaned_up", T0 + 7),
+          ledger("redone", "task.merged", T0 + 8),
+          dispatched("redone", "ship", T0 + 9),
+          ledger("redone", "task.cleaned_up", T0 + 10),
+          ledger("undated", "task.cleaned_up", T0 + 11),
+        ],
+      }),
+    );
+    expect(
+      view.agents.map((agent) => `${agent.task}=${agent.light}:${agent.state}:${agent.kind}`),
+    ).toEqual([
+      "landed=done:done:ship",
+      "dropped=unknown:discarded:ship",
+      "scouted=done:done:scout",
+      "redone=unknown:discarded:ship",
+      "undated=done:done:",
+    ]);
+    expect(view.agents.find((agent) => agent.task === "dropped")?.detail).toBe(
+      "已收掉，帳本裡沒有落地紀錄",
+    );
+  });
+
   it("turns every light of a stale home to unknown but keeps the state text", () => {
     const view = buildView(
       input({

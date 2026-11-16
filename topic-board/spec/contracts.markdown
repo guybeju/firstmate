@@ -165,7 +165,7 @@
 | 完成 | `done` |
 | 未知 | `unknown`、讀不到，或該 home 的彙整結果超過 3 分鐘沒更新 |
 
-燈旁另列 crew-state 的原始狀態與 detail。已清理的 task 不在 snapshot 裡：最後一筆帳本事件是 `task.merged` 或 `task.cleaned_up` 就顯示「完成」，其他顯示「未知」。
+燈旁另列 crew-state 的原始狀態與 detail。已清理的 task 不在 snapshot 裡：最後一筆帳本事件是 `task.merged` 或 `task.cleaned_up` 就顯示「完成」，其他顯示「未知」。例外：`kind` 是 `ship` 的 task 被清理、而且從最近一次派出之後沒有 `task.merged`，顯示「未知」，狀態寫 `discarded`、說明寫「已收掉，帳本裡沒有落地紀錄」。上游的 teardown 不分落地或捨棄都記同一筆事件，所以要靠有沒有合併紀錄來分。
 
 ## 6. 兩條通道
 
