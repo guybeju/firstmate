@@ -162,12 +162,15 @@ test_merge_takes_two_steps() {
   code=$(api topics/merge '{"from":"idea","into":"billing"}' | jq -r '.confirm')
   [ "${#code}" -eq 32 ] || fail "the first merge request must return a confirmation code"
   assert_equals "proposed" "$(state '.topics.idea.status')" "the first request must not merge"
-  assert_equals "confirm" "$(api topics/merge "{\"from\":\"idea\",\"into\":\"login\",\"confirm\":\"$code\"}" | jq -r '.error')" \
+  got=$(api topics/merge "{\"from\":\"idea\",\"into\":\"login\",\"confirm\":\"$code\"}" | jq -r '.error')
+  assert_equals "confirm" "$got" \
     "a code must not work for another target"
-  assert_equals "confirm" "$(api topics/merge "{\"from\":\"idea\",\"into\":\"billing\",\"confirm\":\"$code\"}" | jq -r '.error')" \
+  got=$(api topics/merge "{\"from\":\"idea\",\"into\":\"billing\",\"confirm\":\"$code\"}" | jq -r '.error')
+  assert_equals "confirm" "$got" \
     "a code is void once it has been presented, even wrongly"
   code=$(api topics/merge '{"from":"idea","into":"billing"}' | jq -r '.confirm')
-  assert_equals true "$(api topics/merge "{\"from\":\"idea\",\"into\":\"billing\",\"confirm\":\"$code\"}" | jq -r '.ok')" \
+  got=$(api topics/merge "{\"from\":\"idea\",\"into\":\"billing\",\"confirm\":\"$code\"}" | jq -r '.ok')
+  assert_equals true "$got" \
     "the second request with the code must merge"
   assert_equals "null" "$(state '.topics.idea')" "the merged topic must be gone"
   pass "merging topics needs a code bound to exactly that merge"
@@ -185,25 +188,30 @@ test_answer_takes_two_steps() {
   assert_equals "confirm" "$(api holds/answer '{"home":"main","task":"call-1","answer":"合併","label":"合併","confirm":"00000000000000000000000000000000","mode":"done"}' | jq -r '.error')" \
     "an invented code must not answer"
   code=$(answer_step1)
-  assert_equals "usage" "$(api holds/answer "{\"home\":\"main\",\"task\":\"call-1\",\"answer\":\"合併\",\"label\":\"合併\",\"confirm\":\"$code\"}" | jq -r '.error')" \
+  got=$(api holds/answer "{\"home\":\"main\",\"task\":\"call-1\",\"answer\":\"合併\",\"label\":\"合併\",\"confirm\":\"$code\"}" | jq -r '.error')
+  assert_equals "usage" "$got" \
     "the second step must choose done or release"
   code=$(answer_step1)
-  assert_equals "confirm" "$(api holds/answer "{\"home\":\"main\",\"task\":\"call-1\",\"answer\":\"先不要\",\"label\":\"x\",\"confirm\":\"$code\",\"mode\":\"done\"}" | jq -r '.error')" \
+  got=$(api holds/answer "{\"home\":\"main\",\"task\":\"call-1\",\"answer\":\"先不要\",\"label\":\"x\",\"confirm\":\"$code\",\"mode\":\"done\"}" | jq -r '.error')
+  assert_equals "confirm" "$got" \
     "a code must not work for another answer"
   code=$(answer_step1)
   sed -i.bak 's/要合併嗎？/要現在合併嗎？/' "$MAIN/data/backlog.md"
   api refresh '{}' >/dev/null
-  assert_equals "confirm" "$(api holds/answer "{\"home\":\"main\",\"task\":\"call-1\",\"answer\":\"合併\",\"label\":\"合併\",\"confirm\":\"$code\",\"mode\":\"done\"}" | jq -r '.error')" \
+  got=$(api holds/answer "{\"home\":\"main\",\"task\":\"call-1\",\"answer\":\"合併\",\"label\":\"合併\",\"confirm\":\"$code\",\"mode\":\"done\"}" | jq -r '.error')
+  assert_equals "confirm" "$got" \
     "a code must not work once the question changed"
   code=$(answer_step1)
   t restart >/dev/null
   api refresh '{}' >/dev/null
-  assert_equals "confirm" "$(api holds/answer "{\"home\":\"main\",\"task\":\"call-1\",\"answer\":\"合併\",\"label\":\"合併\",\"confirm\":\"$code\",\"mode\":\"done\"}" | jq -r '.error')" \
+  got=$(api holds/answer "{\"home\":\"main\",\"task\":\"call-1\",\"answer\":\"合併\",\"label\":\"合併\",\"confirm\":\"$code\",\"mode\":\"done\"}" | jq -r '.error')
+  assert_equals "confirm" "$got" \
     "a restart must void outstanding codes"
   assert_equals "$before" "$(grep -c '^cmd=fm-captain-hold.sh' "$TB_LOG" || true)" "nothing may reach the hold before a valid second step"
 
   code=$(answer_step1)
-  assert_equals true "$(api holds/answer "{\"home\":\"main\",\"task\":\"call-1\",\"answer\":\"合併\",\"label\":\"合併\",\"confirm\":\"$code\",\"mode\":\"release\"}" | jq -r '.ok')" \
+  got=$(api holds/answer "{\"home\":\"main\",\"task\":\"call-1\",\"answer\":\"合併\",\"label\":\"合併\",\"confirm\":\"$code\",\"mode\":\"release\"}" | jq -r '.ok')
+  assert_equals true "$got" \
     "the second step with the code and a mode must answer"
   sleep 1
   grep '^cmd=fm-captain-hold.sh' "$TB_LOG" | tail -n 1 | grep -q 'stdin=call-1	合併	合併	release' ||
@@ -217,22 +225,29 @@ test_messages_and_writes() {
   local id
   id=$(api messages '{"topic":"billing","text":"先做這個"}' | jq -r '.write_id')
   sleep 1
-  assert_equals "delivered|browser" "$(state ".writes[] | select(.id == \"$id\") | .state")|$(grep "\"write_id\":\"$id\"" "$MAIN/state/topic-board/audit.jsonl" | head -n 1 | jq -r '.sending.channel')" \
+  got=$(state ".writes[] | select(.id == \"$id\") | .state")
+  also=$(grep "\"write_id\":\"$id\"" "$MAIN/state/topic-board/audit.jsonl" | head -n 1 | jq -r '.sending.channel')
+  assert_equals "delivered|browser" "$got|$also" \
     "a message from the page is delivered and recorded as coming from the browser"
   assert_equals "refused" "$(api direct '{"home":"main","task":"ship-a","text":"/compact"}' | jq -r '.error')" \
     "a direct message that looks like a command is refused"
   printf '1\n' > "$TB_PLAY/fm-send.sh"
   id=$(api direct '{"home":"main","task":"ship-a","text":"看一下"}' | jq -r '.write_id')
   sleep 1
-  assert_equals "failed" "$(state ".writes[] | select(.id == \"$id\") | .state")" "a failed direct message shows as failed"
-  assert_equals true "$(api writes/resend "{\"write_id\":\"$id\"}" | jq -r '.ok')" "a failed write can be resent in one step"
+  got=$(state ".writes[] | select(.id == \"$id\") | .state")
+  assert_equals "failed" "$got" "a failed direct message shows as failed"
+  got=$(api writes/resend "{\"write_id\":\"$id\"}" | jq -r '.ok')
+  assert_equals true "$got" "a failed write can be resent in one step"
   sleep 1
-  assert_equals "delivered" "$(state ".writes[] | select(.id == \"$id\") | .state")" "the resend delivers it"
+  got=$(state ".writes[] | select(.id == \"$id\") | .state")
+  assert_equals "delivered" "$got" "the resend delivers it"
   printf '1\n' > "$TB_PLAY/fm-send.sh"
   id=$(api direct '{"home":"main","task":"ship-a","text":"不管了"}' | jq -r '.write_id')
   sleep 1
-  assert_equals true "$(api writes/ignore "{\"write_id\":\"$id\"}" | jq -r '.ok')" "a failed write can be ignored"
-  assert_equals "ignored" "$(state ".writes[] | select(.id == \"$id\") | .state")" "ignore marks the write"
+  got=$(api writes/ignore "{\"write_id\":\"$id\"}" | jq -r '.ok')
+  assert_equals true "$got" "a failed write can be ignored"
+  got=$(state ".writes[] | select(.id == \"$id\") | .state")
+  assert_equals "ignored" "$got" "ignore marks the write"
   mkdir -p "$MAIN/data"
   id=$(api agents/tag '{"home":"main","task":"loose","topic":"login"}' | jq -r '.write_id')
   sleep 1

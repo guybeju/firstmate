@@ -379,7 +379,8 @@ test_decisions_made_on_the_page_reach_firstmate() {
     "turning down a close proposal must reach firstmate"
   code=$(page_body merge '{"from":"byhand","into":"fresh"}' | jq -r '.confirm')
   assert_equals $((before + 2)) "$(calls fm-inbox.sh)" "asking to merge, before confirming it, sends nothing"
-  assert_equals 200 "$(page merge "{\"from\":\"byhand\",\"into\":\"fresh\",\"confirm\":\"$code\"}")" "merging on the page failed"
+  got=$(page merge "{\"from\":\"byhand\",\"into\":\"fresh\",\"confirm\":\"$code\"}")
+  assert_equals 200 "$got" "merging on the page failed"
   wait_calls fm-inbox.sh $((before + 3))
   assert_contains "$(last_call fm-inbox.sh)" "議題「By hand」已併入「Fresh name」（id：fresh）" "a merge made on the page must reach firstmate"
   assert_equals 200 "$(page archive '{"id":"fresh"}')" "archiving on the page failed"
@@ -597,7 +598,8 @@ test_audit_log() {
   assert_equals "-rw-------" "$(tb_mode "$audit")" "the audit log must be 0600"
   id=$(write message topic billing text "稽核")
   settle "$id" delivered
-  assert_equals "sending delivered" "$(grep "\"write_id\":\"$id\"" "$audit" | jq -r '.state' | tr '\n' ' ' | sed 's/ $//')" \
+  got=$(grep "\"write_id\":\"$id\"" "$audit" | jq -r '.state' | tr '\n' ' ' | sed 's/ $//')
+  assert_equals "sending delivered" "$got" \
     "every state change must be exactly one audit line"
   grep "\"write_id\":\"$id\"" "$audit" | head -n 1 | jq -e '.sending.text == "稽核" and .sending.plan.requestId != null' >/dev/null ||
     fail "the first audit line must carry the full text and the dedupe key"
