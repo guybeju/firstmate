@@ -416,7 +416,7 @@ test_split_moves_the_named_tasks_to_a_new_topic() {
   pass "split creates the topic once, moves the named tasks, and can be run again to finish"
 }
 
-# Runs last: it renames and merges topics the other tests rely on.
+# Runs after the tests above: it renames and merges topics they rely on.
 test_find_traces_renames_merges_and_tasks() {
   local out rc refusal
   t propose "Reports" --goal "monthly numbers" --id reports >/dev/null
@@ -447,9 +447,55 @@ test_find_traces_renames_merges_and_tasks() {
   pass "find traces a topic through renames and merges, and a task through its tags"
 }
 
+# Runs last. It counts lines, so nothing after it may add history to login.
+test_find_says_who_and_why() {
+  local out rc all
+  t propose "Duplicate" --goal "same thing twice" --id dup >/dev/null
+  out=$(t merge dup login --reason "和登入是同一件事") || fail "merge with a reason failed: $out"
+  out=$(t split login "Sign-up" --goal "new accounts" --id signup --reason "登入太寬") ||
+    fail "split with a reason failed: $out"
+  out=$(t find login)
+  assert_contains "$out" "「Duplicate」（dup）併入「Login」（用指令；原因：和登入是同一件事）" \
+    "find must say a merge was made by a command, and why"
+  assert_contains "$out" "拆出「Sign-up」（signup）（用指令；原因：登入太寬）" "find must say why a topic was split off"
+  all=$(t find --all login)
+  assert_equals "$all" "$(t find login --all)" "--all must work on either side of the keyword"
+  printf '%s\n' "$all" | grep -Eq '^  [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z .*併入「Login」' ||
+    fail "find --all must print exact times: $all"
+  assert_equals "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" "$(printf '%s\n' "$all" | wc -l | tr -d ' ')" \
+    "with little history, find --all prints the same lines with longer times"
+  t close-propose signup --reason "帳號流程做完了" >/dev/null
+  t archive signup >/dev/null
+  assert_contains "$(t find signup)" "封存（用指令；原因：帳號流程做完了）" "an archive must carry the close proposal it followed"
+  t propose "Other" --goal "g" --id other >/dev/null
+  rc=0
+  out=$(t merge other login --reason "$(printf 'two\nlines')" 2>&1) || rc=$?
+  assert_equals 1 "$rc" "a reason of two lines must be refused"
+  assert_contains "$out" "原因要是一行" "the refusal must say what is wrong with the reason"
+  for out in merge split; do
+    rc=0
+    if [ "$out" = merge ]; then t merge other login --reason "" >/dev/null 2>&1 || rc=$?
+    else t split login "Empty why" --goal g --reason "" >/dev/null 2>&1 || rc=$?; fi
+    assert_equals 1 "$rc" "$out with an empty reason must be refused"
+  done
+  assert_not_contains "$(t list)" "Empty why" "a split refused for its reason must create nothing"
+  assert_contains "$(t list)" "other" "a refused merge must leave the topic in place"
+  t split login "Sign-up" --goal "new accounts" --id signup2 --reason "x" >/dev/null
+  out=$(t split login "Sign-up" --goal "new accounts" --id signup2 --reason "不同的說法")
+  assert_contains "$out" "本來就" "repeating a split with another reason must change nothing"
+  assert_equals 1 "$(jq '[.history[] | select(.topic == "signup2")] | length' "$MAIN/data/topics.json")" \
+    "a repeated split must not be recorded twice"
+  assert_equals '["command"]' "$(jq -c '[.history[] | select(.topic == "signup" or .from == "dup") | .by] | unique' "$MAIN/data/topics.json")" \
+    "changes made by commands must be recorded as such"
+  out=$(t find login)
+  t restart >/dev/null
+  assert_equals "$out" "$(t find login)" "who and why must survive a restart"
+  pass "find says where a change was made and why, and --all prints everything"
+}
+
 fm_test_run test_agents_lights_and_placement test_holds_are_placed_and_ordered test_updates_and_topics \
   test_event_follows_the_tag_in_effect test_ledger_is_stored_once_and_survives_rewrites test_home_status \
   test_polling_follows_viewers test_summary_and_which test_summary_on_a_cold_board_reads_the_main_home_first \
   test_dump_is_test_only test_which_follows_a_retag_nobody_is_watching \
   test_a_wrong_summary_can_be_retracted test_split_moves_the_named_tasks_to_a_new_topic \
-  test_find_traces_renames_merges_and_tasks
+  test_find_traces_renames_merges_and_tasks test_find_says_who_and_why

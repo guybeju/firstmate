@@ -12,18 +12,18 @@
 #   fm-topic.sh --in-home <secondmate-id> setup
 #   fm-topic.sh propose <name> --goal <one line> [--id <id>] [--queue high|normal|later]
 #   fm-topic.sh confirm <topic-id> [--queue <queue>]
-#   fm-topic.sh merge <old-topic-id> <new-topic-id>
+#   fm-topic.sh merge <old-topic-id> <new-topic-id> [--reason <one line>]
 #   fm-topic.sh close-propose <topic-id> --reason <text>
 #   fm-topic.sh move <topic-id> <queue> [--before <topic-id> | --first]
 #   fm-topic.sh rename <topic-id> <name>
-#   fm-topic.sh split <topic-id> <name> --goal <one line> [--id <new-id>] [<task-id> | <secondmate-id>/<task-id>]...
+#   fm-topic.sh split <topic-id> <name> --goal <one line> [--id <new-id>] [--reason <one line>] [<task-id> | <secondmate-id>/<task-id>]...
 #   fm-topic.sh goal <topic-id> <one line>
 #   fm-topic.sh archive <topic-id>
 #   fm-topic.sh reopen <topic-id> [--queue <queue>]
 #   fm-topic.sh summary [--home <secondmate-id>] <task-id> <ready|report|failed|landed> -
 #   fm-topic.sh retract [--home <secondmate-id>] <task-id> <ready|report|failed|landed> -
 #   fm-topic.sh which [--home <secondmate-id>] <task-id>
-#   fm-topic.sh find <keyword>
+#   fm-topic.sh find [--all] <keyword>
 #   fm-topic.sh todo add <task-id> <title> --topic <topic-id> -
 #   fm-topic.sh todo done <task-id>
 #   fm-topic.sh todo failed <task-id> --reason <one line>
@@ -57,7 +57,12 @@
 # lines: it matches the keyword against topic ids, names, and goals, including
 # ids and names that were merged away or renamed, and prints each match under
 # its current id with its history. A keyword that is a task id also prints the
-# topics that task was tagged with, oldest first.
+# topics that task was tagged with, oldest first. Each history line says, when
+# it was recorded, whether the change was made on the page or by a command and
+# why: the --reason given with a merge or split, or the close proposal an
+# archive followed. The answer is kept short; --all prints every matching
+# topic and every history line with exact times, for working out what went
+# wrong with a topic.
 #
 # todo keeps the things the captain has to do by hand (a sudo command, a
 # login) on the board. add holds <task-id> for the captain, creating it when it
@@ -450,15 +455,22 @@ split_new_id() {
 # before anything is written. Tagging happens after the topic exists, so a run
 # that stops halfway is finished by running the same command again.
 cmd_split() {
-  local goal="" id="" plan made new source spec problem problems="" failed=0
+  local goal="" id="" reason="" has_reason=0 plan made new source spec problem problems="" failed=0
   local -a words=() request=() tasks=()
   require_main_home split
   require_jq split
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --goal | --id)
+      --goal | --id | --reason)
         [ "$#" -ge 2 ] || usage_error "$1 後面要有值"
-        if [ "$1" = --goal ]; then goal=$2; else id=$2; fi
+        case "$1" in
+          --goal) goal=$2 ;;
+          --id) id=$2 ;;
+          --reason)
+            reason=$2
+            has_reason=1
+            ;;
+        esac
         shift 2
         ;;
       --*) usage_error "split 不認得 $1" ;;
@@ -469,10 +481,12 @@ cmd_split() {
     esac
   done
   if [ "${#words[@]}" -lt 2 ] || [ -z "$goal" ]; then
-    usage_error "split 的用法是 <來源議題> <新名稱> --goal <一行> [--id <id>] [<task>|<secondmate-id>/<task>]…"
+    usage_error "split 的用法是 <來源議題> <新名稱> --goal <一行> [--id <id>] [--reason <一行>] [<task>|<secondmate-id>/<task>]…"
   fi
   request=(split "${words[0]}" "${words[1]}" --goal "$goal")
   [ -z "$id" ] || request+=(--id "$id")
+  # An empty reason is passed on so the board refuses it, the same as for merge.
+  [ "$has_reason" -eq 0 ] || request+=(--reason "$reason")
   [ "${#words[@]}" -le 2 ] || tasks=("${words[@]:2}")
   # Each step below runs this script again as its own process. Called as a
   # function behind "||", a step would run with errexit off and could carry on

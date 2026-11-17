@@ -30,7 +30,9 @@ export type HistoryKind = (typeof HISTORY_KINDS)[number];
  * One change to a topic's identity, kept so an old name or id can be traced.
  * `topic` and `name` are the topic the change left behind; a merge also names
  * the topic that went away (`from`, `from_name`), a rename the old name, and
- * a split the topic it was split off from.
+ * a split the topic it was split off from. `reason` is why, when someone said:
+ * the line given with a merge or split, or the close proposal an archive
+ * followed. `by` is where the change was made, the board page or a command.
  */
 export interface HistoryEntry {
   at: string;
@@ -39,7 +41,12 @@ export interface HistoryEntry {
   name: string;
   from?: string;
   from_name?: string;
+  reason?: string;
+  by?: HistoryActor;
 }
+
+export const HISTORY_ACTORS = ["page", "command"] as const;
+export type HistoryActor = (typeof HISTORY_ACTORS)[number];
 
 export const TODO_STATES = ["claimed", "rejected", "obsolete"] as const;
 export type TodoState = (typeof TODO_STATES)[number];
@@ -297,7 +304,10 @@ export function merge(
   rawFrom: string,
   rawInto: string,
   now: string,
+  reason?: string,
 ): TopicResult {
+  const why = reasonOf(reason);
+  if (why === null) return refuse(REASON_PROBLEM);
   const into = resolveTopicId(state.doc, rawInto);
   const from = resolveTopicId(state.doc, rawFrom);
   if (from === into) {
@@ -321,6 +331,7 @@ export function merge(
     name: target.name,
     from,
     from_name: source.name,
+    ...why,
   });
   return changed(next, `ok ${from} 已併入 ${into}`, [
     { kind: "topic.merged", topic: into, text: `議題「${source.name}」已併入「${target.name}」` },
@@ -332,6 +343,17 @@ export interface SplitInput {
   name: string;
   goal: string;
   id?: string;
+  /** Why the topic is being split, kept in the history. */
+  reason?: string;
+}
+
+const REASON_PROBLEM = `原因要是一行，最多 ${GOAL_MAX} 個字。`;
+
+/** The history fields for an optional reason: none when absent, null when it is not one line. */
+function reasonOf(reason: string | undefined): { reason?: string } | null {
+  if (reason === undefined) return {};
+  const line = oneLine(reason, GOAL_MAX);
+  return line === null ? null : { reason: line };
 }
 
 /**
@@ -340,6 +362,8 @@ export interface SplitInput {
  * caller's job; the history records only that the topic was split off.
  */
 export function split(state: TopicState, input: SplitInput, now: string): TopicResult {
+  const why = reasonOf(input.reason);
+  if (why === null) return refuse(REASON_PROBLEM);
   const found = confirmedTopic(state, input.from);
   if ("ok" in found) return found;
   const name = oneLine(input.name, NAME_MAX);
@@ -370,6 +394,7 @@ export function split(state: TopicState, input: SplitInput, now: string): TopicR
     name,
     from: found.id,
     from_name: found.topic.name,
+    ...why,
   });
   return changed(next, `ok ${id} 已從 ${found.id} 拆出，放進「${QUEUE_LABEL[queue]}」`, [
     { kind: "topic.split", topic: id, text: `從議題「${found.topic.name}」拆出「${name}」` },
@@ -494,7 +519,8 @@ export function archive(state: TopicState, rawId: string, now: string): TopicRes
   next.archive.topics[id] = { ...kept, archived_at: now };
   delete next.doc.topics[id];
   removeFromQueues(next.doc, id);
-  next.doc.history.push({ at: now, kind: "archived", topic: id, name: topic.name });
+  const why = topic.close_proposal === undefined ? {} : { reason: topic.close_proposal.reason };
+  next.doc.history.push({ at: now, kind: "archived", topic: id, name: topic.name, ...why });
   return changed(next, `ok ${id} 已封存`, [
     { kind: "topic.archived", topic: id, text: `議題「${topic.name}」已封存` },
   ]);
@@ -599,4 +625,12 @@ export function clearTodo(state: TopicState, task: string): TopicResult {
   const next = clone(state);
   delete next.doc.todos[task];
   return changed(next, `ok ${task} 回到還沒做`);
+}
+
+/** Marks the history entries a change just added with where the change was made. */
+export function stampHistory(result: TopicResult, before: number, by: HistoryActor): TopicResult {
+  if (!result.ok || !result.changed || result.state.doc.history.length <= before) return result;
+  const state = clone(result.state);
+  for (const entry of state.doc.history.slice(before)) entry.by = by;
+  return { ...result, state };
 }

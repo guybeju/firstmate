@@ -9,7 +9,16 @@ import {
   writeFileAtomic,
 } from "./files.js";
 import type { BoardPaths } from "./layout.js";
-import { HISTORY_KINDS, QUEUES, TODO_STATES, emptyState, isQueue } from "./topics.js";
+import {
+  GOAL_MAX,
+  HISTORY_ACTORS,
+  HISTORY_KINDS,
+  QUEUES,
+  TODO_STATES,
+  emptyState,
+  isQueue,
+  oneLine,
+} from "./topics.js";
 import type {
   ArchiveDoc,
   ArchivedTopic,
@@ -76,6 +85,11 @@ function parseHistoryEntry(raw: unknown): HistoryEntry | null {
   const fromName = stringField(raw, "from_name");
   if (from !== null) entry.from = from;
   if (fromName !== null) entry.from_name = fromName;
+  // A reason someone edited into something that is not one line is dropped, not printed.
+  const reason = oneLine(stringField(raw, "reason") ?? "", GOAL_MAX);
+  const by = HISTORY_ACTORS.find((actor) => actor === raw["by"]);
+  if (reason !== null) entry.reason = reason;
+  if (by !== undefined) entry.by = by;
   return entry;
 }
 
