@@ -33,7 +33,9 @@
 #     `gh`). That local pass drops --external-sources and excludes SC1091,
 #     SC2034, SC2153, and SC2329. A branch with zero matching changed files
 #     skips ShellCheck and prints a "no changed lint targets" note, then
-#     still runs the backend-purity check and validates workflows.
+#     still runs the backend-purity check and validates workflows. Any other
+#     changed-file run ends by stating it is NOT A FULL LINT and printing the
+#     explicit-path command that checks those codes for the same files.
 # Explicit paths always bypass this file-set selection and lint exactly the
 # given paths, matching the same config, without the workflow YAML check.
 # Explicit core bin/ and bin/backends/ scripts still receive the
@@ -950,6 +952,21 @@ if [ -n "$TELEMETRY" ]; then
   }
 fi
 
+# fm_lint_changed_mode_notice closes a changed-file-mode run: that mode never
+# checks the cross-file codes, so its exit status alone cannot certify a
+# change, and the closing lines say so and name the explicit-path command that
+# checks them for the same roots.
+fm_lint_changed_mode_notice() {
+  [ "$CHANGED_MODE" -eq 1 ] && [ "$FOLLOW_SOURCES" -eq 0 ] && [ "$ROOT_COUNT" -gt 0 ] || return 0
+  local command=bin/fm-lint.sh path
+  for path in "${ROOTS[@]}"; do
+    command+=" $(printf '%q' "$path")"
+  done
+  printf 'fm-lint.sh: NOT A FULL LINT - changed-file mode did not check the cross-file codes %s, so this exit status does not show that they pass.\n' \
+    "$LOCAL_NOX_EXCLUDE" >&2
+  printf 'fm-lint.sh: check them before reporting the change done: %s\n' "$command" >&2
+}
+
 # Per-root bounded-execution envelope. Under FM_LINT_REQUIRE_BOUNDS=1 the
 # watchdog is probed and the host's acceptance of ulimit -v is checked before
 # any root starts; failed checks refuse with a named error. A required-bounds run
@@ -1405,4 +1422,5 @@ if [ -s "$ROOTS_LOG" ]; then
   printf 'meta\t%s\t%s\n' 'result_exit' "$overall_rc" >> "$ROOTS_LOG"
 fi
 
+fm_lint_changed_mode_notice
 exit "$overall_rc"
