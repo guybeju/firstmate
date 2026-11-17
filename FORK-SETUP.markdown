@@ -197,7 +197,8 @@ bin/fm-topic.sh install-rules
 - **規則範本有變**：更新後 `status` 的規則那一行會是 `和範本不同`；由使用者決定之後再跑一次 `install-rules`，再重開 session。
 - **上游有新版**：只有在 fork 的維護者把上游的 `main` 合併進 `carry` 之後才會到你手上，之後就和「fork 有新版」一樣（[rollout「之後怎麼更新」](topic-board/spec/rollout.markdown)）。
   這台機器不用自己合併上游。
-- `carry` 上沒有任何自動檢查：上游的 CI 只在 `main` 上跑（rollout「已知限制」）。
+- `carry` 的推送與 base 是 `carry` 的 PR 會跑 fork 自己的 lint 檢查 [`carry-lint.yml`](.github/workflows/carry-lint.yml)，內容是 `bin/fm-lint.sh` 完整的兩個 partition；它只在 fork 的 Actions 開著時才會跑。
+  上游的 CI 只在 `main` 上跑，在 fork 上是停用的，所以 `carry` 沒有測試套件的自動檢查。
 - **退回較舊的版本或退回上游**：沒有定好的步驟。
   退版之前先備份 `data/topics.json`，舊版存檔時會丟掉後來才加的欄位（rollout「之後怎麼更新」）。
 

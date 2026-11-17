@@ -1,0 +1,60 @@
+name: Carry lint
+
+# The fork's lint check for its carry branch. The upstream workflows trigger
+# only on main and are disabled on the fork, so this is the one automated
+# check carry has. It runs the same full source-aware lint as ci.yml's lint
+# job: bin/fm-lint.sh owns the lint definition, and this file only selects
+# its two canonical partitions, never the changed-file mode.
+#
+# The fork's Actions settings allow only actions pinned to a full commit SHA,
+# so every `uses:` here carries one, with its release tag in the comment.
+on:
+  push:
+    branches: [carry]
+  pull_request:
+    branches: [carry]
+
+permissions:
+  contents: read
+
+# A new push to the same pull request, or to carry, cancels the older run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint ${{ matrix.partition }}
+    runs-on: ubuntu-24.04
+    # Above ci.yml's 30: partition 2 took 27.5 minutes on this workflow's
+    # first green run, because several roots hit the memory ceiling and are
+    # linted twice.
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Install pinned ShellCheck
+        run: |
+          set -eu
+          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Install pinned actionlint
+        run: |
+          set -eu
+          bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Lint canonical partition
+        env:
+          # Refuse rather than lint uncapped when a per-root bound cannot be
+          # enforced on the runner, as ci.yml does.
+          FM_LINT_REQUIRE_BOUNDS: '1'
+          FM_LINT_JOBS: '1'
+          FM_LINT_PARTITION: ${{ matrix.partition }}of${{ strategy.job-total }}
+        run: |
+          set -eu
+          bin/fm-lint.sh --partition "$FM_LINT_PARTITION"
