@@ -240,6 +240,7 @@ const actions: Actions = {
     page.pending.delete(key);
     render();
   },
+  claim: (task) => void post("todos/claim", { task }),
   message: (topic, key) => void sendDraft("messages", { topic }, key),
   direct: (home, task, key) => void sendDraft("direct", { home, task }, key),
   tag: (home, task, topic) => void post("agents/tag", { home, task, topic }),

@@ -24,7 +24,7 @@ import { DispatchNotifier } from "./notifier.js";
 import { DEFAULT_TIMINGS, Poller } from "./poller.js";
 import { loadTopicState, saveTopicState } from "./store.js";
 import * as topics from "./topics.js";
-import { buildView, parseTags, placeTask } from "./view.js";
+import { buildView, parseTags, parseTodo, placeTask } from "./view.js";
 import { findLines } from "./lineage.js";
 import { DEFAULT_WRITE_TIMINGS, WriteEngine } from "./writes.js";
 const PRIVATE_FILE = 0o600;
@@ -95,7 +95,46 @@ function movePosition(args) {
         return undefined;
     return typeof before === "string" ? { before } : null;
 }
+/** The captain holds of the main home as last read; none when it was never read. */
+function mainHolds(service) {
+    const home = service.poller.snapshots().find((snapshot) => snapshot.id === MAIN_HOME);
+    return home?.report?.holds ?? [];
+}
+/** The main home's open hands-on hold on `task`, if it has one. */
+function todoHold(service, task) {
+    return mainHolds(service).find((hold) => hold.id === task && parseTodo(hold.question) !== null);
+}
+/** Marks where a hands-on item stands, and forgets the marks of items whose hold is gone. */
+function markTodo(service, args, state) {
+    const task = stringField(args, "task");
+    const reason = stringField(args, "reason");
+    if (task === null)
+        return { usage: "需要 task id。" };
+    if (state !== "claimed" && reason === null)
+        return { usage: "需要 --reason <一行>。" };
+    if (todoHold(service, task) === undefined) {
+        const line = `${task} 不是主 home 裡還開著的「要你動手」項目；剛建立的話等幾秒再試。`;
+        return { ok: false, code: "refused", line };
+    }
+    const todos = service.state.doc.todos;
+    const current = Object.hasOwn(todos, task) ? todos[task]?.state : undefined;
+    if (state === "claimed" && current === "obsolete") {
+        const line = `${task} 已經被 first mate 標成不再需要，請直接撤下。`;
+        return { ok: false, code: "refused", line };
+    }
+    const open = new Set(mainHolds(service).map((hold) => hold.id));
+    const gone = Object.keys(service.state.doc.todos).filter((id) => !open.has(id));
+    const input = { task, state, gone, ...(reason === null ? {} : { reason }) };
+    return topics.markTodo(service.state, input, now());
+}
 const TOPIC_HANDLERS = {
+    "todo-claim": (service, args) => markTodo(service, args, "claimed"),
+    "todo-failed": (service, args) => markTodo(service, args, "rejected"),
+    "todo-obsolete": (service, args) => markTodo(service, args, "obsolete"),
+    "todo-clear": (service, args) => {
+        const task = stringField(args, "task");
+        return task === null ? { usage: "需要 task id。" } : topics.clearTodo(service.state, task);
+    },
     propose: (service, args) => {
         const name = stringField(args, "name");
         const goal = stringField(args, "goal");
@@ -440,7 +479,18 @@ async function testIgnore(service, args) {
     const problem = service.writes.ignore(stringField(args, "write_id") ?? "");
     return problem === null ? { ok: true, line: "ok" } : refused(problem);
 }
+/**
+ * Firstmate's verdict on a hands-on item. The main home is read afresh first:
+ * nothing keeps the board current while no page is open, and the item may be
+ * seconds old.
+ */
+async function todoVerdict(service, op, args) {
+    await withTimeout(service.poller.readNow(MAIN_HOME), LOOKUP_WAIT_MS, false);
+    return topicOp(service, op, args);
+}
 const SERVICE_HANDLERS = {
+    "todo-failed": (service, args) => todoVerdict(service, "todo-failed", args),
+    "todo-obsolete": (service, args) => todoVerdict(service, "todo-obsolete", args),
     health: async (service) => ({ ok: true, line: "ok", data: { ...healthData(service) } }),
     status: async (service) => ({ ok: true, line: "ok", data: statusData(service) }),
     stop: async () => ({ ok: true, line: "ok stop 看板服務已停止" }),
@@ -658,6 +708,24 @@ function decisionLines(op, args, result) {
     const kept = topics.resolveTopicId(result.state.doc, id);
     return [`議題「${result.state.doc.topics[kept]?.name ?? kept}」先不關（id：${kept}）`];
 }
+/** True when the task `args` names is already marked as done by the captain. */
+function isClaimed(service, args) {
+    const task = stringField(args, "task");
+    const todos = service.state.doc.todos;
+    return task !== null && Object.hasOwn(todos, task) && todos[task]?.state === "claimed";
+}
+/** What firstmate has to check after the captain says a hands-on item is done. */
+function claimLines(service, args, result, alreadyClaimed) {
+    const task = stringField(args, "task");
+    // A repeated claim can still change the file, by dropping the marks of items that are gone.
+    if (!result.changed || task === null || alreadyClaimed)
+        return [];
+    const title = todoHold(service, task)?.title ?? task;
+    const failed = `bin/fm-topic.sh todo failed ${task} --reason <一行>`;
+    return [
+        `「${title}」做完了（${task}）。驗證後跑 bin/fm-topic.sh todo done ${task}；沒成功就跑 ${failed}`,
+    ];
+}
 /**
  * Tells firstmate what the captain decided on the page. Firstmate proposes
  * topics and closings and then waits; without this it would learn the outcome
@@ -688,12 +756,16 @@ function topicOp(service, op, args, fromPage = false) {
     const handler = Object.hasOwn(TOPIC_HANDLERS, op) ? TOPIC_HANDLERS[op] : undefined;
     if (handler === undefined)
         return usage(`不認得的 op：${op}`);
+    const claimed = isClaimed(service, args);
     const result = handler(service, args);
     if ("usage" in result)
         return usage(result.usage);
     const response = commit(service, result);
     if (fromPage && result.ok) {
-        notifyDecision(service, decisionLines(op, args, result), result.events[0]?.topic ?? null);
+        const lines = op === "todo-claim"
+            ? claimLines(service, args, result, claimed)
+            : decisionLines(op, args, result);
+        notifyDecision(service, lines, result.events[0]?.topic ?? null);
     }
     return response;
 }

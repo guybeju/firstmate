@@ -170,6 +170,8 @@ const ROUTES: Record<string, Route> = {
       ),
     ),
   "POST holds/answer": answer,
+  "POST todos/claim": (host, body) =>
+    fromTopicOp(host.topicOp("todo-claim", { task: field(body, "task") })),
   "POST writes/resend": resend,
   "POST writes/ignore": (host, body) => fromProblem(host.writes.ignore(field(body, "write_id"))),
 };

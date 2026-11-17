@@ -1,10 +1,11 @@
 // Computes what the board shows from what the service knows. Pure: the same
 // inputs always give the same view.
+import { MAIN_HOME } from "./journal.js";
 import type { JournalEvent, LedgerEvent, Summary } from "./journal.js";
 import type { HomeReport, ReportHold, ReportQueued, ReportTask } from "./report.js";
 import { orNull } from "./files.js";
 import { QUEUES, resolveTopicId } from "./topics.js";
-import type { Queue, TopicState } from "./topics.js";
+import type { Queue, TodoMark, TodoState, TopicState } from "./topics.js";
 
 export type Light = "decide" | "stuck" | "working" | "done" | "unknown";
 export type HomeVersion = "same" | "different" | "incompatible" | "not-on-fork" | "unknown";
@@ -69,12 +70,26 @@ export interface QueuedView {
   waiting: string | null;
 }
 
+/**
+ * A hold that asks the captain to do something by hand instead of to decide:
+ * what to do, the commands to run (kept exactly as written), and where it
+ * stands. "open" is still to do.
+ */
+export interface TodoView {
+  what: string;
+  command: string;
+  state: "open" | TodoState;
+  reason: string | null;
+}
+
 export interface HoldView {
   home: string;
   task: string;
   title: string;
   question: string;
   options: string[];
+  /** Set when the hold is a hands-on item, which only the main home can have. */
+  todo: TodoView | null;
   live: boolean;
   deferred_reason: string | null;
   topic: string | null;
@@ -139,6 +154,27 @@ const MAX_UPDATES = 2000;
 // accepted anywhere in the last line, not only at its start.
 const OPTION_MARKER = "選項：";
 
+/** A hold reason that starts with this asks the captain to do something by hand. */
+export const TODO_MARKER = "動手：";
+
+/** Splits a hands-on hold's reason into what to do (its first line) and the commands (the rest). */
+export function parseTodo(question: string): { what: string; command: string } | null {
+  if (!question.startsWith(TODO_MARKER)) return null;
+  const [first = "", ...rest] = question.slice(TODO_MARKER.length).split("\n");
+  return { what: first.trim(), command: rest.join("\n").replace(/\s+$/, "") };
+}
+
+function todoView(
+  home: string,
+  hold: ReportHold,
+  marks: Record<string, TodoMark>,
+): TodoView | null {
+  const text = home === MAIN_HOME ? parseTodo(hold.question) : null;
+  if (text === null) return null;
+  const mark = Object.hasOwn(marks, hold.id) ? marks[hold.id] : undefined;
+  return { ...text, state: mark?.state ?? "open", reason: mark?.reason ?? null };
+}
+
 interface Tag {
   topic: string;
   atMs: number;
@@ -198,8 +234,9 @@ function deferredReason(hold: ReportHold): string | null {
   }
 }
 
-function waitingFor(item: ReportQueued): string | null {
-  if (item.captain) return "等你決定";
+function waitingFor(home: string, item: ReportQueued): string | null {
+  const todo = home === MAIN_HOME && item.hold !== null && parseTodo(item.hold) !== null;
+  if (item.captain) return todo ? "要你動手" : "等你決定";
   if (item.hold !== null) return `停著：${item.hold}`;
   if (item.blockers.length > 0) return `等 ${item.blockers.join("、")} 完成`;
   return null;
@@ -382,9 +419,15 @@ interface RankedHold {
   ageDays: number;
 }
 
-function holdsOf(home: HomeSnapshot, stale: boolean, placer: Placer): RankedHold[] {
+function holdsOf(
+  home: HomeSnapshot,
+  stale: boolean,
+  placer: Placer,
+  marks: Record<string, TodoMark>,
+): RankedHold[] {
   if (home.report === null) return [];
   return home.report.holds.map((hold) => {
+    const todo = todoView(home.id, hold, marks);
     const own = placer.current(home.id, hold.id);
     const placement =
       own.topic === null && hold.origin !== "" ? placer.current(home.id, hold.origin) : own;
@@ -395,9 +438,11 @@ function holdsOf(home: HomeSnapshot, stale: boolean, placer: Placer): RankedHold
         task: hold.id,
         title: hold.title,
         question: hold.question,
-        options: parseOptions(hold.question),
-        live: hold.hold_bucket === "live",
-        deferred_reason: deferredReason(hold),
+        options: todo === null ? parseOptions(hold.question) : [],
+        todo,
+        // Something to do by hand does not become less due by sitting there.
+        live: hold.hold_bucket === "live" || (todo !== null && hold.hold_bucket === "aged"),
+        deferred_reason: todo !== null && hold.hold_bucket === "aged" ? null : deferredReason(hold),
         topic: placement.topic,
         stale,
       },
@@ -537,7 +582,7 @@ export function buildView(input: ViewInput): BoardView {
   input.homes.forEach((home, index) => {
     const stale = (homes[index] as HomeView).stale;
     view.agents.push(...agentsOf(home, stale, placer, last, runs));
-    ranked.push(...holdsOf(home, stale, placer));
+    ranked.push(...holdsOf(home, stale, placer, input.topics.doc.todos));
     if (home.report === null) return;
     for (const item of home.report.queued) {
       view.queued.push({
@@ -546,7 +591,7 @@ export function buildView(input: ViewInput): BoardView {
         kind: item.kind,
         title: item.title,
         topic: placer.current(home.id, item.id).topic,
-        waiting: waitingFor(item),
+        waiting: waitingFor(home.id, item),
       });
     }
     for (const question of home.report.status_decisions) {

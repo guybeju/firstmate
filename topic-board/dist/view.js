@@ -1,3 +1,6 @@
+// Computes what the board shows from what the service knows. Pure: the same
+// inputs always give the same view.
+import { MAIN_HOME } from "./journal.js";
 import { orNull } from "./files.js";
 import { QUEUES, resolveTopicId } from "./topics.js";
 const MAX_UPDATES = 2000;
@@ -5,6 +8,22 @@ const MAX_UPDATES = 2000;
 // written as several lines may reach the board as one. The marker is therefore
 // accepted anywhere in the last line, not only at its start.
 const OPTION_MARKER = "選項：";
+/** A hold reason that starts with this asks the captain to do something by hand. */
+export const TODO_MARKER = "動手：";
+/** Splits a hands-on hold's reason into what to do (its first line) and the commands (the rest). */
+export function parseTodo(question) {
+    if (!question.startsWith(TODO_MARKER))
+        return null;
+    const [first = "", ...rest] = question.slice(TODO_MARKER.length).split("\n");
+    return { what: first.trim(), command: rest.join("\n").replace(/\s+$/, "") };
+}
+function todoView(home, hold, marks) {
+    const text = home === MAIN_HOME ? parseTodo(hold.question) : null;
+    if (text === null)
+        return null;
+    const mark = Object.hasOwn(marks, hold.id) ? marks[hold.id] : undefined;
+    return { ...text, state: mark?.state ?? "open", reason: mark?.reason ?? null };
+}
 /** Parses a tag file: one "<topic-id> <UTC time>" per line, oldest first. */
 export function parseTags(text) {
     const tags = [];
@@ -57,9 +76,10 @@ function deferredReason(hold) {
             return `等 ${hold.unresolved_blocker_ids.join("、")} 完成`;
     }
 }
-function waitingFor(item) {
+function waitingFor(home, item) {
+    const todo = home === MAIN_HOME && item.hold !== null && parseTodo(item.hold) !== null;
     if (item.captain)
-        return "等你決定";
+        return todo ? "要你動手" : "等你決定";
     if (item.hold !== null)
         return `停著：${item.hold}`;
     if (item.blockers.length > 0)
@@ -204,10 +224,11 @@ function agentsOf(home, stale, placer, last, runs) {
     });
     return [...running, ...ended];
 }
-function holdsOf(home, stale, placer) {
+function holdsOf(home, stale, placer, marks) {
     if (home.report === null)
         return [];
     return home.report.holds.map((hold) => {
+        const todo = todoView(home.id, hold, marks);
         const own = placer.current(home.id, hold.id);
         const placement = own.topic === null && hold.origin !== "" ? placer.current(home.id, hold.origin) : own;
         return {
@@ -217,9 +238,11 @@ function holdsOf(home, stale, placer) {
                 task: hold.id,
                 title: hold.title,
                 question: hold.question,
-                options: parseOptions(hold.question),
-                live: hold.hold_bucket === "live",
-                deferred_reason: deferredReason(hold),
+                options: todo === null ? parseOptions(hold.question) : [],
+                todo,
+                // Something to do by hand does not become less due by sitting there.
+                live: hold.hold_bucket === "live" || (todo !== null && hold.hold_bucket === "aged"),
+                deferred_reason: todo !== null && hold.hold_bucket === "aged" ? null : deferredReason(hold),
                 topic: placement.topic,
                 stale,
             },
@@ -349,7 +372,7 @@ export function buildView(input) {
     input.homes.forEach((home, index) => {
         const stale = homes[index].stale;
         view.agents.push(...agentsOf(home, stale, placer, last, runs));
-        ranked.push(...holdsOf(home, stale, placer));
+        ranked.push(...holdsOf(home, stale, placer, input.topics.doc.todos));
         if (home.report === null)
             return;
         for (const item of home.report.queued) {
@@ -359,7 +382,7 @@ export function buildView(input) {
                 kind: item.kind,
                 title: item.title,
                 topic: placer.current(home.id, item.id).topic,
-                waiting: waitingFor(item),
+                waiting: waitingFor(home.id, item),
             });
         }
         for (const question of home.report.status_decisions) {

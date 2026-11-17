@@ -35,11 +35,16 @@ export TB_TOPIC="$TMP_ROOT/topic"
 "$TB_TOPIC" propose "Parked" --goal "later" --id parked --queue later >/dev/null
 "$TB_TOPIC" propose "Idea" --goal "confirm me" --id idea >/dev/null
 for id in billing login parked; do "$TB_TOPIC" confirm "$id" >/dev/null; done
-cat > "$MAIN/data/backlog.md" <<'EOF'
+# A hands-on item whose commands span lines and carry characters a shell would act on.
+# shellcheck disable=SC2016  # the commands are literal text, never expanded here
+TODO_REASON="fm-hold-v1:$(printf '動手：重啟 x（路由卡住）\nsudo x --now "a b" && echo $HOME `date`\n\tps | grep x' | base64 | tr -d '\n')"
+cat > "$MAIN/data/backlog.md" <<EOF
 ## In flight
 - [ ] ship-a - Ship A (repo: sample) (kind: ship)
 
 ## Queued
+- [ ] todo-1 - Restart x (repo: sample) (kind: captain) (hold: $TODO_REASON) (hold-kind: captain)
+  Captain hold set: 2026-07-24T00:00:00Z
 - [ ] call-1 - A call (repo: sample) (kind: captain) (hold: 要合併嗎？ 選項：合併 | 先不要) (hold-kind: captain)
   Captain hold set: 2026-07-24T00:00:00Z
 - [ ] next-1 - Next step (repo: sample) (kind: ship)
@@ -48,6 +53,8 @@ cat > "$MAIN/data/backlog.md" <<'EOF'
 ## Done
 EOF
 mkdir -p "$MAIN/projects/ship-a" "$MAIN/data/ship-a" "$MAIN/data/call-1"
+mkdir -p "$MAIN/data/todo-1"
+printf 'login 2026-07-01T00:00:00Z\n' > "$MAIN/data/todo-1/topic"
 fm_write_meta "$MAIN/state/ship-a.meta" "window=firstmate:fm-ship-a" "worktree=$MAIN/projects/ship-a" \
   "project=sample" "harness=claude" "kind=ship" "mode=ship" "yolo=off"
 printf 'working: on it\n' > "$MAIN/state/ship-a.status"

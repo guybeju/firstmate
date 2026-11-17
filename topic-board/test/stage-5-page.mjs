@@ -1,6 +1,7 @@
 // The captain's path through the real page, run by browser.mjs in a headless
 // Firefox. Every step waits for what the captain would see next.
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 
 const topic = (...args) => execFileSync(process.env.TB_TOPIC, args, { encoding: "utf8" });
 const has = (text) => `document.body.innerText.includes(${JSON.stringify(text)})`;
@@ -38,6 +39,42 @@ export default async function run(page) {
     await page.waitFor(`section ${title}`, has(title));
   }
   await page.waitFor("the milestone summary", has("PR 開好了"));
+
+  // Something the captain has to do by hand: its own section, the commands exactly as written,
+  // a copy button, and a claim that firstmate checks before the item goes away.
+  const COMMAND = 'sudo x --now "a b" && echo $HOME `date`\n\tps | grep x';
+  const todo = (expression) => `(() => { const card = document.querySelector('[data-todo="todo-1"]'); return ${expression}; })()`;
+  const todoButtons = todo(`[...card.querySelectorAll("button")].map((button) => button.textContent).join("|")`);
+  const cardOf = (name) =>
+    `[...document.querySelectorAll(".topic")].find((card) => card.innerText.includes(${JSON.stringify(name)})).innerText`;
+  await page.waitFor("the hands-on section", has("要你動手"));
+  if ((await page.evaluate(todo(`card.querySelector("pre.cmd").textContent`))) !== COMMAND)
+    throw new Error("the commands must be shown exactly as written");
+  if (!(await page.evaluate(todo(`card.closest("section").querySelector("h2").textContent === "要你動手"`))))
+    throw new Error("a hands-on item belongs in its own section, not among the decisions");
+  await page.waitFor("the count on the topic card", `${cardOf("Login")}.includes("要你動手 1")`);
+  await page.click('[data-todo="todo-1"] button', "複製指令");
+  await page.waitFor("the commands selected when the browser refuses to copy", `getSelection().toString() === ${JSON.stringify(COMMAND)}`);
+  await page.evaluate("getSelection().removeAllRanges()");
+  await page.pointerClick('[data-todo="todo-1"] button', "已選取");
+  await page.waitFor("the copy confirmed after a real click", todo(`card.innerText.includes("已複製")`));
+  await page.click('[data-todo="todo-1"] button', "做完了");
+  await page.waitFor("the claim shown", todo(`card.innerText.includes("你已按做完了，等 first mate 驗證")`));
+  if ((await page.evaluate(todoButtons)).includes("做完了")) throw new Error("a claimed item must not offer its buttons again");
+  await page.waitFor("the count gone from the topic card", `!${cardOf("Login")}.includes("要你動手")`);
+  topic("todo", "failed", "todo-1", "--reason", "服務沒起來");
+  await page.waitFor("firstmate's failed check", todo(`card.innerText.includes("first mate 驗證沒過：服務沒起來")`), 15000);
+  await page.waitFor("the buttons back", `${todoButtons}.includes("做完了")`);
+  topic("todo", "obsolete", "todo-1", "--reason", "改用別的做法");
+  await page.waitFor("the item marked as no longer needed", todo(`card.innerText.includes("first mate：不再需要了。改用別的做法")`), 15000);
+  if ((await page.evaluate(todoButtons)).includes("做完了")) throw new Error("an item that is no longer needed only offers to take it down");
+  await page.click('[data-todo="todo-1"] button', "好，撤下");
+  await page.waitFor("the confirmation", todo(`card.innerText.includes("會記成你的答覆「撤下」")`));
+  await page.click('[data-todo="todo-1"] .confirm button', "確定");
+  await page.waitFor("the confirmation gone", todo(`!card.innerText.includes("會記成你的答覆")`));
+  const closed = () => fs.readFileSync(process.env.TB_LOG, "utf8").includes("stdin=todo-1\t撤下\t撤下\tdone");
+  for (let tries = 0; tries < 60 && !closed(); tries += 1) await new Promise((resolve) => setTimeout(resolve, 150));
+  if (!closed()) throw new Error("taking the item down must close it as the captain's answer");
   await page.waitFor("the agent", has("ship-a"));
   const rowOf = (task) =>
     `[...document.querySelectorAll(".row")].find((row) => row.innerText.includes("${task}")).innerText`;

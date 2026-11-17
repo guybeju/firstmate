@@ -115,6 +115,14 @@ try {
       const found = await evaluate(`(() => { const el = [...document.querySelectorAll(${JSON.stringify(selector)})].find((e) => e.textContent.includes(${JSON.stringify(label)})); if (!el) return false; el.click(); return true; })()`);
       if (!found) throw new Error(`nothing to click: ${selector} "${label}"\n--- page text ---\n${await tools.text()}`);
     },
+    /** Clicks like `click`, but with a real pointer, which the browser counts as the user acting. */
+    async pointerClick(selector, label = "") {
+      const point = await evaluate(`(() => { const el = [...document.querySelectorAll(${JSON.stringify(selector)})].find((e) => e.textContent.includes(${JSON.stringify(label)})); if (!el) return ""; el.scrollIntoView({ block: "center" }); const box = el.getBoundingClientRect(); return Math.round(box.left + box.width / 2) + "," + Math.round(box.top + box.height / 2); })()`);
+      if (point === "") throw new Error(`nothing to click: ${selector} "${label}"\n--- page text ---\n${await tools.text()}`);
+      const [x, y] = point.split(",").map(Number);
+      const steps = [{ type: "pointerMove", x, y }, { type: "pointerDown", button: 0 }, { type: "pointerUp", button: 0 }];
+      await send("input.performActions", { context, actions: [{ type: "pointer", id: "mouse", parameters: { pointerType: "mouse" }, actions: steps }] });
+    },
     async type(selector, value) {
       const found = await evaluate(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; el.focus(); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event("input", { bubbles: true })); return true; })()`);
       if (!found) throw new Error(`nothing to type into: ${selector}`);

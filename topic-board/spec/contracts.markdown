@@ -13,6 +13,7 @@
 - **議題標記**：某個 home 裡一個 task 屬於哪個議題的紀錄，建立 backlog 項目時寫下，最晚在派工前；每個 home 只對自己的 task 持有正本。
 - **歸併**：把一個 agent 或一個提議中的議題併進已確認的議題。對 agent 而言就是在它所在的 home 補寫一筆議題標記。
 - **未分類區**：沒有有效標記的 agent、提議中的議題、沒有歸屬的待決事項與摘要。
+- **要你動手的項目**：要使用者親手做的事（sudo 指令、登入）。底層是主 home 的一個 captain hold，原因以 `動手：` 開頭：那一行其餘的字是要做什麼，之後幾行是要跑的指令，原樣保存。只有主 home 的 hold 算；secondmate home 裡同樣開頭的 hold 仍是一般的待決事項。
 - **待決事項**：等使用者回答的 captain hold。**worker 提問**是狀態行裡的 `needs-decision`，對象是 first mate，看板只列出、不能作答。
 - **燈號**：待你決定、卡住、進行中、完成、未知，共五種。
 - **直送**：從看板把訊息送給某一個 agent，不經主 first mate。
@@ -89,13 +90,18 @@
     { "at": "2026-11-18T01:00:00Z", "kind": "renamed", "topic": "reports", "name": "帳務報表", "from_name": "報表" },
     { "at": "2026-11-20T01:00:00Z", "kind": "merged", "topic": "billing", "name": "帳務重構",
       "from": "reports", "from_name": "帳務報表" }
-  ]
+  ],
+  "todos": {
+    "mac-todo-xcode": { "state": "claimed", "at": "2026-11-17T03:00:00Z" },
+    "mac-todo-tailscale": { "state": "rejected", "at": "2026-11-17T03:10:00Z", "reason": "服務沒起來" }
+  }
 }
 ```
 
 - `queues` 的陣列順序就是顯示與派工順序。`status: "proposed"` 的議題不在任何佇列。
 - `merged` 是「舊 id → 新 id」，可以串接；讀到舊 id 的地方一律走到底。各 home 的標記檔不重寫。
 - `history` 是來歷紀錄，舊的在前，和議題的變動寫在同一次存檔裡。`kind` 是 `merged`、`renamed`、`split`、`archived`、`reopened`；`topic` 與 `name` 是變動之後留下來的議題，合併另記被併掉的 `from` 與 `from_name`，改名另記舊名字 `from_name`，拆分的 `topic` 是新議題、`from` 是它拆出來的來源。搬了哪些 task 不記在這裡，各 task 的標記檔本來就有每次標記的時間。沒有這個欄位的舊檔當成空的；讀不懂的項目略過。`fm-topic.sh find` 讀它。
+- `todos` 記要你動手的項目在「還沒做」之外的狀態，鍵是主 home 的 task id：`claimed`（使用者按了做完了，等 first mate 驗證）、`rejected`（first mate 驗證沒過，附 `reason`）、`obsolete`（first mate 不再需要，附 `reason`，等使用者撤下）。項目本身（標題、說明、指令、開或關）只在 backlog 的 hold 裡；這裡的紀錄只在對應的 hold 還開著時才顯示，hold 不在了的紀錄在下一次寫入時清掉。沒有這個欄位的舊檔當成空的；讀不懂的項目略過。
 - `close_proposal` 沒有就省略。`proposed_by` 是 `firstmate` 或 `user`。
 - `next_seq` 是 `t<流水號>` 的下一個號碼，只增不減（採建議 C14）。
 - `data/topics-archive.json`：`{"v":1,"topics":{<id>:{…同上…,"archived_at":…}}}`。
@@ -181,7 +187,7 @@
 
 `state/topic-board/board.sock`，0600，不帶 token。一條連線一個要求：client 送一行 JSON `{"v":1,"op":"<名稱>","args":{…}}`，服務回一行 JSON `{"ok":true,"line":"<要印的那一行>",…}` 或 `{"ok":false,"code":"refused|usage|…","line":"<原因與修法>"}`，然後關閉連線。
 
-`op` 的清單：`health`、`status`、`stop`、`propose`、`confirm`、`merge`、`close-propose`、`move`、`rename`、`split`、`goal`、`archive`、`reopen`、`keep`（清掉關閉的提議；`fm-topic.sh` 沒有對應的子命令，頁面的「先不關」用它）、`summary`、`which`、`find`、`reset-token`。`open` 與 `restart` 由 client 用 `health` 與 `stop` 組出來。另有只給測試用的 `dump`、`test-write`、`test-resend`、`test-ignore`，只在服務的環境變數 `FM_TOPIC_BOARD_TEST=1` 時註冊，平常送這些 `op` 會得到「不認得的 op」。
+`op` 的清單：`health`、`status`、`stop`、`propose`、`confirm`、`merge`、`close-propose`、`move`、`rename`、`split`、`goal`、`archive`、`reopen`、`keep`（清掉關閉的提議；`fm-topic.sh` 沒有對應的子命令，頁面的「先不關」用它）、`summary`、`which`、`find`、`todo-failed`、`todo-obsolete`、`todo-clear`（`todo add` 改寫內容後清掉舊狀態用）、`todo-claim`（頁面的「做完了」用它；`fm-topic.sh` 沒有對應的子命令）、`reset-token`。`open` 與 `restart` 由 client 用 `health` 與 `stop` 組出來。另有只給測試用的 `dump`、`test-write`、`test-resend`、`test-ignore`，只在服務的環境變數 `FM_TOPIC_BOARD_TEST=1` 時註冊，平常送這些 `op` 會得到「不認得的 op」。
 
 `health` 回 `{"ok":true,"pid":…,"port":…,"code_commit":…,"boot_id":…,"started_at":…}`。
 

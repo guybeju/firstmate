@@ -277,6 +277,9 @@ const TOPIC_COMMANDS = {
     "reset-token": { positional: [] },
     which: { positional: ["task"], valued: ["home"] },
     find: { positional: ["query"] },
+    "todo-clear": { positional: ["task"] },
+    "todo-failed": { positional: ["task"], valued: ["reason"], required: ["reason"] },
+    "todo-obsolete": { positional: ["task"], valued: ["reason"], required: ["reason"] },
 };
 function buildTopicRequest(sub, shape, args) {
     const parsed = parseArgs(args, shape.valued ?? [], shape.bare ?? []);

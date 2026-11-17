@@ -3,7 +3,7 @@ import type { JournalEvent, Summary } from "./journal.js";
 import type { HomeReport, ReportHold, ReportQueued } from "./report.js";
 import { emptyState } from "./topics.js";
 import type { TopicState } from "./topics.js";
-import { buildView, parseOptions, parseTags, placeTask } from "./view.js";
+import { buildView, parseOptions, parseTags, parseTodo, placeTask } from "./view.js";
 import type { HomeSnapshot, ViewInput } from "./view.js";
 
 const NOW = Date.parse("2026-07-10T00:00:00Z");
@@ -547,6 +547,7 @@ describe("holds and questions", () => {
       title: "title via-origin",
       question: "q",
       options: [],
+      todo: null,
       live: true,
       deferred_reason: null,
       topic: "hi",
@@ -585,6 +586,117 @@ describe("holds and questions", () => {
       }),
     );
     expect(view.holds.map((entry) => entry.task)).toEqual(["a", "b"]);
+  });
+});
+
+describe("hands-on items", () => {
+  const COMMAND = 'sudo launchctl kickstart -k "system/x" && echo $HOME `date`\n\tps aux | grep x';
+  const todoHold = (id: string, text = `動手：重啟 x（路由卡住）\n${COMMAND}`): ReportHold =>
+    hold(id, { question: text });
+  const built = (state: TopicState, homes: HomeSnapshot[]) =>
+    Object.fromEntries(
+      buildView(input({ topics: state, homes })).holds.map((entry) => [
+        `${entry.home}/${entry.task}`,
+        entry,
+      ]),
+    );
+
+  it("splits a hands-on hold into what to do and its commands, kept exactly", () => {
+    expect(parseTodo(`動手：重啟 x（路由卡住）\n${COMMAND}\n`)).toEqual({
+      what: "重啟 x（路由卡住）",
+      command: COMMAND,
+    });
+    expect(parseTodo("動手： 登入 App Store ")).toEqual({ what: "登入 App Store", command: "" });
+    expect(parseTodo("請決定\n動手：不是開頭")).toBeNull();
+    expect(parseTodo("")).toBeNull();
+  });
+
+  it("shows the mark firstmate or the captain left, and no option buttons", () => {
+    const state = topics();
+    state.doc.todos = {
+      claimed: { state: "claimed", at: "t" },
+      rejected: { state: "rejected", at: "t", reason: "沒起來" },
+      obsolete: { state: "obsolete", at: "t", reason: "不用了" },
+      plain: { state: "claimed", at: "t" },
+    };
+    state.doc.todos["constructor"] = { state: "claimed", at: "t" };
+    const holds = built(state, [
+      home("main", {
+        report: report({
+          holds: [
+            todoHold("open", "動手：選一個\n選項：甲 | 乙"),
+            todoHold("claimed"),
+            todoHold("rejected"),
+            todoHold("obsolete"),
+            hold("plain"),
+            todoHold("toString"),
+          ],
+        }),
+      }),
+    ]);
+    expect(holds["main/open"]?.todo).toEqual({
+      what: "選一個",
+      command: "選項：甲 | 乙",
+      state: "open",
+      reason: null,
+    });
+    expect(holds["main/open"]?.options).toEqual([]);
+    expect(holds["main/claimed"]?.todo).toMatchObject({ state: "claimed", command: COMMAND });
+    expect(holds["main/rejected"]?.todo).toMatchObject({ state: "rejected", reason: "沒起來" });
+    expect(holds["main/obsolete"]?.todo).toMatchObject({ state: "obsolete", reason: "不用了" });
+    expect(holds["main/plain"]?.todo).toBeNull();
+    expect(holds["main/toString"]?.todo?.state).toBe("open");
+  });
+
+  it("keeps an old hands-on item in play, but not one put off to a date or blocked", () => {
+    const holds = built(topics(), [
+      home("main", {
+        report: report({
+          holds: [
+            { ...todoHold("old"), hold_bucket: "aged" },
+            { ...todoHold("dated"), hold_bucket: "dated", hold_until: "2026-12-01" },
+            hold("old-call", { hold_bucket: "aged" }),
+          ],
+        }),
+      }),
+    ]);
+    expect(holds["main/old"]).toMatchObject({ live: true, deferred_reason: null });
+    expect(holds["main/dated"]).toMatchObject({ live: false, deferred_reason: "延到 2026-12-01" });
+    expect(holds["main/old-call"]).toMatchObject({
+      live: false,
+      deferred_reason: "已放超過 14 天",
+    });
+  });
+
+  it("labels a queued hands-on item as something to do, not to decide", () => {
+    const queued = (id: string): ReportQueued => ({
+      id,
+      kind: "captain",
+      title: id,
+      hold: "動手：登入",
+      captain: true,
+      blockers: [],
+    });
+    const view = buildView(
+      input({
+        homes: [
+          home("main", { report: report({ queued: [queued("mine")] }) }),
+          home("sm1", { report: report({ queued: [queued("theirs")] }) }),
+        ],
+      }),
+    );
+    expect(view.queued.map((entry) => entry.waiting)).toEqual(["要你動手", "等你決定"]);
+  });
+
+  it("treats the marker in a secondmate home as an ordinary question", () => {
+    const state = topics();
+    state.doc.todos = { same: { state: "claimed", at: "t" } };
+    const holds = built(state, [
+      home("main"),
+      home("sm1", { report: report({ holds: [todoHold("same", "動手：x\n選項：甲 | 乙")] }) }),
+    ]);
+    expect(holds["sm1/same"]?.todo).toBeNull();
+    expect(holds["sm1/same"]?.options).toEqual(["甲", "乙"]);
   });
 });
 

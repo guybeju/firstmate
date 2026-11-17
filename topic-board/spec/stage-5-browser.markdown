@@ -49,6 +49,7 @@
 | `POST /api/messages` | `{topic, text}` | 給主 first mate |
 | `POST /api/direct` | `{home, task, text}` | 直送 |
 | `POST /api/holds/answer` | 第一步 `{home, task, answer, label}`；第二步再加 `{confirm, mode}`，`mode` 是 `done` 或 `release` | 作答，兩步 |
+| `POST /api/todos/claim` | `{task}` | 對要你動手的項目按「做完了」：記成 `claimed` 並通知主 first mate 去驗證；不關 hold。重複按不重複通知 |
 | `POST /api/writes/resend` | `{write_id, confirm?}` | 重送；結果不明的要兩步 |
 | `POST /api/writes/ignore` | `{write_id}` | 忽略 |
 

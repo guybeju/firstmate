@@ -97,6 +97,36 @@ test_sections() {
   pass "order prints dispatchable, to-hold, to-release, and parked sections"
 }
 
+test_lists_hands_on_items_waiting_for_a_check() {
+  local home out
+  home=$(tb_make_home order-todo)
+  tb_write_topics "$home"
+  write_backlog "$home"
+  write_tags "$home"
+  out=$(tb_run "$home" "$TOPIC" order)
+  assert_not_contains "$out" "等你驗證" "the section must be absent while nothing waits for a check"
+  {
+    printf '## In flight\n\n## Queued\n'
+    printf -- '- [ ] td1 - Restart x (repo: sample) (kind: captain) (hold: 動手：重啟 x) (hold-kind: captain)\n'
+    printf -- '- [ ] td2 - Log in (repo: sample) (kind: captain) (hold: 動手：登入) (hold-kind: captain)\n'
+    printf -- '- [ ] td3 - A call (repo: sample) (kind: captain) (hold: 要不要？) (hold-kind: captain)\n'
+    printf '\n## Done\n'
+  } > "$home/data/backlog.md"
+  mkdir -p "$home/data/td1"
+  printf 'billing 2026-07-01T00:00:00Z\n' > "$home/data/td1/topic"
+  jq '.todos = {td1: {state: "claimed", at: "t"}, td2: {state: "rejected", at: "t", reason: "r"},
+                td3: {state: "claimed", at: "t"}, gone: {state: "claimed", at: "t"}}' \
+    "$home/data/topics.json" > "$home/data/topics.json.new"
+  mv "$home/data/topics.json.new" "$home/data/topics.json"
+  out=$(tb_run "$home" "$TOPIC" order)
+  assert_equals "td1 " "$(section "$out" "等你驗證：")" \
+    "only an open hands-on item the captain says is done waits for a check"
+  assert_contains "$out" "$(printf 'td1\t帳務重構\t高\t← 使用者說做完了；驗證後跑 bin/fm-topic.sh todo done td1，沒成功就跑 bin/fm-topic.sh todo failed td1 --reason <一行>')" \
+    "the line must carry both commands"
+  assert_not_contains "$(section "$out" "可派：")" "td" "a hands-on item is never dispatchable"
+  pass "order lists the hands-on items the captain says are done"
+}
+
 test_falls_open_without_a_usable_topic_file() {
   local home out
   home=$(tb_make_home order-nofile)
@@ -137,4 +167,5 @@ test_falls_open_when_the_snapshot_fails() {
   pass "order tells firstmate to dispatch as usual when the backlog cannot be read"
 }
 
-fm_test_run test_sections test_falls_open_without_a_usable_topic_file test_falls_open_when_the_snapshot_fails
+fm_test_run test_sections test_lists_hands_on_items_waiting_for_a_check \
+  test_falls_open_without_a_usable_topic_file test_falls_open_when_the_snapshot_fails
