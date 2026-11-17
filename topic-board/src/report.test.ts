@@ -47,7 +47,7 @@ describe("parseReport", () => {
     const queued = ok({
       ...FULL,
       queued: [
-        { id: "plain", kind: "ship", title: "Plain" },
+        { id: "plain", kind: "ship", title: "Plain", topic_hint: "billing" },
         { id: "held", kind: "ship", title: "Held", hold: "waiting", captain: false, blockers: [] },
         { id: "call", kind: "captain", title: "Call", hold: "pick", captain: true },
         { id: "after", kind: "ship", title: "After", hold: null, blockers: ["plain", 7] },
@@ -56,9 +56,33 @@ describe("parseReport", () => {
       ],
     }).queued;
     expect(queued).toEqual([
-      { id: "plain", kind: "ship", title: "Plain", hold: null, captain: false, blockers: [] },
-      { id: "held", kind: "ship", title: "Held", hold: "waiting", captain: false, blockers: [] },
-      { id: "call", kind: "captain", title: "Call", hold: "pick", captain: true, blockers: [] },
+      {
+        id: "plain",
+        kind: "ship",
+        title: "Plain",
+        hold: null,
+        captain: false,
+        blockers: [],
+        topic_hint: "billing",
+      },
+      {
+        id: "held",
+        kind: "ship",
+        title: "Held",
+        hold: "waiting",
+        captain: false,
+        blockers: [],
+        topic_hint: null,
+      },
+      {
+        id: "call",
+        kind: "captain",
+        title: "Call",
+        hold: "pick",
+        captain: true,
+        blockers: [],
+        topic_hint: null,
+      },
       {
         id: "after",
         kind: "ship",
@@ -66,6 +90,7 @@ describe("parseReport", () => {
         hold: null,
         captain: false,
         blockers: ["plain"],
+        topic_hint: null,
       },
     ]);
     expect(ok(FULL).queued).toEqual([]);

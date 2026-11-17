@@ -117,6 +117,14 @@ class Placer {
             ? { topic: id, reason: null }
             : { topic: null, reason: "proposed" };
     }
+    /**
+     * The topic of a queued item: its tag when it has one, else the topic its
+     * body names. A handed-off item waits in the secondmate's home untagged.
+     */
+    queued(home, item) {
+        const tags = this.tagsOf(home, item.id);
+        return this.classify(tags[tags.length - 1]?.topic ?? item.topic_hint ?? undefined);
+    }
     /** The topic a task belongs to now. */
     current(home, task) {
         const tags = this.tagsOf(home, task);
@@ -381,7 +389,7 @@ export function buildView(input) {
                 task: item.id,
                 kind: item.kind,
                 title: item.title,
-                topic: placer.current(home.id, item.id).topic,
+                topic: placer.queued(home.id, item).topic,
                 waiting: waitingFor(home.id, item),
             });
         }
