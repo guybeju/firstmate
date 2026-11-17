@@ -115,8 +115,7 @@ test_response_headers_and_exposure() {
     printf '%s' "$headers" | grep -qi '^x-frame-options: DENY' || fail "$path must forbid framing"
     printf '%s' "$headers" | grep -qi '^access-control-' && fail "$path must not send any CORS header"
   done
-  ss -ltn | grep ":$PORT " | grep -q '127.0.0.1' || fail "the board must listen on 127.0.0.1"
-  ss -ltn | grep ":$PORT " | grep -qv '127.0.0.1' && fail "the board must listen on 127.0.0.1 only"
+  assert_equals "127.0.0.1:$PORT" "$(tb_listeners "$PORT")" "the board must listen on 127.0.0.1 and nowhere else"
   curl -s "$BASE/" | grep -q "$TOKEN" && fail "the page must not embed the token"
   curl -s "$BASE/" | grep -q "Billing" && fail "the page must not embed any board data"
   grep -q '"rejected":"origin is not this board"' "$audit" || fail "a rejected request must be recorded"
@@ -192,7 +191,7 @@ test_answer_takes_two_steps() {
   assert_equals "confirm" "$(api holds/answer "{\"home\":\"main\",\"task\":\"call-1\",\"answer\":\"先不要\",\"label\":\"x\",\"confirm\":\"$code\",\"mode\":\"done\"}" | jq -r '.error')" \
     "a code must not work for another answer"
   code=$(answer_step1)
-  sed -i 's/要合併嗎？/要現在合併嗎？/' "$MAIN/data/backlog.md"
+  sed -i.bak 's/要合併嗎？/要現在合併嗎？/' "$MAIN/data/backlog.md"
   api refresh '{}' >/dev/null
   assert_equals "confirm" "$(api holds/answer "{\"home\":\"main\",\"task\":\"call-1\",\"answer\":\"合併\",\"label\":\"合併\",\"confirm\":\"$code\",\"mode\":\"done\"}" | jq -r '.error')" \
     "a code must not work once the question changed"

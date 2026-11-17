@@ -172,6 +172,18 @@ SH
   pass "--in-home answers forwards stdin, output, and exit code unchanged"
 }
 
+# bash 3.2 (the /bin/bash of macOS) reads the bytes of a non-ASCII character
+# that directly follows "$name" as part of the name, and then fails on an
+# unbound variable. Linux cannot show that failure, so the shape is checked.
+test_variables_are_braced_before_wide_characters() {
+  local script hits
+  for script in fm-topic.sh fm-topic-lib.sh fm-topic-board-read.sh; do
+    hits=$(LC_ALL=C grep -nE '\$[A-Za-z_][A-Za-z0-9_]*[^ -~]' "$ROOT/bin/$script" || true)
+    assert_equals "" "$hits" "$script: write \${name} when a non-ASCII character follows the variable"
+  done
+  pass "no variable is directly followed by a non-ASCII character"
+}
+
 test_usage() {
   local home
   home=$(tb_make_home usage)
@@ -185,4 +197,5 @@ fm_test_run test_tag_writes_and_is_idempotent test_tag_validates_in_main_home \
   test_tag_without_topic_file_is_rejected test_tag_from_copies_the_topic \
   test_tag_in_secondmate_home_checks_format_only test_tag_without_jq_warns_and_writes \
   test_list test_setup_is_idempotent test_in_home_routes_to_a_local_secondmate \
-  test_in_home_answers_passes_through test_usage
+  test_in_home_answers_passes_through test_variables_are_braced_before_wide_characters \
+  test_usage

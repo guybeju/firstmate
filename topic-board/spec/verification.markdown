@@ -95,6 +95,7 @@
 
 | 項目 | 原因 | 所屬 |
 | --- | --- | --- |
+| （這張表是規劃當時的狀態；之後驗到的結果在 [handover](handover.markdown) 第 3 節） | | |
 | bash 3.2 的語法相容、`shfmt` 的格式 | 沒有 bash 3.2、沒有 docker 權限、沒有裝 `shfmt` | 第一段的驗收 |
 | 進入點與頁面程式的 CRAP 分數 | `board-server.ts`、`board-client.ts`、`src/page/` 只有整合測試，覆蓋率工具看不到 | 第二、五段 |
 | 服務活過 Claude Code session 結束 | 要結束目前的 session 才能驗，這次做不到。已驗到的部分見上 | 第二段 2-1 |

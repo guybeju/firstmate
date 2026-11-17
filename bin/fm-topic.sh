@@ -189,7 +189,7 @@ main_home_topic_for_tag() {
     return 0
   fi
   resolved=$(resolve_confirmed_topic "$wanted") ||
-    tb_die 1 "讀不懂 $TOPICS_FILE，沒有寫入標記。"
+    tb_die 1 "讀不懂 ${TOPICS_FILE}，沒有寫入標記。"
   if [ -z "$resolved" ]; then
     {
       printf '%s\n' "$wanted 不是已確認、未封存的議題，沒有寫入標記。可用的議題："
@@ -273,7 +273,7 @@ cmd_list() {
       elif ($rows | length) == 0 then "還沒有議題。"
       else $rows[] | "\(.id)\t\(.status)\t\(.queue // "-")\t\(.position // "-")\t\(.name)"
       end
-  ' 2>/dev/null || tb_die 1 "讀不懂 $TOPICS_FILE 或 $ARCHIVE_FILE。"
+  ' 2>/dev/null || tb_die 1 "讀不懂 $TOPICS_FILE 或 ${ARCHIVE_FILE}。"
 }
 
 cmd_setup() {
@@ -319,7 +319,7 @@ cmd_order() {
   elif [ ! -f "$TOPICS_FILE" ]; then
     note='還沒有議題檔；照 backlog 原本的順序列出。'
   elif ! jq -e '(.queues | type == "object") and (.topics | type == "object")' "$TOPICS_FILE" >/dev/null 2>&1; then
-    note="讀不懂 $TOPICS_FILE；照 backlog 原本的順序列出。"
+    note="讀不懂 ${TOPICS_FILE}；照 backlog 原本的順序列出。"
   else
     topics=$TOPICS_FILE
     if [ -f "$ARCHIVE_FILE" ] && jq -e '.topics | type == "object"' "$ARCHIVE_FILE" >/dev/null 2>&1; then
@@ -402,18 +402,18 @@ split_task_data() {
   case "$spec" in
     */*)
       if ! tb_valid_id "${spec%%/*}" || ! tb_valid_id "${spec#*/}"; then
-        printf '%s\n' "$spec：task 要寫成 <task-id> 或 <secondmate-id>/<task-id>。" >&2
+        printf '%s\n' "${spec}：task 要寫成 <task-id> 或 <secondmate-id>/<task-id>。" >&2
         return 1
       fi
       home=$(tb_local_secondmate_home "$DATA/secondmates.md" "${spec%%/*}") || {
-        printf '%s\n' "$spec：split 只能搬主 home 和已註冊的本機 secondmate 的 task；遠端 secondmate 的請它自己跑 tag。" >&2
+        printf '%s\n' "${spec}：split 只能搬主 home 和已註冊的本機 secondmate 的 task；遠端 secondmate 的請它自己跑 tag。" >&2
         return 1
       }
       printf '%s\n' "$home/data"
       ;;
     *)
       tb_valid_id "$spec" || {
-        printf '%s\n' "$spec：task id 格式不對。" >&2
+        printf '%s\n' "${spec}：task id 格式不對。" >&2
         return 1
       }
       printf '%s\n' "$DATA"
@@ -430,14 +430,14 @@ split_task_problem() {
   }
   file="$data/${spec#*/}/topic"
   [ -s "$file" ] || {
-    printf '%s\n' "$spec：沒有議題標記，不在 $source 裡。"
+    printf '%s\n' "${spec}：沒有議題標記，不在 $source 裡。"
     return 0
   }
   current=$(tail -n 1 "$file")
   current=${current%% *}
   [ "$current" = "$new" ] && return 0
   [ "$(resolve_confirmed_topic "$current")" = "$source" ] ||
-    printf '%s\n' "$spec：現在標的是 $current，不在 $source 裡。"
+    printf '%s\n' "${spec}：現在標的是 ${current}，不在 $source 裡。"
 }
 
 # The topic id in the board's answer to a split: the second word of its first line.
@@ -560,7 +560,7 @@ todo_add() {
     "$SELF" todo-clear "${words[0]}" >/dev/null ||
       tb_die 1 "${words[0]} 已更新，但看板上舊的狀態沒有清掉；原樣再跑一次同一個指令。"
   fi
-  printf '%s\n' "ok ${words[0]} 已放上看板的「要你動手」（議題 $topic）"
+  printf '%s\n' "ok ${words[0]} 已放上看板的「要你動手」（議題 ${topic}）"
 }
 
 # todo done <task-id>: firstmate checked that the captain did it; close the item.
@@ -593,7 +593,7 @@ cmd_todo() {
       todo_done "$@"
       ;;
     failed | obsolete) cmd_service "todo-$sub" "$@" ;;
-    *) usage_error "todo 不認得 $sub；可用的是 add、done、failed、obsolete" ;;
+    *) usage_error "todo 不認得 ${sub}；可用的是 add、done、failed、obsolete" ;;
   esac
 }
 
@@ -743,7 +743,7 @@ install_rules_file() {  # <file> <template> [header-template]
   local file=$1 template=$2 header=${3:-} name=${1##*/} gap fresh before after backup
   if [ -n "$header" ] && [ -f "$file" ]; then
     gap=$(shared_header_gap "$file") || {
-      printf '%s\n' "$name：檔頭不合上游的要求（少了「$gap」），沒有動這個檔。" >&2
+      printf '%s\n' "${name}：檔頭不合上游的要求（少了「${gap}」），沒有動這個檔。" >&2
       return 1
     }
   fi
@@ -756,18 +756,18 @@ install_rules_file() {  # <file> <template> [header-template]
   if [ ! -f "$file" ]; then
     mkdir -p "$DATA"
     mv "$fresh" "$file"
-    printf '%s\n' "$name：新增（$after）"
+    printf '%s\n' "${name}：新增（${after}）"
   elif cmp -s "$fresh" "$file"; then
     rm -f "$fresh"
-    printf '%s\n' "$name：已是最新（$after）"
+    printf '%s\n' "${name}：已是最新（${after}）"
   else
     before=$(rules_state "$file" "$template")
     backup="$STATE/topic-board/rules-backup/$name.$(date -u +%Y%m%dT%H%M%SZ)"
     cp -p "$file" "$backup"
     mv "$fresh" "$file"
     case "$before" in
-      未裝) printf '%s\n' "$name：新增（$after），原檔備份在 $backup" ;;
-      *) printf '%s\n' "$name：已更新（$before → $after），原檔備份在 $backup" ;;
+      未裝) printf '%s\n' "${name}：新增（${after}），原檔備份在 $backup" ;;
+      *) printf '%s\n' "${name}：已更新（$before → ${after}），原檔備份在 $backup" ;;
     esac
   fi
 }
@@ -788,8 +788,8 @@ cmd_install_rules() {
   if in_secondmate_home; then
     tb_die 1 "install-rules 只能在主 home 跑。secondmate home 的共用偏好檔是主 home 傳過來的唯讀複本，改了會被當成漂移。什麼都沒有寫。"
   fi
-  [ -d "$FM_HOME" ] || tb_die 1 "找不到 home：$FM_HOME。什麼都沒有寫。"
-  [ -f "$RULES_DIR/captain.block.md.tmpl" ] || tb_die 1 "找不到規則範本（$RULES_DIR）。什麼都沒有寫。"
+  [ -d "$FM_HOME" ] || tb_die 1 "找不到 home：${FM_HOME}。什麼都沒有寫。"
+  [ -f "$RULES_DIR/captain.block.md.tmpl" ] || tb_die 1 "找不到規則範本（${RULES_DIR}）。什麼都沒有寫。"
   mkdir -p "$STATE/topic-board/rules-backup"
   chmod 700 "$STATE/topic-board" "$STATE/topic-board/rules-backup"
   install_rules_file "$DATA/captain.md" "$RULES_DIR/captain.block.md.tmpl" || failed=1
@@ -820,7 +820,7 @@ cmd_service() {
   case "$major" in '' | *[!0-9]*) major=0 ;; esac
   [ "$major" -ge 22 ] || service_unavailable "node 版本低於 22" "請升級到 22 以上"
   if [ ! -f "$BOARD_DIST/board-client.js" ] || [ ! -f "$BOARD_DIST/board-server.js" ]; then
-    service_unavailable "編譯結果不見了（$BOARD_DIST）" "在主 home 跑 /updatefirstmate，或確認 checkout 完整"
+    service_unavailable "編譯結果不見了（${BOARD_DIST}）" "在主 home 跑 /updatefirstmate，或確認 checkout 完整"
   fi
   port=$(configured_port)
   commit=$(git -C "$FM_ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown')

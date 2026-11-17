@@ -2,6 +2,15 @@
 # Shared fixtures for the topic-board tests. Sourced after tests/lib.sh.
 # shellcheck disable=SC2034 # the path globals are read by the sourcing tests.
 
+# The board refuses a socket path longer than the platform allows (103 bytes
+# on macOS), and macOS's default temp directory is deep enough to exceed it.
+# Scratch homes go under /tmp when the default base is that long.
+tmpdir_default=${TMPDIR:-}
+if [ "${#tmpdir_default}" -gt 40 ]; then
+  export TMPDIR=/tmp
+fi
+unset tmpdir_default
+
 TOPIC="$ROOT/bin/fm-topic.sh"
 BOARD_READ="$ROOT/bin/fm-topic-board-read.sh"
 
@@ -113,6 +122,17 @@ tb_board_count() {
 # a failed assertion never leaves a service behind.
 tb_stop_boards() {
   pkill -KILL -f "board-server.js.*--state $TMP_ROOT/" 2>/dev/null || true
+}
+
+# tb_listeners <port>: every local address something listens on at that TCP
+# port, one "<address>:<port>" per line, sorted and without repeats. Linux has
+# ss; macOS has lsof.
+tb_listeners() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnH | awk -v suffix=":$1" 'substr($4, length($4) - length(suffix) + 1) == suffix { print $4 }'
+  else
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN | awk 'NR > 1 { print $9 }'
+  fi | sort -u
 }
 
 # tb_mode <path>: the ls-style type and permission string, e.g. "-rw-------".
