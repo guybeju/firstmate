@@ -941,7 +941,14 @@ fi
 EXTERNAL_REVIEW=0
 EXTERNAL_BACKUP_REMOTE=
 EXTERNAL_BACKUP_PREFIX=
-SUB_HOME_MARKER=".fm-secondmate-home"
+# SUB_HOME_MARKER and the secondmate leftovers a freshly drawn pooled copy is
+# cleared of before launch.
+# shellcheck source=bin/fm-secondmate-home-paths-lib.sh
+. "$SCRIPT_DIR/fm-secondmate-home-paths-lib.sh"
+# shellcheck source=bin/fm-secondmate-parent-lib.sh
+. "$SCRIPT_DIR/fm-secondmate-parent-lib.sh"
+# shellcheck source=bin/fm-secondmate-registry-lib.sh
+. "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 if [ -e "$STATE" ] || [ -L "$STATE" ]; then
   fm_backlog_directory_present "$STATE" "state directory" || {
     echo "error: spawn refused: $FM_BACKLOG_TRANSITION_ERROR" >&2
@@ -4789,6 +4796,69 @@ spawn_base_from_primary_checkout() { # <worktree> <project> <default> <origin-re
   return 1
 }
 
+# A pool slot keeps ignored files across `treehouse return`, and secondmate
+# homes lease from the same pool as workers, so a freshly drawn copy can still
+# carry a former home's markers and private paths, including the
+# .claude/settings.local.json permission rules granted to that secondmate
+# (bin/fm-secondmate-home-paths-lib.sh owns the list). Only a copy carrying a
+# marker is treated as a former home; those exact paths are then cleared before
+# any worker sees the copy. Clearing rather than refusing keeps the pool usable:
+# a refused copy is handed out again by the next draw, and retirement already
+# treats these paths as disposable. The copy is refused and left untouched
+# instead when this home's secondmate registry, or the local parent home's
+# registry its parent marker names, still binds a home to it, or when a listed
+# path holds tracked files or sits under a symlinked directory. The caller has
+# already proven the copy free of uncommitted work, and nothing here touches
+# commits, branches, or tracked files.
+spawn_clear_drawn_copy_secondmate_leftovers() { # <worktree>; 1 when refused
+  local worktree=$1 copy present bound name
+  fm_secondmate_home_has_marker "$worktree" || return 0
+  copy=$(CDPATH='' cd -- "$worktree" 2>/dev/null && pwd -P) || {
+    echo "error: could not resolve pooled worktree '$worktree' to clear its secondmate home leftovers; refusing to launch" >&2
+    return 1
+  }
+  present=$(fm_secondmate_home_present_paths "$copy" | paste -sd ' ' -)
+  if bound=$(spawn_drawn_copy_registered_home "$copy"); then
+    echo "error: pooled worktree '$copy' carries secondmate home leftovers ($present), but $bound still registers a secondmate home there; refusing to launch and leaving it untouched" >&2
+    return 1
+  fi
+  set --
+  while IFS= read -r name; do
+    set -- "$@" "$name"
+  done < <(fm_secondmate_home_present_paths "$copy")
+  fm_secondmate_home_remove_paths "$copy" "pooled worktree" "$@" || {
+    echo "error: pooled worktree '$copy' still carries secondmate home leftovers ($present); refusing to launch a worker into them" >&2
+    return 1
+  }
+  echo "spawn: cleared secondmate home leftovers from pooled worktree '$copy' before launch: $present" >&2
+}
+
+spawn_drawn_copy_registered_home() { # <copy>; prints the registry that binds a home to it
+  local copy=$1 reg parent_reg='' line key
+  if fm_secondmate_parent_record_parse "$copy/$SUB_HOME_PARENT_MARKER" \
+    && [ "$FM_SECONDMATE_PARENT_ROUTE" = local ]; then
+    parent_reg="$FM_SECONDMATE_PARENT_HOME/data/secondmates.md"
+  fi
+  for reg in "$DATA/secondmates.md" "$parent_reg"; do
+    [ -n "$reg" ] || continue
+    [ -e "$reg" ] || [ -L "$reg" ] || continue
+    if [ ! -f "$reg" ] || [ -L "$reg" ] || [ ! -r "$reg" ]; then
+      printf 'unreadable registry %s (cannot prove no home)\n' "$reg"
+      return 0
+    fi
+    while IFS= read -r line || [ -n "$line" ]; do
+      secondmate_registry_parse_line "$line" || continue
+      [ "$SECONDMATE_REGISTRY_REMOTE" = 0 ] || continue
+      key=$(secondmate_registry_path_key "$SECONDMATE_REGISTRY_HOME" 2>/dev/null) || continue
+      if [ "$key" = "$copy" ]; then
+        printf 'registry %s (secondmate %s)\n' "$reg" "$SECONDMATE_REGISTRY_ID"
+        return 0
+      fi
+    done < "$reg"
+  done
+  return 1
+}
+
 freshen_spawn_worktree_base() { # <worktree> <base-branch> <project> <mode>; 2 when the worktree is not clean
   local worktree=$1 base=${2:-} project=${3:-} mode=${4:-} default target expected reset_ref actual status
   status=$(git -C "$worktree" -c core.quotePath=false status --porcelain) || {
@@ -4803,6 +4873,7 @@ freshen_spawn_worktree_base() { # <worktree> <base-branch> <project> <mode>; 2 w
     fi
     return 2
   fi
+  spawn_clear_drawn_copy_secondmate_leftovers "$worktree" || return 2
   if ! spawn_worktree_has_origin_config "$worktree"; then
     [ -z "$base" ] || {
       echo "error: pooled worktree '$worktree' has no origin, so it cannot start from base branch '$base'" >&2

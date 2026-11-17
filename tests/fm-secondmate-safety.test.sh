@@ -1684,6 +1684,7 @@ test_secondmate_retire_frees_leased_slot_for_next_seed() {
   mkdir -p "$slot/.no-mistakes"
   printf 'run\n' > "$slot/.no-mistakes/run.log"
   printf 'TOKEN=secret\n' > "$slot/.env"
+  printf '{"permissions":{"allow":["Bash(git push:*)"]}}\n' > "$slot/.claude/settings.local.json"
   fm_write_secondmate_meta "$home/state/first.meta" "$slot"
 
   PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$fmroot" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
@@ -1693,6 +1694,9 @@ test_secondmate_retire_frees_leased_slot_for_next_seed() {
   [ -f "$slot/AGENTS.md" ] || fail "the returned pool slot lost its checkout"
   residue=$(git -C "$slot" status --porcelain --ignored --untracked-files=all)
   [ -z "$residue" ] || fail "retirement left private paths in the returned pool slot: $residue"
+  [ ! -e "$slot/.claude/settings.local.json" ] \
+    || fail "retirement left the retired mate's permission rules in the returned pool slot"
+  [ -f "$slot/.claude/settings.json" ] || fail "retirement removed tracked Claude settings from the pool slot"
 
   out=$(PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$fmroot" FM_HOME="$home" FM_FAKE_TREEHOUSE_HOME="$slot" \
     FM_FAKE_TMUX_LOG="$log" FM_SECONDMATE_CHARTER='second scope' FM_SECONDMATE_SCOPE='second scope' \
@@ -1704,6 +1708,95 @@ test_secondmate_retire_frees_leased_slot_for_next_seed() {
   [ ! -e "$slot/data/backlog.md" ] && [ ! -e "$slot/.env" ] \
     || fail "the reused slot still holds the retired mate's private records"
   pass "a retired mate's leased slot seeds a new mate with none of its private paths"
+}
+
+# A seed that rolls back after leasing a pool slot must take back what it wrote
+# there, because the return keeps ignored files, while a slot it refused keeps
+# the files it already held.
+test_home_seed_rollback_clears_its_writes_from_leased_slot() {
+  local home slot fmroot fakebin log err residue
+  home="$TMP_ROOT/seed-rollback-home"
+  slot="$TMP_ROOT/seed-rollback-pool/1/firstmate"
+  fmroot="$TMP_ROOT/seed-rollback-fmroot"
+  err="$TMP_ROOT/seed-rollback.err"
+  git clone --quiet "$ROOT" "$fmroot"
+  mkdir -p "$TMP_ROOT/seed-rollback-pool/1"
+  printf '{}\n' > "$TMP_ROOT/seed-rollback-pool/treehouse-state.json"
+  git -C "$fmroot" worktree add --quiet --detach "$slot" HEAD
+  mkdir -p "$home/projects" "$home/data" "$home/state"
+  fm_git_init_commit "$home/projects/alpha"
+  fm_git_add_origin "$home/projects/alpha" "$TMP_ROOT/remotes/seed-rollback-alpha.git"
+  printf '%s\n' '- alpha [no-mistakes] - alpha project (added 2026-06-22)' > "$home/data/projects.md"
+  printf 'LEFT=before-this-seed\n' > "$slot/.env"
+  fakebin=$(make_fake_tmux "$TMP_ROOT/seed-rollback-fake")
+  log="$TMP_ROOT/seed-rollback-fake/tmux.log"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$fakebin/no-mistakes"
+  chmod +x "$fakebin/no-mistakes"
+
+  if PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$fmroot" FM_HOME="$home" FM_FAKE_TREEHOUSE_HOME="$slot" \
+    FM_FAKE_TMUX_LOG="$log" FM_SECONDMATE_CHARTER='rollback scope' FM_SECONDMATE_SCOPE='rollback scope' \
+    "$ROOT/bin/fm-home-seed.sh" rollback - alpha >/dev/null 2>"$err"; then
+    fail "seed succeeded although no-mistakes initialization failed"
+  fi
+  grep -F 'failed to initialize no-mistakes for alpha' "$err" >/dev/null \
+    || fail "seed did not fail where the test expected: $(cat "$err")"
+  grep -F "treehouse return --force $(cd "$slot" && pwd -P)" "$log" >/dev/null \
+    || fail "the rolled-back seed did not return its leased slot"
+  [ -f "$slot/AGENTS.md" ] || fail "the returned pool slot lost its checkout"
+  residue=$(git -C "$slot" status --porcelain --ignored --untracked-files=all)
+  [ "$residue" = '!! .env' ] || fail "the rolled-back seed left its writes in the pool slot: $residue"
+  [ "$(cat "$slot/.env")" = LEFT=before-this-seed ] || fail "the rolled-back seed removed a path it did not write"
+
+  rm -f "$slot/.env"
+  mkdir -p "$slot/data"
+  printf 'other\n' > "$slot/.fm-secondmate-home"
+  printf 'other backlog\n' > "$slot/data/backlog.md"
+  if PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$fmroot" FM_HOME="$home" FM_FAKE_TREEHOUSE_HOME="$slot" \
+    FM_FAKE_TMUX_LOG="$log" FM_SECONDMATE_CHARTER='rollback scope' FM_SECONDMATE_SCOPE='rollback scope' \
+    "$ROOT/bin/fm-home-seed.sh" rollback - alpha >/dev/null 2>"$err"; then
+    fail "seed reused a leased slot marked for another secondmate"
+  fi
+  grep -F 'already marked for other' "$err" >/dev/null || fail "seed did not explain the marked-slot refusal"
+  [ "$(cat "$slot/.fm-secondmate-home")" = other ] && [ -f "$slot/data/backlog.md" ] \
+    || fail "a seed refused before writing removed files the slot already held"
+  pass "a rolled-back seed removes only what it wrote into its leased slot"
+}
+
+# A listed private path reached through a symlinked directory is outside the
+# home, so retirement must refuse rather than stage the target away.
+test_secondmate_teardown_refuses_symlinked_private_parent() {
+  local home subhome subhome_abs fakebin log fmroot err rc outside
+  home="$TMP_ROOT/teardown-symlink-home"
+  subhome="$TMP_ROOT/teardown-symlink-subhome"
+  fmroot="$TMP_ROOT/teardown-symlink-fmroot"
+  outside="$TMP_ROOT/teardown-symlink-outside"
+  err="$TMP_ROOT/teardown-symlink.err"
+  make_firstmate_git_root "$fmroot"
+  git -C "$fmroot" worktree add --quiet --detach "$subhome" HEAD
+  mkdir -p "$home/state" "$home/data" "$subhome/state" "$outside"
+  printf 'domain\n' > "$subhome/.fm-secondmate-home"
+  printf '{"permissions":{}}\n' > "$outside/settings.local.json"
+  ln -s "$outside" "$subhome/.claude"
+  subhome_abs=$(cd "$subhome" && pwd -P)
+  fm_write_secondmate_meta "$home/state/domain.meta" "$subhome"
+  printf '%s\n' '- domain - design domain (home: '"$subhome"'; scope: design domain; projects: ; added 2026-06-22)' > "$home/data/secondmates.md"
+  fakebin=$(make_fake_tmux "$TMP_ROOT/teardown-symlink-fake")
+  log="$TMP_ROOT/teardown-symlink-fake/tmux.log"
+
+  set +e
+  PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$fmroot" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
+    FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/teardown-symlink-fake/pane.txt" \
+    "$ROOT/bin/fm-teardown.sh" domain >/dev/null 2>"$err"
+  rc=$?
+  set -e
+
+  [ "$rc" -ne 0 ] || fail "teardown retired a home whose private path sits under a symlinked directory"
+  grep -F "$subhome_abs/.claude is a symlink" "$err" >/dev/null || fail "teardown did not name the symlinked directory: $(cat "$err")"
+  grep -F "treehouse return --force $subhome_abs" "$log" >/dev/null && fail "teardown returned the slot after refusing to stage it"
+  [ -f "$outside/settings.local.json" ] || fail "teardown moved a file outside the home"
+  [ "$(cat "$subhome/.fm-secondmate-home")" = domain ] || fail "the refused retirement removed the home's marker"
+  [ -e "$home/state/domain.meta" ] || fail "the refused retirement cleared the parent's record"
+  pass "secondmate teardown refuses a private path under a symlinked directory"
 }
 
 # A second mate's status log relays child outcomes, so a merged child PR there
@@ -1980,6 +2073,8 @@ test_secondmate_teardown_refuses_failed_leased_home_return() {
   git -C "$fmroot" worktree add --quiet --detach "$subhome" HEAD
   mkdir -p "$home/state" "$home/data" "$subhome/state/procevent"
   printf 'domain\n' > "$subhome/.fm-secondmate-home"
+  mkdir -p "$subhome/.claude"
+  printf '{"permissions":{"allow":["Bash(git push:*)"]}}\n' > "$subhome/.claude/settings.local.json"
   printf 'adapter=lavish\nargc=1\nargv:\n/bin/true\n' > "$subhome/state/procevent/source.source"
   install_fake_process_event_sweep "$subhome" "$sweep_log"
   : > "$rearm_log"
@@ -2013,6 +2108,8 @@ EOF
   [ -d "$subhome" ] || fail "teardown removed a leased home after return failed"
   [ "$(cat "$subhome/.fm-secondmate-home" 2>/dev/null)" = domain ] \
     || fail "failed leased-home return did not restore the home's marker"
+  grep -F 'git push' "$subhome/.claude/settings.local.json" >/dev/null 2>&1 \
+    || fail "failed leased-home return did not restore the home's permission rules"
   [ -z "$(find "$TMP_ROOT" -maxdepth 1 -name '.fm-home-retire.*' -print -quit)" ] \
     || fail "failed leased-home return left a private-path stage behind"
   [ -e "$subhome/state/procevent/source.source" ] || fail "failed leased-home return did not restore the source registration"
@@ -3226,6 +3323,8 @@ test_secondmate_spawn_refuses_operational_dirs_outside_subhome
 test_fm_send_refuses_bare_window_without_home_meta
 test_secondmate_teardown_retires_empty_home
 test_secondmate_retire_frees_leased_slot_for_next_seed
+test_home_seed_rollback_clears_its_writes_from_leased_slot
+test_secondmate_teardown_refuses_symlinked_private_parent
 test_branch_actor_cannot_retire_secondmate
 test_secondmate_teardown_refuses_ambiguous_and_mismatched_registry_bindings
 test_secondmate_teardown_sweeps_process_events_before_removal

@@ -438,6 +438,143 @@ test_dirty_pool_refuses_without_discarding_work() {
   pass "a dirty pooled worktree is refused without discarding its local work"
 }
 
+# A secondmate home leases from the same pool as workers, and a returned slot
+# keeps ignored files, so a drawn copy can still hold a former home's markers
+# and private paths. These mirror what an old retirement left behind.
+plant_secondmate_leftovers() { # <copy> <parent-home>
+  local copy=$1 parent=$2 exclude
+  exclude=$(git -C "$copy" rev-parse --path-format=absolute --git-path info/exclude)
+  mkdir -p "$(dirname "$exclude")"
+  printf '%s\n' .fm-secondmate-home .fm-secondmate-parent .env config/ data/ state/ projects/ \
+    .no-mistakes/ .claude/settings.local.json >> "$exclude"
+  mkdir -p "$copy/data" "$copy/state" "$copy/config" "$copy/projects/alpha" "$copy/.no-mistakes" "$copy/.claude"
+  printf 'old-mate\n' > "$copy/.fm-secondmate-home"
+  printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' "$parent" > "$copy/.fm-secondmate-parent"
+  printf 'private backlog\n' > "$copy/data/backlog.md"
+  printf 'old\n' > "$copy/state/old-mate.status"
+  printf 'pinned\n' > "$copy/config/claude-account"
+  printf 'clone\n' > "$copy/projects/alpha/README.md"
+  printf 'run\n' > "$copy/.no-mistakes/run.log"
+  printf 'TOKEN=secret\n' > "$copy/.env"
+  printf '{"permissions":{"allow":["Bash(git push:*)"]}}\n' > "$copy/.claude/settings.local.json"
+}
+
+assert_leftovers_kept() { # <copy> <why>
+  [ -f "$1/.fm-secondmate-home" ] && [ -f "$1/data/backlog.md" ] && [ -f "$1/.claude/settings.local.json" ] \
+    || fail "$2"
+}
+
+test_drawn_copy_secondmate_leftovers_are_cleared() {
+  local rec id out status kept name
+  id='pool-secondmate-leftovers-r1'
+  rec=$(make_case secondmate-leftovers "$id")
+  read_case_record "$rec"
+  plant_secondmate_leftovers "$POOL_DIR" "$CASE_DIR/old-parent"
+  git -C "$POOL_DIR" checkout --quiet -b kept-work
+  printf 'unlanded\n' > "$POOL_DIR/unlanded.txt"
+  git -C "$POOL_DIR" add unlanded.txt
+  git -C "$POOL_DIR" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm unlanded
+  kept=$(git -C "$POOL_DIR" rev-parse HEAD)
+  git -C "$POOL_DIR" checkout --quiet --detach "$INITIAL_SHA"
+
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 0 "$status" "spawn should clear a drawn copy's secondmate leftovers and launch"$'\n'"$out"
+  assert_contains "$out" "cleared secondmate home leftovers from pooled worktree" \
+    "spawn did not report clearing the drawn copy's secondmate leftovers"
+  for name in .fm-secondmate-home .fm-secondmate-parent .env config data state projects .no-mistakes \
+    .claude/settings.local.json; do
+    [ ! -e "$POOL_DIR/$name" ] || fail "spawn handed the worker a copy still holding $name"
+  done
+  assert_grep 'base' "$POOL_DIR/README.md" "clearing the leftovers touched a tracked file"
+  [ "$(git -C "$POOL_DIR" rev-parse kept-work)" = "$kept" ] \
+    || fail "clearing the leftovers moved a branch holding unlanded work"
+  pass "a drawn copy is cleared of a former secondmate home's markers and private paths"
+}
+
+test_drawn_copy_without_marker_keeps_ignored_paths() {
+  local rec id out status exclude
+  id='pool-unmarked-ignored-r1'
+  rec=$(make_case unmarked-ignored "$id")
+  read_case_record "$rec"
+  exclude=$(git -C "$POOL_DIR" rev-parse --path-format=absolute --git-path info/exclude)
+  mkdir -p "$(dirname "$exclude")" "$POOL_DIR/data"
+  printf 'data/\n' >> "$exclude"
+  printf 'project cache\n' > "$POOL_DIR/data/cache.txt"
+
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 0 "$status" "spawn should launch a clean copy that carries no secondmate marker"$'\n'"$out"
+  assert_not_contains "$out" "secondmate home leftovers" "spawn treated an unmarked copy as a former home"
+  assert_grep 'project cache' "$POOL_DIR/data/cache.txt" "spawn removed an ignored path from an unmarked copy"
+  pass "a drawn copy with no secondmate marker keeps its ignored paths"
+}
+
+test_dirty_drawn_copy_keeps_secondmate_leftovers() {
+  local rec id out status
+  id='pool-dirty-leftovers-r1'
+  rec=$(make_case dirty-leftovers "$id")
+  read_case_record "$rec"
+  plant_secondmate_leftovers "$POOL_DIR" "$CASE_DIR/old-parent"
+  printf 'local edit\n' >> "$POOL_DIR/README.md"
+
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn launched into a copy with uncommitted tracked work"
+  assert_contains "$out" "is not clean" "spawn did not refuse the copy with uncommitted tracked work"
+  assert_grep 'local edit' "$POOL_DIR/README.md" "spawn discarded uncommitted tracked work"
+  assert_leftovers_kept "$POOL_DIR" "spawn cleared leftovers from a copy it refused as unclean"
+  pass "a drawn copy with uncommitted tracked work is refused with its leftovers untouched"
+}
+
+test_registered_home_copy_is_refused_untouched() {
+  local rec id out status registry before which
+  for which in own parent; do
+    id="pool-registered-$which-r1"
+    rec=$(make_case "registered-$which" "$id")
+    read_case_record "$rec"
+    plant_secondmate_leftovers "$POOL_DIR" "$CASE_DIR/old-parent"
+    case "$which" in
+      own) registry="$HOME_DIR/data/secondmates.md" ;;
+      parent) mkdir -p "$CASE_DIR/old-parent/data"; registry="$CASE_DIR/old-parent/data/secondmates.md" ;;
+    esac
+    printf '%s\n' "- old-mate - live home (home: $POOL_DIR; scope: live home; projects: ; added 2026-11-17)" > "$registry"
+    before=$(git -C "$POOL_DIR" rev-parse HEAD)
+
+    out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+    status=$?
+    [ "$status" -ne 0 ] || fail "spawn launched into a copy the $which registry still binds to a home"
+    assert_contains "$out" "still registers a secondmate home there" \
+      "spawn did not explain the $which registry binding"
+    assert_contains "$out" "$registry" "the refusal did not name the $which registry"
+    assert_contains "$out" ".fm-secondmate-home" "the refusal did not name the leftovers"
+    [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$before" ] \
+      || fail "spawn moved the HEAD of a copy the $which registry binds to a home"
+    assert_leftovers_kept "$POOL_DIR" "spawn cleared a copy the $which registry binds to a home"
+    pass "a drawn copy the $which registry still binds to a home is refused untouched"
+  done
+}
+
+test_tracked_private_path_is_refused() {
+  local rec id out status before
+  id='pool-tracked-private-r1'
+  rec=$(make_case tracked-private "$id")
+  read_case_record "$rec"
+  plant_secondmate_leftovers "$POOL_DIR" "$CASE_DIR/old-parent"
+  git -C "$POOL_DIR" add -f config/claude-account
+  git -C "$POOL_DIR" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm tracked-config
+  before=$(git -C "$POOL_DIR" rev-parse HEAD)
+
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn launched after a listed private path turned out to be tracked"
+  assert_contains "$out" "config holds tracked files" "spawn did not name the tracked private path"
+  assert_grep 'pinned' "$POOL_DIR/config/claude-account" "spawn removed a tracked file"
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$before" ] || fail "spawn moved past the unlanded commit it refused"
+  assert_leftovers_kept "$POOL_DIR" "spawn removed some leftovers before refusing a tracked one"
+  pass "a drawn copy whose listed private path holds tracked files is refused untouched"
+}
+
 test_unresolved_remote_default_refuses_pool() {
   local rec id out status before
   id='pool-unresolved-default-r5'
@@ -1393,6 +1530,11 @@ test_scout_base_branch_refused_on_gerrit_forge
 test_non_main_default_branch_refreshes_before_branching
 test_direct_pr_and_scout_refresh_before_launch
 test_dirty_pool_refuses_without_discarding_work
+test_drawn_copy_secondmate_leftovers_are_cleared
+test_drawn_copy_without_marker_keeps_ignored_paths
+test_dirty_drawn_copy_keeps_secondmate_leftovers
+test_registered_home_copy_is_refused_untouched
+test_tracked_private_path_is_refused
 test_unresolved_remote_default_refuses_pool
 test_unreachable_origin_refuses_stale_pool_base
 test_originless_pool_launches_without_a_freshness_fetch
