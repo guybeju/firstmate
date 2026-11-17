@@ -31,7 +31,7 @@
 
 ## 上線時要驗的事
 
-這些都需要真的 secondmate，規劃時這個 home 一個都沒有，全部沒驗過。各段「先驗再做」裡標了需要 secondmate 的項目（1-1、1-6、1-7、1-8、3-1、3-2、3-3、4-1、4-2、4-3）也在這時候一起驗。
+這些都需要真的 secondmate，規劃時這個 home 一個都沒有。2026-11-17 主 first mate 在真的 home 與一台遠端的 Mac（secondmate `macmate`）上驗過的結果寫在表後；其餘的結果在 [handover](handover.markdown) 第 3 節。各段「先驗再做」裡標了需要 secondmate 的項目（1-1、1-6、1-7、1-8、3-1、3-2、3-3、4-1、4-2、4-3）也在這時候一起驗。
 
 | # | 要驗的事 | 怎麼驗 | 假設不成立時 |
 | --- | --- | --- | --- |
@@ -44,10 +44,20 @@
 | R-6 | 遠端 home 的 `origin` 實際是 code root 的路徑（研究時依 `git clone` 的行為推論） | 在遠端 home 跑 `git remote get-url origin` | 不是的話，第 4 步「遠端 home 對齊到 code root」可能抓不到 `carry` 的 commit，表現和 R-1 失敗相同，照 R-1 處理 |
 | R-7 | 設了 `config/project-capacity` 之後，容量滿時項目留在排隊中，下一輪照 `order` 的順序讓高優先的先拿到空位 | 設容量為 1、排兩個不同佇列的項目，看哪一個先被派 | 不成立的話「高優先先派」在容量滿時沒有效果，只剩「待辦不派」有效。這是 first mate 的行為，看板不用改 |
 
+結果（主 first mate 回報，這份 spec 的作者沒有自己重跑）：
+
+- R-1 通過：Mac 的 code root 依 `self-update-source` 跟著 `carry`，code root 與 home 在同一個 commit；`bin/fm-on.sh macmate fm-topic.sh setup` 回「ok setup 帳本本來就開著」；`status` 顯示「home macmate：相同」。那台 Mac 上 fork 的 remote 叫 `origin`，不是第 2 步寫的 `fork`，`self-update-source` 寫的是 `origin carry`。
+- R-2 通過：遠端的 secondmate 回報 `pwd` 是它的 home，`bin/fm-topic.sh --help` 印出用法，跑的是 home 的 `bin/`，commit 與 code root 相同。
+- R-3 通過：在 Mac 上 `git fetch origin carry` 走 https，exit 0。
+- R-4 作廢：這一列假設「合併有衝突代表 fork 改到了上游的檔案」。fleet 之後在 `carry` 上改了上游的檔案（fork 的 PR 20 到 24、26），衝突不再代表看板違反只新增。上游合併改由 fleet 負責，見下一節。
+- R-5 通過：28 個 PR 的 base 都是 fork 的 `carry`。
+- R-6 通過：Mac 的 home 的 `origin` 是它的 code root 的路徑。
+- R-7：還沒有結果。
+
 ## 之後怎麼更新
 
 - **看板有新版**：合併進 `carry` 並推上 fork，然後在主 home 跑 `/updatefirstmate`。下一個議題指令會發現服務的程式版本不同，自動換掉舊服務。
-- **上游有新版**：在開發用的 clone 把上游的 `main` 合併進 `carry`。只合併，不 rebase：`carry` 分歧的話主 home 的更新會被跳過。開發用的 clone 沒有上游的 remote，合併時用網址直接 fetch：`git fetch https://github.com/kunchenguid/firstmate.git main && git merge FETCH_HEAD`。合併後跑一次全部六段的驗收（特別是 `bin/fm-doc-audience-check.sh` 與 `bin/fm-test-run.sh --check-coverage`，上游可能改了它們的範圍），再推上 fork、跑 `/updatefirstmate`。
+- **上游有新版**：由 fleet 把上游的 `main` 合併進 `carry`（2026-11-17 起；原本寫的是看板開發用的 clone）。一定是真的 merge，不 squash、不 rebase：`carry` 分歧的話主 home 的更新會被跳過。開發用的 clone 沒有上游的 remote，合併時用網址直接 fetch：`git fetch https://github.com/kunchenguid/firstmate.git main && git merge FETCH_HEAD`。合併後跑一次全部六段的驗收（特別是 `bin/fm-doc-audience-check.sh` 與 `bin/fm-test-run.sh --check-coverage`，上游可能改了它們的範圍），再推上 fork、跑 `/updatefirstmate`。
 - **退回較舊的版本**：`data/topics.json` 的 `history` 是後來才加的欄位。沒有這個欄位的舊版程式讀得懂這個檔，但它下一次存檔時不會寫回 `history`，來歷紀錄就沒了（議題本身與 `merged` 表不受影響）。要退版又想留著紀錄，先備份這個檔。
 - **規則範本有變**：更新後 `bin/fm-topic.sh status` 會顯示「和範本不同」，由使用者再跑一次 `install-rules`。
 - **之後新增的 secondmate**：遠端的 code root 是使用者在那台機器上手動 clone 的。clone 完就做第 2 步，再照上游的流程佈建 home。不把 `origin` 改指向 fork。

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs the topic-board test scripts for the given stages (all stages when none
 # are named). Each script is topic-board/test/stage-<n>-*.sh and exits non-zero
-# on its first failed assertion.
+# on its first failed assertion. The scripts run under the bash that runs this
+# file, so `/bin/bash run.sh` checks them against that bash.
 #
 # Usage: topic-board/test/run.sh [stage-number...]
 set -euo pipefail
@@ -23,7 +24,7 @@ for stage in "$@"; do
   for script in "$TEST_DIR"/stage-"$stage"-*.sh; do
     [ -f "$script" ] || continue
     echo "# $(basename "$script")"
-    bash "$script"
+    "${BASH:-bash}" "$script"
     ran=$((ran + 1))
   done
 done

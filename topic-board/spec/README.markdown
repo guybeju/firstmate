@@ -17,6 +17,7 @@
 | [stage-6-rules](stage-6-rules.markdown) | 第六段：`install-rules` 與規則範本 |
 | [rollout](rollout.markdown) | 上線的前提與步驟 |
 | [verification](verification.markdown) | 哪些事實測過、哪些只讀過原始碼、哪些還沒驗 |
+| [handover](handover.markdown) | 交接：怎麼跑測試、每個問題的狀態、還沒驗的事、已知限制 |
 | [open-issues](open-issues.markdown) | 各票矛盾或漏接的地方與建議 |
 
 規劃目錄裡有兩樣東西要跟著 spec 一起交給實作：`templates/` 的三個規則範本（第六段原樣搬進 fork），與 `prototype/board-prototype.html`（第五段的版面依據）。
