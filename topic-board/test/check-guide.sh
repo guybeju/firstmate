@@ -98,10 +98,9 @@ check_skills() {
   done <<< "$(cited '`/[a-z][a-z-]*`'; cited '`[a-z][a-z-]*` 技能')"
 }
 
-# check_version <preference-file> <template>
+# check_version <preference-file> <its regex> <template>
 check_version() {
-  local file=$1 template=$2 expected use found
-  local pattern=${file//./\\.}
+  local file=$1 pattern=$2 template=$3 expected use found
   expected=$(sed -n '1s/^.*topic-board:begin \(v[0-9]*\).*$/\1/p' "$ROOT/topic-board/rules/$template")
   [ -n "$expected" ] || {
     problem "cannot read the version of topic-board/rules/$template"
@@ -120,8 +119,8 @@ check_scripts
 check_topic_subcommands
 check_config_files
 check_skills
-check_version captain.md captain.block.md.tmpl
-check_version captain-shared.md captain-shared.block.md.tmpl
+check_version captain.md 'captain\.md' captain.block.md.tmpl
+check_version captain-shared.md 'captain-shared\.md' captain-shared.block.md.tmpl
 
 if [ "$problems" -gt 0 ]; then
   echo "check-guide.sh: $problems problem(s) in $GUIDE" >&2

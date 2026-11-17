@@ -126,7 +126,6 @@ firstmate: updated <舊 commit>..<新 commit> (instructions changed: …)
 session 一開始會跑啟動檢查，列出缺的或太舊的工具與安裝指令；同意後 first mate 會裝能自動裝的，其餘照它印的說明手動裝（[configuration「Toolchain」](docs/configuration.md#toolchain)）。
 
 **確認**：啟動摘要的 bootstrap 那一段沒有 `MISSING:`、`OUTDATED:`、`MISSING_MANUAL:`、`NEEDS_GH_AUTH`、`BACKEND_INVALID:` 這類行；全部正常時那一段是安靜的。
-在 shell 裡可以用 `FM_HOME=<clone> <clone>/bin/fm-bootstrap.sh` 看同一份檢查，全部正常時什麼都不印（腳本開頭的說明列出每一種行）。
 最後的證明是照 [README「Talk to it」](README.md#talk-to-it) 請它做一件專案裡的小事，看它派出 worker。
 
 **不對時**：每一種診斷行的處理由 first mate 的 `bootstrap-diagnostics` 技能負責；照它印的指令或說明做。
@@ -150,7 +149,8 @@ bin/fm-topic.sh open
 ```
 
 它在需要時啟動看板服務，印出 `http://127.0.0.1:<埠>/#t=<token>`。
-在這台機器的瀏覽器打開那個網址，停留一分鐘以上：服務在有頁面看著時才輪詢各個 home。
+在這台機器的瀏覽器打開那個網址，停留一分鐘以上。
+服務只在最近 2 分鐘內有人要過看板狀態時才輪詢各個 home（[stage-3-data](topic-board/spec/stage-3-data.markdown)「輪詢」），頁面在前景時每 5 秒要一次（contracts 第 10 節）。
 然後：
 
 ```

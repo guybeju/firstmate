@@ -37,6 +37,7 @@
 | `topic-board/spec/` | 這份 spec，副檔名 `.markdown` | 一 |
 | `topic-board/test/` | fork 自己的測試與 `run.sh` | 一起 |
 | `topic-board/package.json`、`pnpm-lock.yaml`、`tsconfig.json`、`.gitignore` | 只有開發期相依；`.gitignore` 忽略 `node_modules/` 與 `.metrics/` | 二 |
+| `FORK-SETUP.markdown`（根目錄） | 新機器從零安裝 fork 與看板的說明；`topic-board/test/check-guide.sh` 檢查它引用的名稱 | 上線後 |
 
 硬性限制（都實測過，見 [verification](verification.markdown)）：
 
