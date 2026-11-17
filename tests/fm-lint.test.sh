@@ -524,6 +524,35 @@ test_changed_mode_lints_only_the_changed_file() {
   pass "fm-lint.sh changed mode lints only the changed canonical file"
 }
 
+test_changed_mode_ends_by_naming_the_unchecked_codes_and_full_command() {
+  local tmp fakebin log diff_file out last explicit
+  tmp=$(fm_test_tmproot fm-lint-changed-notice)
+  fakebin=$(fm_fakebin "$tmp")
+  fm_lint_stub_git "$fakebin"
+  log="$tmp/shellcheck.log"
+  fm_lint_stub_shellcheck "$fakebin" "$log"
+  diff_file="$tmp/diff.nul"
+  fm_lint_write_diff_file "$diff_file" bin/fm-install-shellcheck.sh bin/fm-lint-workflows.sh README.md
+
+  # Clear CI/GITHUB_ACTIONS so changed-file mode runs instead of the full lint.
+  out=$(PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' FM_LINT_JOBS=1 \
+    FM_TEST_GIT_BRANCH=feature \
+    FM_TEST_GIT_DIFF_FILE="$diff_file" "$LINT" 2>&1) \
+    || fail "changed-mode lint run failed"$'\n'"$out"
+  assert_contains "$out" "NOT A FULL LINT - changed-file mode did not check the cross-file codes SC1091,SC2034,SC2153,SC2329" \
+    "changed-mode pass did not say the cross-file codes went unchecked"
+  last=$(printf '%s\n' "$out" | tail -n 1)
+  [ "$last" = "fm-lint.sh: check them before reporting the change done: bin/fm-lint.sh bin/fm-install-shellcheck.sh bin/fm-lint-workflows.sh" ] \
+    || fail "changed-mode pass did not end with the explicit-path command for its changed files"$'\n'"last: $last"
+
+  explicit=$(PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' FM_LINT_JOBS=1 \
+    "$LINT" bin/fm-install-shellcheck.sh 2>&1) || fail "explicit-path lint failed"$'\n'"$explicit"
+  case "$explicit" in
+    *"NOT A FULL LINT"*) fail "explicit-path lint, which checks the cross-file codes, claimed to be partial" ;;
+  esac
+  pass "fm-lint.sh changed mode ends by naming the unchecked codes and the explicit-path command"
+}
+
 test_ci_forces_full_lint_even_with_empty_diff() {
   local listed expected
   # No git stub: CI=true must short-circuit fm-lint.sh's mode selection before
@@ -829,8 +858,8 @@ SH
     FM_TEST_GIT_DIFF_FILE="$diff_file" "$lint" 2>&1) || rc=$?
   [ "$rc" -eq 0 ] \
     || fail "changed-mode local lint failed a cross-file-only fixture"$'\n'"$out"
-  assert_not_contains "$out" "SC2034" "changed-mode local lint still reported SC2034"
-  assert_not_contains "$out" "SC2329" "changed-mode local lint still reported SC2329"
+  assert_not_contains "$out" "SC2034 (" "changed-mode local lint still reported SC2034"
+  assert_not_contains "$out" "SC2329 (" "changed-mode local lint still reported SC2329"
 
   rc=0
   out=$("$lint" "$fixture" 2>&1) || rc=$?
@@ -2062,6 +2091,7 @@ test_sidecar_result_exit_reflects_final_status
 test_roots_sidecar_records_per_root_lifecycle
 test_seeded_module_boundary_parity
 test_changed_mode_lints_only_the_changed_file
+test_changed_mode_ends_by_naming_the_unchecked_codes_and_full_command
 test_ci_forces_full_lint_even_with_empty_diff
 test_main_branch_forces_full_lint
 test_explicit_path_bypasses_changed_logic
