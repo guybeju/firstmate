@@ -32,7 +32,12 @@
 #                          human the wait is on. Only when neither absorb class
 #                          applies does the log's latest recognized status event decide:
 #                          terminal (captain-relevant) or non-terminal (no verb),
-#                          both surfaced at once. A provably-working stale past the
+#                          both surfaced at once. A finished ship lane waiting on
+#                          its registered PR's merge (ready_pr_merge_wait), like
+#                          one under a backlog captain hold, alarms on first
+#                          sight, absorbs a new pane hash inside
+#                          PAUSE_RESURFACE_SECS, and alarms again on the next new
+#                          hash after it. A provably-working stale past the
 #                          wedge threshold also surfaces, with an "escalation N"
 #                          count in the reason; at FM_WEDGE_DEMAND_INSPECT_COUNT
 #                          consecutive escalations on the SAME pane, the reason
@@ -57,7 +62,8 @@
 #                          Unless afk is active. A pane about to escalate
 #                          that can account for its quiet - a `paused:` external
 #                          wait or a verified `captain-held` transfer its worker
-#                          declared, a backlog captain hold on its task, or,
+#                          declared, a backlog captain hold on its task, a
+#                          finished lane's wait on its registered PR's merge, or,
 #                          where config/wedge-defer-worker-wait arms it, its own
 #                          still-open newest `blocked:` or `needs-decision:`
 #                          line, or, where config/wedge-defer-parked-gate
@@ -1685,9 +1691,16 @@ wait_record() {  # <kind> <subject> <whom> <action> <age-record>
 # so it is taken only behind a first fold read that finds some open
 # `needs-decision` at all, and only in the at-threshold branch - at most once per
 # window per STALE_ESCALATE_SECS, never on an ordinary poll.
+#
+# A finished lane waiting on its merge (ready_pr_merge_wait) is the third record
+# the threshold reads unconditionally, after the backlog hold: it reaches this
+# timer when a supervisor line after its delivery leaves the lane on the
+# non-terminal path, and its quiet is owed to whoever merges the PR. It is aged
+# from its status file, and every way the predicate comes back empty - a dead
+# endpoint included - keeps the unchanged schedule and the dead-record probe.
 WEDGE_BACKLOG_HOLD_KIND='captain hold'
-wedge_wait_evidence() {  # <task> -> one wait_record on stdout
-  local task=$1 last until statusf run verb
+wedge_wait_evidence() {  # <task> <window> -> one wait_record on stdout
+  local task=$1 win=$2 last until statusf run verb url
   [ -n "$task" ] || return 1
   statusf="$STATE/$task.status"
   last=$(status_declared_wait_line "$statusf")
@@ -1705,6 +1718,11 @@ wedge_wait_evidence() {  # <task> -> one wait_record on stdout
   if task_captain_call_open "$task"; then
     wait_record "$WEDGE_BACKLOG_HOLD_KIND" 'awaiting the captain - held in the backlog' \
       captain 'answer the held decision or release the hold' ''
+    return 0
+  fi
+  if url=$(ready_pr_merge_wait "$win" "$task"); then
+    wait_record 'finished lane' "awaiting the merge decision on $url" \
+      supervisor 'merge it once approved, or steer the worker if it needs changes' "$statusf"
     return 0
   fi
   if [ -e "$CONFIG/wedge-defer-worker-wait" ] && verb=$(status_worker_wait_verb "$statusf"); then
@@ -2214,7 +2232,7 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
             || { fm_epoch_seconds_to _wrb_now; printf '%s\n' "$_wrb_now" > "$since_file"; }
           return 0
         fi
-        if evidence=$(wedge_wait_evidence "$task") &&
+        if evidence=$(wedge_wait_evidence "$task" "$win") &&
            wedge_defer_wait "$win" "$since_file" "$label" "$age" "$evidence"; then
           return 0
         fi
@@ -3076,6 +3094,51 @@ captain_call_stale_bound() {  # <window-key> <task>
   stale_wait_throttled "$key" "$STALE_WAIT_DECLARATION"
 }
 
+# The merge wait of a finished ship lane, which no status line declares and no
+# backlog row records unless someone held it: the lane's newest crew-declared
+# event is a `done:` line naming the PR its metadata records as pr=, that PR's
+# merge poll is armed (fm_pr_poll_artifacts_valid; a merge the poll saw retires
+# it), its steering inbox holds no unhandled instruction, its endpoint reads
+# alive, and bin/fm-crew-state.sh reads it done. Anything short of all of that is
+# not this wait - a blocker, a newer worker line, an unrecorded or replaced PR, a
+# merged PR, an unread instruction, a dead, missing, or unverifiable endpoint, any
+# other current state - so it keeps its own alarm. Prints the registered PR URL.
+# The file reads run first; the endpoint probe and the current-state read are
+# spent only on a lane that already carries every file record.
+ready_pr_merge_wait() {  # <window> <task>
+  local win=$1 task=$2 statusf last verb note line
+  [ -n "$task" ] && [ "$(window_kind "$win")" = ship ] || return 1
+  statusf="$STATE/$task.status"
+  last=$(last_crew_status_line "$statusf")
+  status_line_verb "$last" verb
+  [ "$verb" = 'done' ] || return 1
+  # Also authenticates the poll against the metadata's pr= and sets FM_PR_META_URL.
+  fm_pr_poll_artifacts_valid "$STATE" "$task" "$SCRIPT_DIR/fm-pr-poll.sh" || return 1
+  status_line_note "$last" note
+  case " $note " in *" $FM_PR_META_URL "*) ;; *) return 1 ;; esac
+  ! fm_task_inbox_oldest_unhandled "$STATE" "$task" >/dev/null || return 1
+  [ "$(fm_backend_agent_alive "$(window_backend "$win")" "$win" 2>/dev/null || true)" = alive ] \
+    || return 1
+  line=$("$FM_CREW_STATE_BIN" "$task" 2>/dev/null) || return 1
+  case "$line" in 'state: done '*) ;; *) return 1 ;; esac
+  printf '%s\n' "$FM_PR_META_URL"
+}
+
+# The captain-call bound's cadence for a ready_pr_merge_wait lane nobody held.
+# Bound to the PR and the whole status-log signature, so a new status event, a
+# replaced PR, or a later hold (whose own declaration differs) each alarm first.
+# Callers consult it only while STALE_WAIT_DECLARATION is empty, so an open
+# captain call's first sight is never absorbed here. Same return contract as
+# captain_call_stale_bound; the caller records the throttle through
+# stale_wait_record once its own wake append has succeeded.
+ready_pr_stale_bound() {  # <window-key> <window> <task>
+  local key=$1 win=$2 task=$3 url
+  STALE_WAIT_DECLARATION=
+  url=$(ready_pr_merge_wait "$win" "$task") || return 1
+  STALE_WAIT_DECLARATION="ready-pr:$url:$(fm_wake_signal_sig "$STATE/$task.status" || true)"
+  stale_wait_throttled "$key" "$STALE_WAIT_DECLARATION"
+}
+
 # Surface a stale pane no classifier could resolve, so firstmate inspects it: it
 # may have finished through an interactive menu that wrote no status, be waiting on
 # a decision, or be wedged. pause_state_class deliberately answers `none` for a
@@ -3094,7 +3157,9 @@ captain_call_stale_bound() {  # <window-key> <task>
 # read after that wake was already appended, bounds nothing.
 # Both records of an ordinary crew wait bound it (see task_captain_call_open
 # above): the status line the worker declared, and the backlog hold firstmate
-# recorded once the captain took the work in hand.
+# recorded once the captain took the work in hand. A finished lane waiting on its
+# merge (ready_pr_merge_wait) takes the same bound when a supervisor line, such as
+# a `resolved` close, follows its delivery and so routes it here.
 surface_nonterminal_stale() {  # <window> <hash> [dialog-name]
   local win=$1 h=$2 dialog=${3-} key task last declared=1 bounded=1 throttled=1 until now reason=''
   key=$(window_key "$win")
@@ -3129,6 +3194,9 @@ surface_nonterminal_stale() {  # <window> <hash> [dialog-name]
       stale_wait_throttled "$key" "$STALE_WAIT_DECLARATION" && throttled=0
     fi
   elif captain_call_stale_bound "$key" "$task"; then
+    bounded=0
+    throttled=0
+  elif [ -z "$STALE_WAIT_DECLARATION" ] && ready_pr_stale_bound "$key" "$win" "$task"; then
     bounded=0
     throttled=0
   elif [ -z "$STALE_WAIT_DECLARATION" ] && unknown_alive_stale_bound "$win" "$task"; then
@@ -4675,6 +4743,14 @@ EOF
               wedge_episode_end "$key" 0 1
               clear_write_tracking "$key"
               triage_log "absorbed stale (open captain call already surfaced for this status): $w"
+            elif [ -z "$STALE_WAIT_DECLARATION" ] && ready_pr_stale_bound "$key" "$w" "$task"; then
+              # A finished lane waiting on its merge with nobody holding it: the
+              # same new-hash bound, keyed to its registered PR (ready_pr_merge_wait).
+              printf '%s' "$h" > "$sf"
+              # Pre-cap shape kept the count here (keep-count contract).
+              wedge_episode_end "$key" 0 1
+              clear_write_tracking "$key"
+              triage_log "absorbed stale (finished lane waiting on its merge already surfaced for this status): $w"
             else
               stale_reason=$(stale_reason_naming_dialog "stale: $w" "$dialog")
               fm_wake_append stale "$w" "$stale_reason" || exit 1

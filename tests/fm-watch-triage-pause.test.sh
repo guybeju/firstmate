@@ -622,16 +622,19 @@ make_hold_home() {  # <name> <status-line> <hold|nohold>
 # stdout: a command substitution would background the watcher inside a subshell,
 # leaving the caller unable to wait on or reap its own watcher.
 HOLD_WATCH_PID=
+# HOLD_CURRENT_COMMAND, HOLD_CREW_STATE, and HOLD_CHECK_INTERVAL let the
+# ready-PR cases below drive a live agent, a different current state, or the
+# merge poll through the same launch.
 hold_watch_launch() {  # <dir> <out> <capture>
   local dir=$1 out=$2 capture=$3
   PATH="$dir/fakebin:$PATH" FM_FAKE_TMUX_WINDOW=test:fm-held-merge \
-    FM_FAKE_TMUX_CAPTURE="$capture" FM_FAKE_TMUX_CURRENT_COMMAND=zsh \
-    FM_FAKE_CREW_STATE='state: stopped · source: pane · bare shell' \
+    FM_FAKE_TMUX_CAPTURE="$capture" FM_FAKE_TMUX_CURRENT_COMMAND="${HOLD_CURRENT_COMMAND:-zsh}" \
+    FM_FAKE_CREW_STATE="${HOLD_CREW_STATE:-state: stopped · source: pane · bare shell}" \
     FM_WATCH_HANDLING_SUCCESSOR=1 \
     FM_HOME="$dir" FM_DATA_OVERRIDE="$dir/data" FM_CONFIG_OVERRIDE="$dir/config" \
     FM_STATE_OVERRIDE="$dir/state" FM_CREW_STATE_BIN="$dir/fakebin/fm-crew-state.sh" \
     FM_PAUSE_RESURFACE_SECS="${FM_HOLD_PAUSE_RESURFACE_SECS:-999}" FM_POLL=1 FM_SIGNAL_GRACE=1 \
-    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" 2>&1 &
+    FM_CHECK_INTERVAL="${HOLD_CHECK_INTERVAL:-999999}" FM_HEARTBEAT=999999 "$WATCH" >> "$out" 2>&1 &
   HOLD_WATCH_PID=$!
 }
 
@@ -824,6 +827,309 @@ test_reheld_captain_call_starts_its_own_resurface_window() {
   [ "$wakes" -eq 1 ] \
     || fail "the second captain call produced $wakes first wakes instead of one"
   pass "a released-then-re-held task is a distinct captain call whose first sight still alarms"
+}
+
+
+# --- a finished lane waiting on its merge: pane churn must not re-alarm ------
+# A ship lane whose newest event is `done: PR <url>`, whose metadata records that
+# PR, and whose merge poll is armed is waiting on a human merge. Nothing in the
+# backlog says so when nobody held it, and parking may refuse it (a fork that
+# reports no CI is never green), so on the base watcher every new hash of its idle
+# live pane alarmed as a fresh captain-relevant stale. The bound pinned here gives
+# that lane the captain-call cadence: first sight alarms, churn inside the window
+# is absorbed, and the window's end alarms once more. Every case beside it keeps
+# alarming, so the bound only covers the exact quiet wait it names.
+READY_PR_URL=https://github.com/example/repo/pull/7
+
+# Publish a real merge poll through bin/fm-pr-lib.sh, the owner of what an armed
+# poll is, rather than hand-writing its artifacts.
+arm_ready_pr_poll() {  # <state> <task> <url>
+  bash -c '
+    . "$1/bin/fm-pr-lib.sh" || exit 1
+    fm_pr_url_parse "$4" || exit 1
+    fm_pr_poll_prepare "$2" "$3" "$FM_PR_PROVIDER" "$4" "$FM_PR_HOST" "$FM_PR_PATH" \
+      "$FM_PR_NUMBER" "$1/bin/fm-pr-poll.sh" || exit 1
+    fm_pr_poll_publish_prepared
+  ' _ "$ROOT" "$1" "$2" "$3"
+}
+
+# A hold fixture plus the PR evidence a ready lane carries. The check sweep is
+# marked as just run and every forge or pipeline CLI the merge path can reach is
+# faked and logged, so no read leaves the machine.
+make_ready_pr_home() {  # <name> <status-line> <hold|nohold> <pr|nopr> <poll|nopoll>
+  local name=$1 line=$2 hold=$3 pr=$4 poll=$5 dir state tool
+  dir=$(make_hold_home "$name" "$line" "$hold") || return 1
+  state="$dir/state"
+  for tool in gh gh-axi glab no-mistakes; do
+    cat > "$dir/fakebin/$tool" <<SH
+#!/usr/bin/env bash
+printf '%s %s\n' "$tool" "\$*" >> "$dir/fake-cli.log"
+[ "$tool" = gh ] && [ -n "\${FM_FAKE_GH_OUT:-}" ] && { printf '%s\n' "\$FM_FAKE_GH_OUT"; exit 0; }
+exit 1
+SH
+    chmod +x "$dir/fakebin/$tool"
+  done
+  touch "$state/.last-check"
+  if [ "$pr" = pr ]; then
+    printf 'pr=%s\n' "$READY_PR_URL" >> "$state/held-merge.meta"
+  fi
+  if [ "$poll" = poll ]; then
+    arm_ready_pr_poll "$state" held-merge "$READY_PR_URL" || return 1
+  fi
+  printf '%s\n' "$dir"
+}
+
+READY_PR_DONE_STATE="state: done · source: status-log · PR $READY_PR_URL"
+
+# Both shapes a ready lane's log takes: the delivery as its newest event, which
+# routes through the captain-relevant stale branch, and the delivery followed by
+# a supervisor's `resolved` line, which routes through the inconclusive one.
+test_ready_pr_lane_bounds_stale_churn() {
+  local spec name line dir state out capture throttle wakes
+  local HOLD_CURRENT_COMMAND=grok HOLD_CREW_STATE=$READY_PR_DONE_STATE
+  command -v tasks-axi >/dev/null 2>&1 || fail "tasks-axi is required (ready PR stale bound)"
+  for spec in \
+    "ready-pr|done [at=1794900000]: PR $READY_PR_URL" \
+    "ready-pr-resolved|done: PR $READY_PR_URL"$'\n'"resolved [key=merge-question]: answered"
+  do
+    name=${spec%%|*}; line=${spec#*|}
+    dir=$(make_ready_pr_home "$name" "$line" nohold pr poll) \
+      || fail "[$name] could not build a ready-PR fixture"
+    state="$dir/state"; out="$dir/watch.out"; capture="$dir/pane.txt"
+    throttle="$state/.paused-resurfaced-$(hold_key)"
+
+    hold_watch_surface "$dir" "$out" "$capture" 'idle, elapsed 1s' \
+      || fail "[$name] first sight of a ready-PR lane did not surface"
+    wakes=$(hold_stale_wakes "$state")
+    [ "$wakes" -eq 1 ] || fail "[$name] first sight produced $wakes wakes instead of one"
+    ack_stopped_cycle "$state" || fail "[$name] could not acknowledge the first surface"
+
+    hold_watch_churn "$dir" "$out" "$capture" 'idle, tick' 2 \
+      || fail "[$name] a ready-PR lane re-alarmed on pane churn instead of waiting for its merge: $(cat "$out")"
+    wakes=$(hold_stale_wakes "$state")
+    [ "$wakes" -eq 0 ] || fail "[$name] pane churn re-alarmed a ready-PR lane $wakes time(s) inside the window"
+
+    [ -e "$throttle" ] || fail "[$name] the absorbed churn recorded no re-surface cadence"
+    case "$(cat "$throttle")" in
+      "ready-pr:$READY_PR_URL:"*) ;;
+      *) fail "[$name] the throttle is not bound to the registered PR: $(cat "$throttle")" ;;
+    esac
+    [ ! -e "$state/.paused-$(hold_key)" ] || fail "[$name] a ready-PR lane was dressed up as a declared pause"
+    set_mtime "$(( $(date +%s) - 5000 ))" "$throttle"
+    hold_watch_surface "$dir" "$out" "$capture" 'idle, elapsed 9s' \
+      || fail "[$name] a ready-PR lane did not re-surface once its window elapsed"
+    wakes=$(hold_stale_wakes "$state")
+    [ "$wakes" -eq 1 ] || fail "[$name] the elapsed window produced $wakes wakes instead of one"
+  done
+  pass "a finished lane waiting on its merge surfaces once, absorbs pane churn, then re-surfaces on the long cadence"
+}
+
+# The resolved-after-delivery shape keeps a still pane on the non-terminal path,
+# where the wedge timer runs. Its quiet is the merge wait, so the threshold defers
+# it to the long cadence instead of escalating a possible wedge every
+# STALE_ESCALATE_SECS, and once the status line is older than the cadence the
+# deferral rechecks it naming the merge decision; with the endpoint gone the same
+# pane still escalates.
+test_ready_pr_resolved_lane_defers_the_wedge_ladder() {
+  local spec name cmd dir state out capture cycle
+  local HOLD_CURRENT_COMMAND HOLD_CREW_STATE=$READY_PR_DONE_STATE FM_HOLD_PAUSE_RESURFACE_SECS
+  command -v tasks-axi >/dev/null 2>&1 || fail "tasks-axi is required (ready PR wedge deferral)"
+  for spec in live:grok recheck:grok dead:zsh; do
+    name=${spec%%:*}; cmd=${spec#*:}
+    FM_HOLD_PAUSE_RESURFACE_SECS=999
+    HOLD_CURRENT_COMMAND=grok
+    dir=$(make_ready_pr_home "ready-wedge-$name" \
+      "done: PR $READY_PR_URL"$'\n'"resolved [key=merge-question]: answered" nohold pr poll) \
+      || fail "[$name] could not build the fixture"
+    state="$dir/state"; out="$dir/watch.out"; capture="$dir/pane.txt"
+    hold_watch_surface "$dir" "$out" "$capture" 'idle, elapsed 1s' || fail "[$name] no first sight"
+    ack_stopped_cycle "$state" || fail "[$name] could not acknowledge the first sight"
+    : > "$out"
+    HOLD_CURRENT_COMMAND=$cmd
+    [ "$name" != recheck ] || FM_HOLD_PAUSE_RESURFACE_SECS=2
+    FM_STALE_ESCALATE_SECS=2 hold_watch_launch "$dir" "$out" "$capture"
+    if [ "$name" = recheck ]; then
+      wait_for_exit "$HOLD_WATCH_PID" 150 \
+        || { reap "$HOLD_WATCH_PID"; fail "[$name] the deferred merge wait was never rechecked"; }
+      [ "$(hold_stale_wakes "$state")" -eq 1 ] || fail "[$name] the recheck was not exactly one wake"
+      grep -F "awaiting the merge decision on $READY_PR_URL" "$out" >/dev/null \
+        || fail "[$name] the recheck did not name the merge decision: $(cat "$out")"
+      grep -F "possible wedge" "$out" >/dev/null && fail "[$name] the merge wait was escalated as a wedge"
+    elif [ "$name" = live ]; then
+      cycle=0
+      while [ "$cycle" -lt 8 ]; do
+        wait_poll_cycle "$state" "$HOLD_WATCH_PID" 300 \
+          || fail "[$name] a still ready-PR pane escalated past the wedge threshold: $(cat "$out")"
+        cycle=$((cycle + 1))
+      done
+      reap "$HOLD_WATCH_PID"
+      [ "$(hold_stale_wakes "$state")" -eq 0 ] || fail "[$name] the wedge threshold queued a wake"
+    else
+      wait_for_exit "$HOLD_WATCH_PID" 150 \
+        || { reap "$HOLD_WATCH_PID"; fail "[$name] a dead endpoint on a ready-PR lane stayed silent"; }
+      [ "$(hold_stale_wakes "$state")" -eq 1 ] || fail "[$name] a dead endpoint raised no stale wake"
+    fi
+  done
+  pass "a still ready-PR pane defers the wedge ladder while live and still escalates once its endpoint is gone"
+}
+
+# Each case lacks exactly one piece of the ready-PR evidence, so each must keep
+# alarming on every new hash exactly as before the bound.
+test_ready_pr_bound_needs_every_piece_of_evidence() {
+  local spec name line pr poll cmd crew dir state out capture round wakes
+  local HOLD_CURRENT_COMMAND HOLD_CREW_STATE
+  command -v tasks-axi >/dev/null 2>&1 || fail "tasks-axi is required (ready PR evidence)"
+  for spec in \
+    "no-pr|done: PR $READY_PR_URL|nopr|nopoll|grok|$READY_PR_DONE_STATE" \
+    "no-poll|done: PR $READY_PR_URL|pr|nopoll|grok|$READY_PR_DONE_STATE" \
+    "not-done|done: PR $READY_PR_URL|pr|poll|grok|state: blocked · source: status-log · head not pushed" \
+    "dead-endpoint|done: PR $READY_PR_URL|pr|poll|zsh|$READY_PR_DONE_STATE" \
+    "other-pr|done: PR https://github.com/example/repo/pull/8|pr|poll|grok|$READY_PR_DONE_STATE" \
+    "blocked-line|blocked: PR $READY_PR_URL needs a rebase|pr|poll|grok|$READY_PR_DONE_STATE" \
+    "scout|done: PR $READY_PR_URL|pr|poll|grok|$READY_PR_DONE_STATE"
+  do
+    IFS='|' read -r name line pr poll cmd crew <<EOF
+$spec
+EOF
+    HOLD_CURRENT_COMMAND=$cmd; HOLD_CREW_STATE=$crew
+    dir=$(make_ready_pr_home "ready-$name" "$line" nohold "$pr" "$poll") \
+      || fail "[$name] could not build the fixture"
+    state="$dir/state"; out="$dir/watch.out"; capture="$dir/pane.txt"
+    if [ "$name" = scout ]; then
+      sed 's/^kind=ship$/kind=scout/' "$state/held-merge.meta" > "$state/held-merge.meta.tmp" \
+        && mv "$state/held-merge.meta.tmp" "$state/held-merge.meta"
+    fi
+    round=1
+    while [ "$round" -le 2 ]; do
+      hold_watch_surface "$dir" "$out" "$capture" "idle, elapsed ${round}s" \
+        || fail "[$name] stopped alarming on round $round"
+      wakes=$(hold_stale_wakes "$state")
+      [ "$wakes" -eq 1 ] || fail "[$name] round $round produced $wakes wakes instead of one"
+      ack_stopped_cycle "$state" || fail "[$name] could not acknowledge round $round"
+      round=$((round + 1))
+    done
+  done
+  pass "a lane missing any piece of the ready-PR evidence keeps alarming on every new hash"
+}
+
+# New information about a bounded lane is never absorbed: a new status line from
+# the worker, an unread steering instruction, and a merge the poll sees.
+test_ready_pr_bound_still_surfaces_new_information() {
+  local dir state out capture
+  local HOLD_CURRENT_COMMAND=grok HOLD_CREW_STATE=$READY_PR_DONE_STATE HOLD_CHECK_INTERVAL
+  command -v tasks-axi >/dev/null 2>&1 || fail "tasks-axi is required (ready PR new information)"
+
+  dir=$(make_ready_pr_home ready-new-status "done: PR $READY_PR_URL" nohold pr poll) \
+    || fail "could not build the new-status fixture"
+  state="$dir/state"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  hold_watch_surface "$dir" "$out" "$capture" 'idle, elapsed 1s' || fail "new-status: no first sight"
+  ack_stopped_cycle "$state" || fail "new-status: could not acknowledge the first sight"
+  printf 'working: addressing review feedback\n' >> "$state/held-merge.status"
+  hold_watch_surface "$dir" "$out" "$capture" 'busy again' \
+    || fail "a new worker status line on a ready-PR lane was absorbed"
+  [ -s "$state/.wake-queue" ] || fail "a new worker status line queued no wake"
+  ack_stopped_cycle "$state" || fail "new-status: could not acknowledge the status wake"
+
+  dir=$(make_ready_pr_home ready-steer "done: PR $READY_PR_URL" nohold pr poll) \
+    || fail "could not build the steer fixture"
+  state="$dir/state"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  hold_watch_surface "$dir" "$out" "$capture" 'idle, elapsed 1s' || fail "steer: no first sight"
+  ack_stopped_cycle "$state" || fail "steer: could not acknowledge the first sight"
+  FM_STATE_OVERRIDE="$state" bash -c '. "$1/bin/fm-task-inbox-lib.sh"; fm_task_inbox_write "$2" held-merge "rebase onto carry"' \
+    _ "$ROOT" "$state" >/dev/null || fail "could not write the steering instruction"
+  hold_watch_surface "$dir" "$out" "$capture" 'idle, tick 1' \
+    || fail "a ready-PR lane with an unread steering instruction was absorbed"
+  [ "$(hold_stale_wakes "$state")" -ge 1 ] || fail "an unread steering instruction raised no stale wake"
+  ack_stopped_cycle "$state" || fail "steer: could not acknowledge the steer wake"
+
+  dir=$(make_ready_pr_home ready-merged "done: PR $READY_PR_URL" nohold pr poll) \
+    || fail "could not build the merged fixture"
+  state="$dir/state"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  hold_watch_surface "$dir" "$out" "$capture" 'idle, elapsed 1s' || fail "merged: no first sight"
+  ack_stopped_cycle "$state" || fail "merged: could not acknowledge the first sight"
+  hold_watch_churn "$dir" "$out" "$capture" 'idle, tick' 1 || fail "merged: churn was not absorbed"
+  rm -f "$state/.last-check"
+  HOLD_CHECK_INTERVAL=1
+  FM_FAKE_GH_OUT=MERGED hold_watch_surface "$dir" "$out" "$capture" 'idle, tick 9' \
+    || fail "the merge poll's merged result did not surface on a bounded ready-PR lane"
+  grep -F "check: $state/held-merge.check.sh: merged" "$out" >/dev/null \
+    || fail "the bounded ready-PR lane did not report its merge: $(cat "$out")"
+  grep -F "gh pr view $READY_PR_URL" "$dir/fake-cli.log" >/dev/null \
+    || fail "the merge poll did not read through the faked gh"
+  HOLD_CHECK_INTERVAL=
+
+  # A failing check after the ready report, which the poll reports where the
+  # home watches for it.
+  dir=$(make_ready_pr_home ready-degraded "done: PR $READY_PR_URL" nohold pr poll) \
+    || fail "could not build the degraded fixture"
+  state="$dir/state"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  : > "$dir/config/pr-degraded-watch"
+  hold_watch_surface "$dir" "$out" "$capture" 'idle, elapsed 1s' || fail "degraded: no first sight"
+  ack_stopped_cycle "$state" || fail "degraded: could not acknowledge the first sight"
+  hold_watch_churn "$dir" "$out" "$capture" 'idle, tick' 1 || fail "degraded: churn was not absorbed"
+  rm -f "$state/.last-check"
+  HOLD_CHECK_INTERVAL=1
+  FM_FAKE_GH_OUT="degraded head=$(printf 'a%.0s' $(seq 40)) jobs=ci:FAILURE url=https://example.invalid/run/1" \
+    hold_watch_surface "$dir" "$out" "$capture" 'idle, tick 9' \
+    || fail "a failing check did not surface on a bounded ready-PR lane"
+  grep -F "check: PR $READY_PR_URL degraded after ready: degraded head=" "$out" >/dev/null \
+    || fail "the bounded ready-PR lane did not report its failing check: $(cat "$out")"
+  HOLD_CHECK_INTERVAL=
+
+  # A hold placed after the bound took the lane is a new captain call whose first
+  # sight must alarm, not inherit the ready-PR silence.
+  dir=$(make_ready_pr_home ready-later-hold "done: PR $READY_PR_URL" nohold pr poll) \
+    || fail "could not build the later-hold fixture"
+  state="$dir/state"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  hold_watch_surface "$dir" "$out" "$capture" 'idle, elapsed 1s' || fail "later-hold: no first sight"
+  ack_stopped_cycle "$state" || fail "later-hold: could not acknowledge the first sight"
+  hold_watch_churn "$dir" "$out" "$capture" 'idle, tick' 1 || fail "later-hold: churn was not absorbed"
+  run_hold "$dir" hold held-merge --reason 'awaiting the captain on the merge' \
+    || fail "later-hold: could not hold the task"
+  hold_watch_surface "$dir" "$out" "$capture" 'idle, tick 9' \
+    || fail "a hold placed on a bounded ready-PR lane inherited its silence"
+  [ "$(hold_stale_wakes "$state")" -eq 1 ] || fail "the later hold's first sight was not exactly one wake"
+  pass "a bounded ready-PR lane still surfaces a new status line, an unread instruction, its merge, a failing check, and a later hold"
+}
+
+# The ready-PR evidence does not change a lane another wait already owns: a held
+# lane stays on the captain-call bound, and a paused lane on its declared wait.
+test_ready_pr_evidence_leaves_held_and_paused_lanes_unchanged() {
+  local spec name line hold prefix dir state out capture throttle
+  local HOLD_CURRENT_COMMAND=grok HOLD_CREW_STATE=$READY_PR_DONE_STATE
+  command -v tasks-axi >/dev/null 2>&1 || fail "tasks-axi is required (ready PR held and paused)"
+  for spec in \
+    "held|done: PR $READY_PR_URL|hold|captain-hold:" \
+    "paused|paused: waiting for the release window|nohold|declared:"
+  do
+    IFS='|' read -r name line hold prefix <<EOF
+$spec
+EOF
+    dir=$(make_ready_pr_home "ready-owned-$name" "$line" "$hold" pr poll) \
+      || fail "[$name] could not build the fixture"
+    state="$dir/state"; out="$dir/watch.out"; capture="$dir/pane.txt"
+    throttle="$state/.paused-resurfaced-$(hold_key)"
+    hold_watch_surface "$dir" "$out" "$capture" 'idle, elapsed 1s' || fail "[$name] no first sight"
+    [ "$(hold_stale_wakes "$state")" -eq 1 ] || fail "[$name] first sight was not exactly one wake"
+    ack_stopped_cycle "$state" || fail "[$name] could not acknowledge the first sight"
+    hold_watch_churn "$dir" "$out" "$capture" 'idle, tick' 2 || fail "[$name] churn was not absorbed: $(cat "$out")"
+    [ "$(hold_stale_wakes "$state")" -eq 0 ] || fail "[$name] churn re-alarmed"
+    case "$(cat "$throttle" 2>/dev/null)" in
+      "$prefix"*) ;;
+      *) fail "[$name] the lane left its own wait for another bound: $(cat "$throttle" 2>/dev/null)" ;;
+    esac
+  done
+
+  # An idle secondmate stays outside the stale path whatever its records say.
+  dir=$(make_ready_pr_home ready-owned-secondmate "done: PR $READY_PR_URL" nohold pr poll) \
+    || fail "[secondmate] could not build the fixture"
+  state="$dir/state"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  sed 's/^kind=ship$/kind=secondmate/' "$state/held-merge.meta" > "$state/held-merge.meta.tmp" \
+    && mv "$state/held-merge.meta.tmp" "$state/held-merge.meta"
+  hold_watch_churn "$dir" "$out" "$capture" 'idle, tick' 2 \
+    || fail "[secondmate] an idle secondmate with ready-PR records surfaced: $(cat "$out")"
+  [ "$(hold_stale_wakes "$state")" -eq 0 ] || fail "[secondmate] an idle secondmate raised a stale wake"
+  pass "ready-PR evidence leaves a held lane on its captain call, a paused lane on its declared wait, and a secondmate exempt"
 }
 
 
@@ -2054,6 +2360,11 @@ fm_test_run \
   test_stale_churn_without_a_captain_call_still_alarms \
   test_failed_wake_append_does_not_arm_the_captain_hold_throttle \
   test_reheld_captain_call_starts_its_own_resurface_window \
+  test_ready_pr_lane_bounds_stale_churn \
+  test_ready_pr_resolved_lane_defers_the_wedge_ladder \
+  test_ready_pr_bound_needs_every_piece_of_evidence \
+  test_ready_pr_bound_still_surfaces_new_information \
+  test_ready_pr_evidence_leaves_held_and_paused_lanes_unchanged \
   test_secondmate_paused_resurfaces_in_normal_mode \
   test_secondmate_captain_held_resurfaces_in_normal_mode \
   test_secondmate_nonpaused_stale_remains_suppressed \
