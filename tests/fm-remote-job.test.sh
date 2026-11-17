@@ -1652,7 +1652,7 @@ pass "a second worker defers to a live lock owner under a mkdir that reports suc
 EXCL_JOB=$(env FM_REMOTE_JOB_STATE_ROOT="$EXCL_STATE" FM_REMOTE_JOB_QUEUE_TIMEOUT=60 \
   FM_REMOTE_JOB_TIMEOUT=30 bash -c '
   . "$1"
-  fm_remote_job_stage "$2" "$3" "$4" fm-append-job.sh "$5" 3 </dev/null >/dev/null || exit 1
+  fm_remote_job_stage "$2" "$3" "$4" fm-append-job.sh "$5" 5 </dev/null >/dev/null || exit 1
   printf "%s\n" "$FM_REMOTE_JOB_ID"
 ' _ "$ROOT/bin/fm-remote-job-lib.sh" "$EXCL_HOME" "$EXCL_ROOT" "$REMOTE_HOME" "$EXCL_RUNS") \
   || fail "could not stage the exclusive-claim job"
@@ -1670,9 +1670,14 @@ for _ in $(seq 1 200); do
   sleep 0.05
 done
 assert_present "$EXCL_RUNS" "neither racing lane started the claimed job"
+# The job sleeps 5 s after writing its run line, so any done state read while under 3 s
+# of whole-second clock have passed since that line appeared was published early.
 EXCL_EARLY=
-for _ in $(seq 1 40); do
-  if [ "$(fm_remote_job_read_state "$EXCL_STATE/jobs/$EXCL_JOB")" = 'done' ]; then
+EXCL_EARLY_END=$((SECONDS + 3))
+while :; do
+  EXCL_EARLY_STATE=$(fm_remote_job_read_state "$EXCL_STATE/jobs/$EXCL_JOB")
+  [ "$SECONDS" -lt "$EXCL_EARLY_END" ] || break
+  if [ "$EXCL_EARLY_STATE" = 'done' ]; then
     EXCL_EARLY=$(cat "$EXCL_STATE/jobs/$EXCL_JOB/exit" 2>/dev/null || true)
     break
   fi
