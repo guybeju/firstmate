@@ -363,7 +363,10 @@
 #   set (its header owns the refusal). A secondmate runs in its own home and is
 #   not marked.
 #   Only after this isolation check, every fresh ship or scout requires a clean
-#   task worktree. When an origin configuration is detected, spawn fetches it,
+#   task worktree. A clean copy still carrying a former secondmate home's marker
+#   is then cleared of that home's private paths, or refused untouched while a
+#   registry binds a home to it (spawn_clear_drawn_copy_secondmate_leftovers).
+#   When an origin configuration is detected, spawn fetches it,
 #   resolves the current remote default branch (or uses --base-branch, described
 #   above), and resets to its tip. A home that creates the default-off
 #   config/spawn-base-primary-checkout flag (docs/configuration.md) instead
@@ -4803,13 +4806,17 @@ spawn_base_from_primary_checkout() { # <worktree> <project> <default> <origin-re
 # (bin/fm-secondmate-home-paths-lib.sh owns the list). Only a copy carrying a
 # marker is treated as a former home; those exact paths are then cleared before
 # any worker sees the copy. Clearing rather than refusing keeps the pool usable:
-# a refused copy is handed out again by the next draw, and retirement already
-# treats these paths as disposable. The copy is refused and left untouched
-# instead when this home's secondmate registry, or the local parent home's
-# registry its parent marker names, still binds a home to it, or when a listed
-# path holds tracked files or sits under a symlinked directory. The caller has
-# already proven the copy free of uncommitted work, and nothing here touches
-# commits, branches, or tracked files.
+# on most backends a refused copy goes back to the pool and can be drawn again,
+# and retirement already treats these paths as disposable. The copy is refused
+# and left untouched instead when this home's secondmate registry, or the local
+# parent home's registry its parent marker names, still binds a home to it, or
+# when a listed path holds tracked files or sits under a symlinked directory.
+# A parent marker
+# that is unparseable or names a remote parent adds no registry to check: a live
+# local home always carries a valid local one, and a remote home is a separate
+# clone that never sits in this pool. The caller has already proven the copy
+# free of uncommitted work, and nothing here touches commits, branches, or
+# tracked files.
 spawn_clear_drawn_copy_secondmate_leftovers() { # <worktree>; 1 when refused
   local worktree=$1 copy present bound name
   fm_secondmate_home_has_marker "$worktree" || return 0
