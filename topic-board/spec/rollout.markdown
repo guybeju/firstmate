@@ -50,9 +50,9 @@
 - R-2 通過：遠端的 secondmate 回報 `pwd` 是它的 home，`bin/fm-topic.sh --help` 印出用法，跑的是 home 的 `bin/`，commit 與 code root 相同。
 - R-3 通過：在 Mac 上 `git fetch origin carry` 走 https，exit 0。
 - R-4 作廢：這一列假設「合併有衝突代表 fork 改到了上游的檔案」。fleet 之後在 `carry` 上改了上游的檔案（fork 的 PR 20 到 24、26），衝突不再代表看板違反只新增。上游合併改由 fleet 負責，見下一節。
-- R-5 通過：28 個 PR 的 base 都是 fork 的 `carry`。
+- R-5 通過：每個 PR 的 base 都是 fork 的 `carry`。
 - R-6 通過：Mac 的 home 的 `origin` 是它的 code root 的路徑。
-- R-7：還沒有結果。
+- R-7 驗了一半：暫時的 home 裡 `order` 照佇列的順序列出可派的項目，待辦的列為該 hold；真的派到容量滿的那一半沒有驗，見 [handover](handover.markdown) 第 3 節。
 
 ## 之後怎麼更新
 
