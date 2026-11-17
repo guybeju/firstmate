@@ -120,6 +120,22 @@ test_ledger_delta_and_continuity() {
   pass "ledger reads are incremental, verbatim, and detect a rewritten ledger"
 }
 
+# A ledger far larger than one read: whatever feeds the first piece is cut off
+# mid-write when the piece is full, and that must not fail the read.
+test_a_very_large_ledger_can_be_read() {
+  local home ledger out
+  home=$(tb_make_home read-huge)
+  ledger="$home/state/fleet-ledger.jsonl"
+  awk 'BEGIN { for (i = 0; i < 60000; i++) printf "{\"v\":1,\"ts\":\"t\",\"event\":\"task.status\",\"task\":\"t%d\",\"pad\":\"%0100d\"}\n", i, 0 }' > "$ledger"
+  out=$(read_board "$home" 0 -) || fail "the first read of a very large ledger failed"
+  assert_equals 'delta|true' "$(printf '%s' "$out" | jq -r '.ledger | "\(.status)|\(.more)"')" \
+    "the first read must return a piece and say there is more"
+  awk 'BEGIN { printf "{\"pad\":\"%0400000d\"}\n", 0; for (i = 0; i < 60000; i++) printf "{\"pad\":\"%0100d\"}\n", 0 }' > "$ledger"
+  out=$(read_board "$home" 0 -) || fail "reading a line longer than one piece, with much more after it, failed"
+  assert_equals 1 "$(printf '%s' "$out" | jq -r '.ledger.lines | length')" "the over-long line must come back whole, by itself"
+  pass "a ledger many times the size of one read is still read"
+}
+
 test_large_ledger_is_read_in_bounded_pieces() {
   local home ledger out offset sha total=0 rounds=0 lines
   home=$(tb_make_home read-large)
@@ -202,5 +218,6 @@ test_a_spawn_seeded_worker_is_unstarted() {
 }
 
 fm_test_run test_first_read_reports_the_whole_home test_ledger_delta_and_continuity \
-  test_large_ledger_is_read_in_bounded_pieces test_secondmates_and_in_home test_usage_and_failure \
+  test_a_very_large_ledger_can_be_read test_large_ledger_is_read_in_bounded_pieces \
+  test_secondmates_and_in_home test_usage_and_failure \
   test_a_spawn_seeded_worker_is_unstarted

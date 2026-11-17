@@ -61,6 +61,13 @@ file_size() {
   wc -c < "$1" | tr -d ' '
 }
 
+# Print <file> from byte <offset> on. The reader takes only the first piece and
+# then closes the pipe, which kills tail mid-write; that is expected, and must
+# not fail the pipeline under pipefail.
+ledger_from() {
+  tail -c "+$(($1 + 1))" "$2" 2>/dev/null || true
+}
+
 # Write the ledger section of the output to <out-file>.
 ledger_section() {
   local offset=$1 prefix=$2 out=$3 ledger="$STATE/fleet-ledger.jsonl"
@@ -76,14 +83,14 @@ ledger_section() {
     return 0
   fi
   remaining=$((size - offset))
-  tail -c "+$((offset + 1))" "$ledger" | head -c "$LEDGER_MAX_BYTES" > "$WORK/chunk"
+  ledger_from "$offset" "$ledger" | head -c "$LEDGER_MAX_BYTES" > "$WORK/chunk"
   newlines=$(wc -l < "$WORK/chunk" | tr -d ' ')
   if [ "$newlines" -gt 0 ]; then
     head -n "$newlines" "$WORK/chunk" > "$WORK/lines"
   elif [ "$remaining" -gt "$LEDGER_MAX_BYTES" ]; then
     # One line longer than the cap: return that single line whole when it is
     # already terminated, so the reader can never get stuck in front of it.
-    tail -c "+$((offset + 1))" "$ledger" | head -n 1 > "$WORK/lines"
+    ledger_from "$offset" "$ledger" | head -n 1 > "$WORK/lines"
     [ "$(tail -c 1 "$WORK/lines" | wc -l | tr -d ' ')" -eq 1 ] || : > "$WORK/lines"
   else
     : > "$WORK/lines"
