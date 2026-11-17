@@ -2526,10 +2526,12 @@ TH
   expect_code 0 "$rc" "pooled t3code secondmate teardown should succeed"$'\n'"$out"
   [ "$(cat "$CASE_DIR/return.log" 2>/dev/null)" = provider-gone ] \
     || fail "the slot must be returned exactly once, after the provider process ended and without the T3 environment, got '$(cat "$CASE_DIR/return.log" 2>/dev/null)'"$'\n'"$out"
-  [ "$(t3_json_field "$home/.claude/settings.local.json" 'JSON.stringify(d)')" = '{"permissions":{"allow":["Bash(ls:*)"]},"env":{"CAPTAIN_VAR":"keep"}}' ] \
-    || fail "the home's own settings must survive while Firstmate's keys leave, got '$(cat "$home/.claude/settings.local.json")'"
+  # The returned slot goes to the next holder, so the retired home's own rules
+  # leave with it (bin/fm-secondmate-home-paths-lib.sh).
+  [ ! -e "$home/.claude/settings.local.json" ] \
+    || fail "the returned slot must not hand the retired home's permission rules on, got '$(cat "$home/.claude/settings.local.json")'"
   [ -e "$CONFIG/t3code-token" ] || fail "removing the home's credential link must leave the primary's credential"
-  pass "fm-teardown.sh backend=t3code pooled secondmate: the slot returns only after the provider ended, without the T3 environment the spawn wrote"
+  pass "fm-teardown.sh backend=t3code pooled secondmate: the slot returns only after the provider ended, without the T3 environment the spawn wrote or the home's own settings"
 }
 
 # A T3 secondmate torn down as the child of another secondmate goes through

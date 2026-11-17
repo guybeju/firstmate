@@ -575,6 +575,26 @@ test_tracked_private_path_is_refused() {
   pass "a drawn copy whose listed private path holds tracked files is refused untouched"
 }
 
+test_symlinked_settings_local_is_refused() {
+  local rec id out status outside
+  id='pool-symlinked-settings-r1'
+  rec=$(make_case symlinked-settings "$id")
+  read_case_record "$rec"
+  plant_secondmate_leftovers "$POOL_DIR" "$CASE_DIR/old-parent"
+  outside="$CASE_DIR/outside-settings.json"
+  mv "$POOL_DIR/.claude/settings.local.json" "$outside"
+  ln -s "$outside" "$POOL_DIR/.claude/settings.local.json"
+
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn launched into a copy whose settings.local.json is a symlink"
+  assert_contains "$out" ".claude/settings.local.json is a symlink" "spawn did not name the symlinked settings file"
+  [ -L "$POOL_DIR/.claude/settings.local.json" ] && [ -f "$outside" ] \
+    || fail "spawn removed the symlinked settings file or its target"
+  assert_leftovers_kept "$POOL_DIR" "spawn removed some leftovers before refusing the symlinked settings file"
+  pass "a drawn copy whose .claude/settings.local.json is a symlink is refused untouched"
+}
+
 test_unresolved_remote_default_refuses_pool() {
   local rec id out status before
   id='pool-unresolved-default-r5'
@@ -1535,6 +1555,7 @@ test_drawn_copy_without_marker_keeps_ignored_paths
 test_dirty_drawn_copy_keeps_secondmate_leftovers
 test_registered_home_copy_is_refused_untouched
 test_tracked_private_path_is_refused
+test_symlinked_settings_local_is_refused
 test_unresolved_remote_default_refuses_pool
 test_unreachable_origin_refuses_stale_pool_base
 test_originless_pool_launches_without_a_freshness_fetch

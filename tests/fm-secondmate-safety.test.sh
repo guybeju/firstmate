@@ -1762,41 +1762,94 @@ test_home_seed_rollback_clears_its_writes_from_leased_slot() {
   pass "a rolled-back seed removes only what it wrote into its leased slot"
 }
 
-# A listed private path reached through a symlinked directory is outside the
-# home, so retirement must refuse rather than stage the target away.
-test_secondmate_teardown_refuses_symlinked_private_parent() {
-  local home subhome subhome_abs fakebin log fmroot err rc outside
-  home="$TMP_ROOT/teardown-symlink-home"
-  subhome="$TMP_ROOT/teardown-symlink-subhome"
-  fmroot="$TMP_ROOT/teardown-symlink-fmroot"
-  outside="$TMP_ROOT/teardown-symlink-outside"
-  err="$TMP_ROOT/teardown-symlink.err"
-  make_firstmate_git_root "$fmroot"
-  git -C "$fmroot" worktree add --quiet --detach "$subhome" HEAD
-  mkdir -p "$home/state" "$home/data" "$subhome/state" "$outside"
-  printf 'domain\n' > "$subhome/.fm-secondmate-home"
-  printf '{"permissions":{}}\n' > "$outside/settings.local.json"
-  ln -s "$outside" "$subhome/.claude"
-  subhome_abs=$(cd "$subhome" && pwd -P)
-  fm_write_secondmate_meta "$home/state/domain.meta" "$subhome"
-  printf '%s\n' '- domain - design domain (home: '"$subhome"'; scope: design domain; projects: ; added 2026-06-22)' > "$home/data/secondmates.md"
-  fakebin=$(make_fake_tmux "$TMP_ROOT/teardown-symlink-fake")
-  log="$TMP_ROOT/teardown-symlink-fake/tmux.log"
+# A listed private path reached through a symlink is outside the home, so
+# retirement must refuse rather than stage the target away: a symlinked .claude/
+# directory, or a .claude/settings.local.json that is itself a symlink.
+test_secondmate_teardown_refuses_symlinked_private_path() {
+  local shape home subhome subhome_abs fakebin log fmroot err rc outside link
+  for shape in directory file; do
+    home="$TMP_ROOT/teardown-symlink-$shape-home"
+    subhome="$TMP_ROOT/teardown-symlink-$shape-subhome"
+    fmroot="$TMP_ROOT/teardown-symlink-$shape-fmroot"
+    outside="$TMP_ROOT/teardown-symlink-$shape-outside"
+    err="$TMP_ROOT/teardown-symlink-$shape.err"
+    make_firstmate_git_root "$fmroot"
+    git -C "$fmroot" worktree add --quiet --detach "$subhome" HEAD
+    mkdir -p "$home/state" "$home/data" "$subhome/state" "$outside"
+    printf 'domain\n' > "$subhome/.fm-secondmate-home"
+    printf '{"permissions":{}}\n' > "$outside/settings.local.json"
+    if [ "$shape" = directory ]; then
+      ln -s "$outside" "$subhome/.claude"
+      link=.claude
+    else
+      mkdir -p "$subhome/.claude"
+      ln -s "$outside/settings.local.json" "$subhome/.claude/settings.local.json"
+      link=.claude/settings.local.json
+    fi
+    subhome_abs=$(cd "$subhome" && pwd -P)
+    fm_write_secondmate_meta "$home/state/domain.meta" "$subhome"
+    printf '%s\n' '- domain - design domain (home: '"$subhome"'; scope: design domain; projects: ; added 2026-06-22)' > "$home/data/secondmates.md"
+    fakebin=$(make_fake_tmux "$TMP_ROOT/teardown-symlink-$shape-fake")
+    log="$TMP_ROOT/teardown-symlink-$shape-fake/tmux.log"
 
-  set +e
-  PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$fmroot" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
-    FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/teardown-symlink-fake/pane.txt" \
-    "$ROOT/bin/fm-teardown.sh" domain >/dev/null 2>"$err"
-  rc=$?
-  set -e
+    set +e
+    PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$fmroot" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
+      FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/teardown-symlink-$shape-fake/pane.txt" \
+      "$ROOT/bin/fm-teardown.sh" domain >/dev/null 2>"$err"
+    rc=$?
+    set -e
 
-  [ "$rc" -ne 0 ] || fail "teardown retired a home whose private path sits under a symlinked directory"
-  grep -F "$subhome_abs/.claude is a symlink" "$err" >/dev/null || fail "teardown did not name the symlinked directory: $(cat "$err")"
-  grep -F "treehouse return --force $subhome_abs" "$log" >/dev/null && fail "teardown returned the slot after refusing to stage it"
-  [ -f "$outside/settings.local.json" ] || fail "teardown moved a file outside the home"
-  [ "$(cat "$subhome/.fm-secondmate-home")" = domain ] || fail "the refused retirement removed the home's marker"
-  [ -e "$home/state/domain.meta" ] || fail "the refused retirement cleared the parent's record"
-  pass "secondmate teardown refuses a private path under a symlinked directory"
+    [ "$rc" -ne 0 ] || fail "teardown retired a home whose private path is reached through a symlinked $shape"
+    grep -F "$subhome_abs/$link is a symlink" "$err" >/dev/null \
+      || fail "teardown did not name the symlinked $shape: $(cat "$err")"
+    grep -F "treehouse return --force $subhome_abs" "$log" >/dev/null \
+      && fail "teardown returned the slot after refusing to stage a symlinked $shape"
+    [ -f "$outside/settings.local.json" ] || fail "teardown moved a file outside the home through a symlinked $shape"
+    [ -L "$subhome/$link" ] || fail "the refused retirement removed the symlinked $shape"
+    [ "$(cat "$subhome/.fm-secondmate-home")" = domain ] || fail "the refused retirement removed the home's marker"
+    [ -e "$home/state/domain.meta" ] || fail "the refused retirement cleared the parent's record"
+    pass "secondmate teardown refuses a private path reached through a symlinked $shape"
+  done
+}
+
+# Only retirement, a rolled-back seed, and a worker's draw clear a home's
+# private paths. Relaunching a home in use, as recovery and restart do, must
+# keep the "don't ask again" rules in its .claude/settings.local.json.
+test_secondmate_relaunch_keeps_home_settings_local() {
+  local home slot fmroot fakebin log err rules before harness
+  home="$TMP_ROOT/relaunch-keep-home"
+  slot="$TMP_ROOT/relaunch-keep-pool/1/firstmate"
+  fmroot="$TMP_ROOT/relaunch-keep-fmroot"
+  err="$TMP_ROOT/relaunch-keep.err"
+  git clone --quiet "$ROOT" "$fmroot"
+  mkdir -p "$TMP_ROOT/relaunch-keep-pool/1"
+  printf '{}\n' > "$TMP_ROOT/relaunch-keep-pool/treehouse-state.json"
+  git -C "$fmroot" worktree add --quiet --detach "$slot" HEAD
+  mkdir -p "$home/state" "$home/data"
+  fakebin=$(make_fake_tmux "$TMP_ROOT/relaunch-keep-fake")
+  log="$TMP_ROOT/relaunch-keep-fake/tmux.log"
+  PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$fmroot" FM_HOME="$home" FM_FAKE_TREEHOUSE_HOME="$slot" \
+    FM_FAKE_TMUX_LOG="$log" FM_SECONDMATE_CHARTER='keep scope' FM_SECONDMATE_SCOPE='keep scope' \
+    "$ROOT/bin/fm-home-seed.sh" keep - --no-projects >/dev/null 2>"$err" \
+    || fail "seeding the leased slot failed: $(cat "$err")"
+  rules="$slot/.claude/settings.local.json"
+  printf '{"permissions":{"allow":["Bash(git push:*)"]}}\n' > "$rules"
+  before=$(cat "$rules")
+
+  for harness in claude codex; do
+    rm -f "$home/state/keep.meta"
+    fakebin=$(make_fake_tmux "$TMP_ROOT/relaunch-keep-$harness-fake")
+    log="$TMP_ROOT/relaunch-keep-$harness-fake/tmux.log"
+    PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
+      FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/relaunch-keep-$harness-fake/pane.txt" \
+      "$ROOT/bin/fm-spawn.sh" keep "$slot" "$harness" --secondmate >/dev/null 2>"$err" \
+      || fail "launching the live $harness home failed: $(cat "$err")"
+    [ "$(cat "$rules" 2>/dev/null)" = "$before" ] \
+      || fail "launching the live $harness home changed its remembered rules: '$(cat "$rules" 2>/dev/null)'"
+    [ "$(cat "$slot/.fm-secondmate-home")" = keep ] && [ -f "$slot/data/charter.md" ] \
+      || fail "launching the live $harness home cleared its private paths"
+  done
+  pass "relaunching a home in use keeps its .claude/settings.local.json and private paths"
 }
 
 # A second mate's status log relays child outcomes, so a merged child PR there
@@ -3324,7 +3377,8 @@ test_fm_send_refuses_bare_window_without_home_meta
 test_secondmate_teardown_retires_empty_home
 test_secondmate_retire_frees_leased_slot_for_next_seed
 test_home_seed_rollback_clears_its_writes_from_leased_slot
-test_secondmate_teardown_refuses_symlinked_private_parent
+test_secondmate_teardown_refuses_symlinked_private_path
+test_secondmate_relaunch_keeps_home_settings_local
 test_branch_actor_cannot_retire_secondmate
 test_secondmate_teardown_refuses_ambiguous_and_mismatched_registry_bindings
 test_secondmate_teardown_sweeps_process_events_before_removal

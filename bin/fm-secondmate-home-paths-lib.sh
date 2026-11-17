@@ -20,8 +20,13 @@
 # A copy counts as a former secondmate home only when it carries one of the two
 # markers, because config/, data/, state/ and .env are ordinary names in other
 # projects. Removal acts only on the exact listed paths, refuses a listed path
-# that holds tracked files or sits under a symlinked directory, and never
-# touches commits, branches, tracked files, or uncommitted tracked changes.
+# that holds tracked files or sits under a symlinked directory, refuses a listed
+# file inside a directory (.claude/settings.local.json) that is itself a
+# symlink, and never touches commits, branches, tracked files, or uncommitted
+# tracked changes. These paths are cleared only at retirement, at a rolled-back
+# seed's return, and when a pooled copy is drawn for a worker spawn; launching,
+# restarting, or recovering a home in use never reads this list, because there
+# .claude/settings.local.json holds the rules the captain chose to remember.
 #
 # Public interface:
 #   SUB_HOME_MARKER, SUB_HOME_PARENT_MARKER   - the identity marker names
@@ -60,6 +65,14 @@ fm_secondmate_home_present_paths() {  # <copy>
 
 fm_secondmate_home_path_unsafe() {  # <copy> <name>
   local copy=$1 name=$2 parent tracked
+  case "$name" in
+    */*)
+      if [ -L "$copy/$name" ]; then
+        printf '%s/%s is a symlink\n' "$copy" "$name"
+        return 0
+      fi
+      ;;
+  esac
   parent=${name%/*}
   while [ "$parent" != "$name" ] && [ -n "$parent" ]; do
     if [ -L "$copy/$parent" ]; then
