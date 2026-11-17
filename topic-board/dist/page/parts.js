@@ -80,7 +80,58 @@ function answerConfirm(page, actions, key) {
 function holdMeta(view, actions, hold, showTopic) {
     return h("div", { class: "meta" }, showTopic ? topicLink(view, hold.topic, actions) : null, h("span", { class: "pill" }, hold.home), h("span", { class: "note" }, hold.task), hold.live ? null : h("span", { class: "pill warn" }, `暫緩：${hold.deferred_reason ?? ""}`), hold.stale ? h("span", { class: "pill warn" }, "可能已過時") : null);
 }
+/** True for a hands-on item the captain still has to act on. */
+export function needsCaptain(hold) {
+    return hold.todo !== null && hold.todo.state !== "claimed";
+}
+/** The hands-on items in play, the ones waiting on the captain first. */
+export function liveTodos(view, topic) {
+    const todos = view.holds.filter((hold) => hold.todo !== null && hold.live && (topic === undefined || hold.topic === topic));
+    return [...todos.filter(needsCaptain), ...todos.filter((hold) => !needsCaptain(hold))];
+}
+/** Copies the commands; a browser that refuses gets them selected, ready for the copy key. */
+function copyCommand(command, button) {
+    navigator.clipboard.writeText(command).then(() => {
+        button.textContent = "已複製";
+    }, () => {
+        const block = button.parentElement?.querySelector("pre");
+        if (block !== null && block !== undefined)
+            getSelection()?.selectAllChildren(block);
+        button.textContent = "已選取，請按 Ctrl+C（Mac 是 ⌘C）";
+    });
+}
+const TODO_NOTE = {
+    open: () => null,
+    claimed: () => h("div", { class: "wr" }, "你已按做完了，等 first mate 驗證"),
+    rejected: (reason) => h("div", { class: "wr bad" }, `first mate 驗證沒過：${reason}`),
+    obsolete: (reason) => h("div", { class: "wr" }, `first mate：不再需要了。${reason}`),
+};
+function todoButtons(actions, hold, todo, key) {
+    const close = (answer) => actions.ask(key, "holds/answer", { home: hold.home, task: hold.task, answer, label: answer });
+    if (todo.state === "claimed")
+        return null;
+    if (todo.state === "obsolete")
+        return h("div", { class: "btns" }, h("button", { onclick: () => close("撤下") }, "好，撤下"));
+    return h("div", { class: "btns" }, h("button", { onclick: () => actions.claim(hold.task) }, "做完了"), h("button", { onclick: () => close("不做了") }, "不做了"));
+}
+function todoConfirm(page, actions, key) {
+    const pending = page.pending.get(key);
+    if (pending === undefined)
+        return null;
+    return h("div", { class: "confirm" }, `會記成你的答覆「${String(pending.body["answer"])}」，這一項就從看板拿掉，並通知 first mate。`, h("div", { class: "btns" }, h("button", { class: "danger", onclick: () => actions.confirm(key, { mode: "done" }) }, "確定"), h("button", { onclick: () => actions.cancel(key) }, "取消")));
+}
+/** Something the captain has to do by hand: what, the commands to copy, and where it stands. */
+function todoCard(page, view, actions, hold, todo, showTopic) {
+    const key = `answer:${hold.home}/${hold.task}`;
+    return h("div", { class: "card todo", "data-todo": hold.task }, holdMeta(view, actions, hold, showTopic), h("b", {}, hold.title), TODO_NOTE[todo.state](todo.reason ?? ""), h("div", {}, todo.what), todo.command === ""
+        ? null
+        : h("div", {}, h("pre", { class: "cmd" }, todo.command), h("button", {
+            onclick: (event) => copyCommand(todo.command, event.currentTarget),
+        }, "複製指令")), todoButtons(actions, hold, todo, key), todoConfirm(page, actions, key), writeRows(page, actions, (write) => write.kind === "answer" && write.home === hold.home && write.task === hold.task));
+}
 export function holdCard(page, view, actions, hold, showTopic) {
+    if (hold.todo !== null)
+        return todoCard(page, view, actions, hold, hold.todo, showTopic);
     const key = `answer:${hold.home}/${hold.task}`;
     const draftKey = `answer-text:${hold.home}/${hold.task}`;
     const ask = (answer, label) => {

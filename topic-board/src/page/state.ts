@@ -59,6 +59,8 @@ export interface Actions {
   ask: (key: string, path: string, body: Record<string, unknown>) => void;
   confirm: (key: string, extra?: Record<string, unknown>) => void;
   cancel: (key: string) => void;
+  /** Says a hands-on item is done; firstmate checks before it is closed. */
+  claim: (task: string) => void;
   message: (topic: string, key: string) => void;
   direct: (home: string, task: string, key: string) => void;
   tag: (home: string, task: string, topic: string) => void;

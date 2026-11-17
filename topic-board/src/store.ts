@@ -9,11 +9,12 @@ import {
   writeFileAtomic,
 } from "./files.js";
 import type { BoardPaths } from "./layout.js";
-import { HISTORY_KINDS, QUEUES, emptyState, isQueue } from "./topics.js";
+import { HISTORY_KINDS, QUEUES, TODO_STATES, emptyState, isQueue } from "./topics.js";
 import type {
   ArchiveDoc,
   ArchivedTopic,
   HistoryEntry,
+  TodoMark,
   Topic,
   TopicState,
   TopicsDoc,
@@ -83,6 +84,20 @@ function parseHistory(raw: unknown): HistoryEntry[] {
   return raw.map(parseHistoryEntry).filter((entry): entry is HistoryEntry => entry !== null);
 }
 
+function parseTodos(raw: unknown): Record<string, TodoMark> {
+  const todos: Record<string, TodoMark> = {};
+  if (!isRecord(raw)) return todos;
+  for (const [task, value] of Object.entries(raw)) {
+    if (!isRecord(value) || task === "__proto__") continue;
+    const state = TODO_STATES.find((name) => name === value["state"]);
+    const at = stringField(value, "at");
+    if (state === undefined || at === null) continue;
+    const reason = stringField(value, "reason");
+    todos[task] = reason === null ? { state, at } : { state, at, reason };
+  }
+  return todos;
+}
+
 function parseDoc(raw: unknown): TopicsDoc {
   if (!isRecord(raw) || raw["v"] !== 1) throw new Error("expected an object with v: 1");
   const topics = raw["topics"];
@@ -93,6 +108,7 @@ function parseDoc(raw: unknown): TopicsDoc {
   for (const queue of QUEUES) doc.queues[queue] = parseQueue(queues[queue], doc.topics);
   doc.merged = stringRecord(raw["merged"]);
   doc.history = parseHistory(raw["history"]);
+  doc.todos = parseTodos(raw["todos"]);
   doc.next_seq = parseNextSeq(raw["next_seq"]);
   return doc;
 }

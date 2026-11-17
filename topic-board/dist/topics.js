@@ -2,6 +2,7 @@
 // clock. Callers pass the current time and persist the returned state.
 export const QUEUES = ["high", "normal", "later"];
 export const HISTORY_KINDS = ["merged", "renamed", "split", "archived", "reopened"];
+export const TODO_STATES = ["claimed", "rejected", "obsolete"];
 export const NAME_MAX = 80;
 export const GOAL_MAX = 200;
 const ID_MAX = 64;
@@ -15,6 +16,7 @@ export function emptyState() {
             topics: {},
             merged: {},
             history: [],
+            todos: {},
         },
         archive: { v: 1, topics: {} },
     };
@@ -375,4 +377,49 @@ export function keepOpen(state, rawId) {
     const next = clone(state);
     delete next.doc.topics[id].close_proposal;
     return changed(next, `ok ${id} 先不關`);
+}
+const TODO_LINE = {
+    claimed: "已記下做完了，等 first mate 驗證",
+    rejected: "已標成驗證沒過，回到要使用者動手",
+    obsolete: "已標成不再需要，等使用者撤下",
+};
+/** The mark an input asks for, or null when it lacks the one-line reason it needs. */
+function todoMark(input, now) {
+    if (input.state === "claimed")
+        return { state: input.state, at: now };
+    const reason = oneLine(input.reason ?? "", GOAL_MAX);
+    return reason === null ? null : { state: input.state, at: now, reason };
+}
+/** The tasks in `gone` that still carry a mark, leaving out the one being marked. */
+function staleTodos(state, input) {
+    return (input.gone ?? []).filter((task) => task !== input.task && Object.hasOwn(state.doc.todos, task));
+}
+/** Records where a hands-on item stands. Repeating the same mark changes nothing. */
+export function markTodo(state, input, now) {
+    // Assigning to this key would set the object's prototype instead of storing a mark.
+    if (input.task === "__proto__")
+        return refuse("看板不能記這個 task id 的狀態。");
+    const mark = todoMark(input, now);
+    if (mark === null)
+        return refuse(`原因要是一行，最多 ${GOAL_MAX} 個字。`);
+    const todos = state.doc.todos;
+    const current = Object.hasOwn(todos, input.task) ? todos[input.task] : undefined;
+    const same = current?.state === mark.state && current.reason === mark.reason;
+    const gone = staleTodos(state, input);
+    if (same && gone.length === 0)
+        return unchanged(state, `ok ${input.task} 本來就${TODO_LINE[mark.state]}`);
+    const next = clone(state);
+    for (const task of gone)
+        delete next.doc.todos[task];
+    if (!same)
+        next.doc.todos[input.task] = mark;
+    return changed(next, `ok ${input.task} ${TODO_LINE[mark.state]}`);
+}
+/** Forgets a hands-on item's mark, so it reads as still to do: its text was just rewritten. */
+export function clearTodo(state, task) {
+    if (!Object.hasOwn(state.doc.todos, task))
+        return unchanged(state, `ok ${task} 本來就沒有狀態`);
+    const next = clone(state);
+    delete next.doc.todos[task];
+    return changed(next, `ok ${task} 回到還沒做`);
 }

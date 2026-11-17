@@ -1,7 +1,7 @@
 // Loads and saves the topic files. The service is their only writer.
 import fs from "node:fs";
 import { isRecord, readJsonFile, stringField, stringRecord, textField, writeFileAtomic, } from "./files.js";
-import { HISTORY_KINDS, QUEUES, emptyState, isQueue } from "./topics.js";
+import { HISTORY_KINDS, QUEUES, TODO_STATES, emptyState, isQueue } from "./topics.js";
 const FILE_MODE = 0o644;
 function parseCloseProposal(raw) {
     if (!isRecord(raw) || typeof raw["at"] !== "string" || typeof raw["reason"] !== "string")
@@ -65,6 +65,22 @@ function parseHistory(raw) {
         return [];
     return raw.map(parseHistoryEntry).filter((entry) => entry !== null);
 }
+function parseTodos(raw) {
+    const todos = {};
+    if (!isRecord(raw))
+        return todos;
+    for (const [task, value] of Object.entries(raw)) {
+        if (!isRecord(value) || task === "__proto__")
+            continue;
+        const state = TODO_STATES.find((name) => name === value["state"]);
+        const at = stringField(value, "at");
+        if (state === undefined || at === null)
+            continue;
+        const reason = stringField(value, "reason");
+        todos[task] = reason === null ? { state, at } : { state, at, reason };
+    }
+    return todos;
+}
 function parseDoc(raw) {
     if (!isRecord(raw) || raw["v"] !== 1)
         throw new Error("expected an object with v: 1");
@@ -79,6 +95,7 @@ function parseDoc(raw) {
         doc.queues[queue] = parseQueue(queues[queue], doc.topics);
     doc.merged = stringRecord(raw["merged"]);
     doc.history = parseHistory(raw["history"]);
+    doc.todos = parseTodos(raw["todos"]);
     doc.next_seq = parseNextSeq(raw["next_seq"]);
     return doc;
 }

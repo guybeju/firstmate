@@ -388,6 +388,186 @@ test_decisions_made_on_the_page_reach_firstmate() {
   pass "confirm, keep, merge, and archive done on the page are sent to firstmate; its own commands are not"
 }
 
+# api <path> <json>: a request sent the way the board page sends it; prints the HTTP status.
+api() {
+  curl -s -o /dev/null -w '%{http_code}' -X POST \
+    -H "Authorization: Bearer $(cat "$MAIN/state/topic-board/token")" \
+    -H "Origin: http://127.0.0.1:$(cat "$MAIN/state/topic-board/port")" \
+    -H 'Content-Type: application/json' -d "$2" \
+    "http://127.0.0.1:$(cat "$MAIN/state/topic-board/port")/api/$1"
+}
+
+# shellcheck disable=SC2016  # the commands are literal text, never expanded here
+TODO_TEXT=$(printf '動手：重啟 x（卡住）\nsudo x --now "a b" && echo $HOME `date`\n\tps | grep x')
+
+# todo_backlog <task>...: the main home's backlog with call-main and one hands-on hold per task.
+todo_backlog() {
+  local task reason
+  reason="fm-hold-v1:$(printf '%s' "$TODO_TEXT" | base64 | tr -d '\n')"
+  {
+    printf '## In flight\n\n## Queued\n'
+    printf -- '- [ ] call-main - A call (repo: sample) (kind: captain) (hold: 要合併嗎？ 選項：合併 | 先不要) (hold-kind: captain)\n'
+    printf '  Captain hold set: 2026-07-24T00:00:00Z\n'
+    for task in "$@"; do
+      printf -- '- [ ] %s - Restart x (repo: sample) (kind: captain) (hold: %s) (hold-kind: captain)\n' "$task" "$reason"
+      printf '  Captain hold set: 2026-07-24T00:00:00Z\n'
+    done
+    printf -- '- [ ] work-1 - Ordinary work (repo: sample) (kind: ship)\n'
+    printf '\n## Done\n'
+  } > "$MAIN/data/backlog.md"
+}
+
+todo_of() {  # <task>: the hands-on part of that hold, as the page gets it
+  view ".holds[] | select(.task == \"$1\") | .todo | tojson"
+}
+
+test_hands_on_items() {
+  local before out rc
+  before=$(calls fm-inbox.sh)
+  todo_backlog todo-a todo-b
+  assert_equals "$(jq -cn --arg command "${TODO_TEXT#*$'\n'}" \
+    '{what: "重啟 x（卡住）", command: $command, state: "open", reason: null}')" "$(todo_of todo-a)" \
+    "a hands-on hold must reach the page with its commands exactly as written"
+  assert_equals "null" "$(todo_of call-main)" "an ordinary captain hold is not a hands-on item"
+  assert_equals "[]" "$(view '.holds[] | select(.task == "todo-a") | .options | tojson')" \
+    "a hands-on item has fixed buttons, whatever its text ends with"
+
+  assert_equals 200 "$(api todos/claim '{"task":"todo-a"}')" "saying it is done on the page failed"
+  wait_calls fm-inbox.sh $((before + 1))
+  assert_contains "$(last_call fm-inbox.sh)" "stdin=使用者在看板上：「Restart x」做完了（todo-a）。驗證後跑 bin/fm-topic.sh todo done todo-a；沒成功就跑 bin/fm-topic.sh todo failed todo-a --reason <一行>" \
+    "the claim must tell firstmate what to check and the two commands"
+  assert_contains "$(todo_of todo-a)" '"state":"claimed"' "the item must show as waiting for firstmate"
+  assert_equals 200 "$(api todos/claim '{"task":"todo-a"}')" "repeating the claim failed"
+  assert_equals 409 "$(api todos/claim '{"task":"call-main"}')" "an ordinary decision cannot be claimed done"
+  assert_equals 409 "$(api todos/claim '{"task":"work-1"}')" "ordinary work cannot be claimed done"
+  assert_equals 409 "$(api todos/claim '{"task":"nope"}')" "a task with no hold cannot be claimed done"
+  assert_equals 409 "$(api todos/claim '{}')" "a claim needs a task"
+
+  out=$(t todo failed todo-a --reason "服務沒起來") || fail "todo failed was refused: $out"
+  assert_equals "ok todo-a 已標成驗證沒過，回到要使用者動手" "$out" "todo failed printed the wrong line"
+  assert_contains "$(todo_of todo-a)" '"state":"rejected","reason":"服務沒起來"' "the page must show why the check failed"
+  out=$(t todo failed todo-a --reason "服務沒起來")
+  assert_contains "$out" "本來就" "repeating the same verdict must say nothing changed"
+  t todo obsolete todo-b --reason "改用別的做法" >/dev/null || fail "todo obsolete was refused"
+  assert_equals 409 "$(api todos/claim '{"task":"todo-b"}')" "an item firstmate no longer needs cannot be claimed done"
+  assert_contains "$(todo_of todo-b)" '"state":"obsolete","reason":"改用別的做法"' "the page must show the item is no longer needed"
+  sleep 1
+  assert_equals $((before + 1)) "$(calls fm-inbox.sh)" "a repeated claim, a refused claim, and firstmate's own verdicts send nothing"
+
+  rc=0
+  out=$(t todo failed call-main --reason x 2>&1) || rc=$?
+  assert_equals 1 "$rc" "a verdict on an ordinary decision must be refused"
+  assert_contains "$out" "call-main 不是主 home 裡還開著的「要你動手」項目" "the refusal must name the task"
+  expect_code 2 "$(tb_code "$MAIN" "$CODE_ROOT/bin/fm-topic.sh" todo failed todo-a)" "todo failed without a reason"
+  expect_code 1 "$(tb_code "$MAIN" "$CODE_ROOT/bin/fm-topic.sh" todo obsolete todo-a --reason "$(printf 'a\nb')")" "a reason of two lines"
+  expect_code 2 "$(tb_code "$MAIN" "$CODE_ROOT/bin/fm-topic.sh" todo nonsense todo-a)" "an unknown todo subcommand"
+  expect_code 2 "$(tb_code "$MAIN" "$CODE_ROOT/bin/fm-topic.sh" todo)" "todo without a subcommand"
+
+  # The home is read afresh for a verdict, and marks of holds that are gone are dropped.
+  todo_backlog todo-a todo-c
+  t todo obsolete todo-c --reason "剛建立就不用了" >/dev/null || fail "a verdict must see an item created a moment ago"
+  assert_equals '["todo-a","todo-c"]' "$(jq -c '.todos | keys' "$MAIN/data/topics.json")" \
+    "the mark of an item whose hold is gone must be dropped"
+
+  # A repeated claim that also drops a stale mark changes the file, and must still not tell firstmate twice.
+  before=$(calls fm-inbox.sh)
+  todo_backlog todo-a todo-c
+  view >/dev/null
+  assert_equals 200 "$(api todos/claim '{"task":"todo-a"}')" "claiming again after a failed check failed"
+  wait_calls fm-inbox.sh $((before + 1))
+  todo_backlog todo-a
+  view >/dev/null
+  assert_equals 200 "$(api todos/claim '{"task":"todo-a"}')" "the repeated claim failed"
+  assert_equals '["todo-a"]' "$(jq -c '.todos | keys' "$MAIN/data/topics.json")" "the repeated claim must drop the stale mark"
+  sleep 1
+  assert_equals $((before + 1)) "$(calls fm-inbox.sh)" "a repeated claim must not tell firstmate again"
+
+  # Rewriting an item starts it over.
+  printf '重啟 x\nsudo x --again\n' | t todo add todo-a "Restart x" --topic billing - >/dev/null ||
+    fail "rewriting a claimed item failed"
+  assert_equals '{}' "$(jq -c '.todos' "$MAIN/data/topics.json")" "rewriting an item must clear what was said about the old text"
+  hold_backlog "$MAIN" call-main
+  pass "hands-on items: the page claims, firstmate is told once, and its verdicts show on the page"
+}
+
+test_hands_on_commands() {
+  local holds out rc id
+  holds=$(calls fm-captain-hold.sh)
+  todo_backlog todo-a
+  out=$(printf '登入 App Store（更新要用）\nopen -a "App Store"\n' |
+    t todo add todo-new "登入 App Store" --topic billing -) || fail "todo add failed: $out"
+  assert_equals "ok todo-new 已放上看板的「要你動手」（議題 billing）" "$out" "todo add printed the wrong line"
+  assert_equals $((holds + 1)) "$(calls fm-captain-hold.sh)" "todo add must hold the task once"
+  grep -q "^cmd=fm-captain-hold.sh	argv=hold|todo-new|--title|登入 App Store|--reason|動手：登入 App Store（更新要用）$" "$TB_LOG" ||
+    fail "todo add must hold the task with the marker and the first line"
+  grep -q '^open -a "App Store"|' "$TB_LOG" || fail "the commands must reach the hold exactly as written"
+  assert_equals billing "$(cut -d' ' -f1 "$MAIN/data/todo-new/topic")" "todo add must tag the task with the topic"
+
+  holds=$(calls fm-captain-hold.sh)
+  rc=0
+  out=$(printf 'x\n' | t todo add todo-x "T" --topic nope - 2>&1) || rc=$?
+  assert_equals 1 "$rc" "an unknown topic must be refused"
+  rc=0
+  out=$(printf 'x\n' | t todo add call-main "A call" --topic billing - 2>&1) || rc=$?
+  assert_equals 1 "$rc" "an open decision must not be turned into a hands-on item"
+  assert_contains "$out" "call-main 已經是等使用者決定的項目" "the refusal must say why"
+  rc=0
+  out=$(printf 'x\n' | t todo add work-1 "Ordinary work" --topic billing - 2>&1) || rc=$?
+  assert_equals 1 "$rc" "ordinary work must not be turned into a hands-on item"
+  assert_contains "$out" "work-1 已經是一件工作" "the refusal must say why"
+  expect_code 2 "$(printf '\n' | tb_code "$MAIN" "$CODE_ROOT/bin/fm-topic.sh" todo add todo-x "T" --topic billing -)" "an empty first line"
+  expect_code 2 "$(printf 'x\n' | tb_code "$MAIN" "$CODE_ROOT/bin/fm-topic.sh" todo add todo-x "T" -)" "todo add without a topic"
+  expect_code 2 "$(printf 'x\n' | tb_code "$MAIN" "$CODE_ROOT/bin/fm-topic.sh" todo add "bad id" "T" --topic billing -)" "a malformed task id"
+  assert_equals "$holds" "$(calls fm-captain-hold.sh)" "a refused todo add must not touch the backlog"
+
+  out=$(t todo 'done' todo-a) || fail "todo done failed: $out"
+  assert_equals "ok todo-a 已關（做完了，first mate 已驗證）" "$out" "todo done printed the wrong line"
+  assert_contains "$(last_call fm-captain-hold.sh)" "argv=answers|--source|topic-board|" "todo done must go through the answer intake"
+  assert_contains "$(last_call fm-captain-hold.sh)" "$(printf 'stdin=todo-a\t做完了\tfirst mate 已驗證\tdone')" \
+    "todo done must close the item with the captain's own word"
+  holds=$(calls fm-captain-hold.sh)
+  rc=0
+  out=$(t todo 'done' call-main 2>&1) || rc=$?
+  assert_equals 1 "$rc" "todo done must refuse an ordinary decision"
+  assert_equals "$holds" "$(calls fm-captain-hold.sh)" "a refused todo done must not answer anything"
+  for id in gone work-1; do
+    rc=0
+    out=$(t todo 'done' "$id" 2>&1) || rc=$?
+    assert_equals 1 "$rc" "todo done must refuse $id, which is not an open hands-on item"
+    assert_contains "$out" "$id 不是開著的「要你動手」項目" "the refusal must name the task"
+  done
+  assert_equals "$holds" "$(calls fm-captain-hold.sh)" "only an open hands-on item may reach the answer intake"
+  play fm-captain-hold.sh '1\tskipped: todo-a (cannot record)'
+  rc=0
+  out=$(t todo 'done' todo-a 2>&1) || rc=$?
+  assert_equals 1 "$rc" "todo done must fail when the intake skips the task"
+  assert_contains "$out" "todo-a 沒有關：skipped: todo-a" "the failure must carry the intake's reason"
+  hold_backlog "$MAIN" call-main
+  pass "todo add holds and tags after checking; todo done closes only hands-on items"
+}
+
+test_hands_on_item_with_the_real_hold_tool() {
+  local home out
+  command -v tasks-axi >/dev/null 2>&1 || { pass "skip: tasks-axi not found"; return 0; }
+  home=$(tb_make_home real-todo)
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
+  printf '%s' '{"v":1,"next_seq":1,"queues":{"high":["t"],"normal":[],"later":[]},"topics":{"t":{"name":"T","goal":"g","status":"confirmed","created_at":"","proposed_by":"user"}},"merged":{}}' \
+    > "$home/data/topics.json"
+  out=$(printf '%s\n' "${TODO_TEXT#動手：}" | tb_run "$home" "$TOPIC" todo add real-1 "Restart x" --topic t -) ||
+    fail "todo add failed against the real hold tool: $out"
+  assert_equals "$TODO_TEXT" "$(tb_run "$home" "$ROOT/bin/fm-topic-board-read.sh" 0 - | jq -r '.holds[] | select(.id == "real-1") | .question')" \
+    "the text must survive the real hold tool and the reader unchanged"
+  printf '%s\n' "second wording" | tb_run "$home" "$TOPIC" todo add real-1 "Restart x" --topic t - >/dev/null ||
+    fail "repeating todo add with new text failed"
+  assert_equals "動手：second wording" "$(tb_run "$home" "$ROOT/bin/fm-topic-board-read.sh" 0 - | jq -r '.holds[0].question')" \
+    "repeating todo add must update the text"
+  tb_run "$home" "$TOPIC" todo 'done' real-1 >/dev/null || fail "todo done failed against the real hold tool"
+  assert_equals 0 "$(tb_run "$home" "$ROOT/bin/fm-topic-board-read.sh" 0 - | jq '.holds | length')" "todo done must close the hold"
+  expect_code 1 "$(tb_code "$home" "$TOPIC" todo 'done' real-1)" "todo done on an item that is already closed"
+  expect_code 1 "$(tb_code "$home" "$TOPIC" todo 'done' never-existed)" "todo done on a task that never existed"
+  pass "todo add and todo done work against the real hold tool"
+}
+
 test_dispatchable_notice() {
   local before
   before=$(calls fm-inbox.sh)
@@ -434,4 +614,5 @@ test_audit_log() {
 setup_fleet
 fm_test_run test_message_to_firstmate test_direct_message test_retries_run_out test_answers test_tagging \
   test_same_home_writes_do_not_overlap test_restart_resumes_or_settles test_answer_notice_survives_a_restart \
-  test_dispatchable_notice test_decisions_made_on_the_page_reach_firstmate test_audit_log
+  test_dispatchable_notice test_decisions_made_on_the_page_reach_firstmate test_hands_on_items \
+  test_hands_on_commands test_hands_on_item_with_the_real_hold_tool test_audit_log

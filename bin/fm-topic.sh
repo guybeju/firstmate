@@ -24,6 +24,10 @@
 #   fm-topic.sh retract [--home <secondmate-id>] <task-id> <ready|report|failed|landed> -
 #   fm-topic.sh which [--home <secondmate-id>] <task-id>
 #   fm-topic.sh find <keyword>
+#   fm-topic.sh todo add <task-id> <title> --topic <topic-id> -
+#   fm-topic.sh todo done <task-id>
+#   fm-topic.sh todo failed <task-id> --reason <one line>
+#   fm-topic.sh todo obsolete <task-id> --reason <one line>
 #   fm-topic.sh open | status | stop | restart | reset-token
 #   fm-topic.sh install-rules
 #
@@ -55,6 +59,18 @@
 # its current id with its history. A keyword that is a task id also prints the
 # topics that task was tagged with, oldest first.
 #
+# todo keeps the things the captain has to do by hand (a sudo command, a
+# login) on the board. add holds <task-id> for the captain, creating it when it
+# does not exist, and tags it with the topic; stdin's first line says what to
+# do and why, and the remaining lines are the commands, shown exactly as
+# written with a copy button. The page offers 做完了 and 不做了. 做完了 does not
+# close the item: the board tells firstmate, who checks and then runs done
+# (which closes it) or failed (which puts it back in front of the captain with
+# the reason). obsolete marks an item firstmate no longer needs; the captain
+# takes it down with one click, so the closing record stays the captain's own
+# word. Main home only. Repeating add, failed, or obsolete unchanged is safe;
+# done on an item that is already closed changes nothing and says so.
+#
 # retract takes the task's latest summary of that kind off the board when it
 # turned out to be wrong; stdin is the reason. The line stays in the file.
 #
@@ -66,7 +82,8 @@
 # list   Prints id, status, queue, position, and name of every topic. --all adds
 #        archived topics. Main home only.
 # order  Prints which queued backlog items to dispatch, hold, and release, in
-#        the board's queue order. Read-only: it never changes the backlog, and
+#        the board's queue order, and under 等你驗證 the hands-on items the
+#        captain says are done. Read-only: it never changes the backlog, and
 #        when the topic file or the backlog cannot be read it says so and lets
 #        dispatch proceed. An item under 該解除 is also listed under 可派, marked
 #        as still held, so its place in the order is visible before the hold is
@@ -110,6 +127,7 @@ EXIT_UNAVAILABLE=69
 TOPICS_FILE="$DATA/topics.json"
 ARCHIVE_FILE="$DATA/topics-archive.json"
 OWN_HOLD_PREFIX='topic-board：'
+TODO_MARKER='動手：'
 
 # shellcheck source=bin/fm-primary-scope-lib.sh
 . "$SCRIPT_DIR/fm-primary-scope-lib.sh"
@@ -313,7 +331,7 @@ cmd_order() {
     return 0
   fi
   tags=$(order_tags)
-  printf '%s' "$snapshot" | jq -r --arg note "$note" --arg tags "$tags" --arg own "$OWN_HOLD_PREFIX" \
+  printf '%s' "$snapshot" | jq -r --arg note "$note" --arg tags "$tags" --arg own "$OWN_HOLD_PREFIX" --arg marker "$TODO_MARKER" \
     --slurpfile live "$topics" --slurpfile gone "$archive" '
     ($live[0] // null) as $doc
     | ($gone[0].topics // {}) as $archived
@@ -340,6 +358,8 @@ cmd_order() {
         | {id: $r.id, index: $index, topic: $topic, queue: $p.queue, at: ($p.at // 0),
            name: ($p.name // "（未分類）"),
            decision: ($r.kind == "captain"),
+           claimed: ((($r.hold_reason // "") | startswith($marker))
+                     and ((($doc.todos // {}) | objects | .[$r.id] | objects | .state) == "claimed")),
            own_hold: (($r.hold_reason // "") | startswith($own)),
            other_hold: ($r.hold_reason != null and ((($r.hold_reason // "") | startswith($own)) | not)),
            blocked: (($r.unresolved_blocker_ids // []) | length > 0),
@@ -362,7 +382,12 @@ cmd_order() {
       "該解除：",
       ($to_release[] | line + "\t→ bin/fm-tasks-axi.sh unhold \(.id)"),
       "停著：",
-      ($parked[] | line)
+      ($parked[] | line),
+      ($items | map(select(.claimed)) as $claimed
+       | if ($claimed | length) == 0 then empty
+         else "等你驗證：",
+              ($claimed[] | line + "\t← 使用者說做完了；驗證後跑 bin/fm-topic.sh todo done \(.id)，沒成功就跑 bin/fm-topic.sh todo failed \(.id) --reason <一行>")
+         end)
   ' || {
     printf '%s\n' "讀不到 backlog，照平常的方式派工。"
     return 0
@@ -475,6 +500,101 @@ cmd_split() {
     esac
   done
   [ "$failed" -eq 0 ] || tb_die 1 "有 task 沒有標成功；修好之後原樣再跑一次同一個指令就會接著做完。"
+}
+
+# What <task-id> is in this home: "todo" for an open hands-on item, "other"
+# for any other open captain hold, "task" for a task that is not held for the
+# captain, "none" when the backlog and the fleet know no such task.
+todo_kind() {
+  local report
+  report=$("$SCRIPT_DIR/fm-topic-board-read.sh" 0 -) || tb_die 1 "讀不到這個 home 的 backlog，沒有改任何東西。"
+  printf '%s' "$report" | jq -r --arg id "$1" --arg marker "$TODO_MARKER" '
+    ([.holds[] | select(.id == $id)][0]) as $hold
+    | if $hold != null then (if ($hold.question | startswith($marker)) then "todo" else "other" end)
+      elif ([.queued[], .tasks[] | select(.id == $id)] | length) > 0 then "task"
+      else "none" end'
+}
+
+# todo add <task-id> <title> --topic <topic-id> -: put a hands-on item for the
+# captain on the board. The topic is checked before anything is written.
+todo_add() {
+  local topic="" text what kind
+  local -a words=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --topic)
+        [ "$#" -ge 2 ] || usage_error "--topic 後面要有議題 id"
+        topic=$2
+        shift 2
+        ;;
+      -) shift ;;
+      --*) usage_error "todo add 不認得 $1" ;;
+      *)
+        words+=("$1")
+        shift
+        ;;
+    esac
+  done
+  if [ "${#words[@]}" -ne 2 ] || [ -z "$topic" ]; then
+    usage_error "todo add 的用法是 <task-id> <標題> --topic <議題 id> -（stdin 第一行是說明，其餘是指令）"
+  fi
+  tb_valid_id "${words[0]}" || usage_error "task id 格式不對：${words[0]}"
+  tb_valid_id "$topic" || usage_error "議題 id 格式不對：$topic"
+  [ ! -t 0 ] || usage_error "todo add 從 stdin 讀內容：第一行是說明，其餘是指令"
+  text=$(cat)
+  text=${text//$'\r'/}
+  what=${text%%$'\n'*}
+  [ -n "${what//[[:space:]]/}" ] || usage_error "stdin 的第一行要寫要做什麼"
+  topic=$(main_home_topic_for_tag "$topic")
+  kind=$(todo_kind "${words[0]}")
+  [ "$kind" != other ] ||
+    tb_die 1 "${words[0]} 已經是等使用者決定的項目，不能改成要使用者動手的項目。"
+  [ "$kind" != task ] ||
+    tb_die 1 "${words[0]} 已經是一件工作，不能改成要使用者動手的項目；換一個 task id。"
+  "$SCRIPT_DIR/fm-captain-hold.sh" hold "${words[0]}" --title "${words[1]}" --reason "$TODO_MARKER$text" \
+    >/dev/null || tb_die 1 "沒有建立 ${words[0]}；修好上面的問題後原樣再跑一次。"
+  "$SELF" tag "${words[0]}" "$topic" >/dev/null ||
+    tb_die 1 "${words[0]} 已建立但沒有標上議題；原樣再跑一次同一個指令。"
+  # A rewritten item starts over: what the captain or firstmate said about the old text no longer holds.
+  if [ -f "$TOPICS_FILE" ] && jq -e --arg id "${words[0]}" '(.todos // {}) | objects | has($id)' "$TOPICS_FILE" >/dev/null 2>&1; then
+    "$SELF" todo-clear "${words[0]}" >/dev/null ||
+      tb_die 1 "${words[0]} 已更新，但看板上舊的狀態沒有清掉；原樣再跑一次同一個指令。"
+  fi
+  printf '%s\n' "ok ${words[0]} 已放上看板的「要你動手」（議題 $topic）"
+}
+
+# todo done <task-id>: firstmate checked that the captain did it; close the item.
+todo_done() {
+  local id=${1:-} kind out
+  [ "$#" -eq 1 ] || usage_error "todo done 的用法是 <task-id>"
+  tb_valid_id "$id" || usage_error "task id 格式不對：$id"
+  kind=$(todo_kind "$id")
+  # Only an open hands-on item is fed to the intake: it would close any captain hold it is given.
+  [ "$kind" = todo ] ||
+    tb_die 1 "$id 不是開著的「要你動手」項目，沒有關任何東西（已經關過的話不用再跑）。"
+  out=$(printf '%s\t做完了\tfirst mate 已驗證\tdone\n' "$id" |
+    "$SCRIPT_DIR/fm-captain-hold.sh" answers --source topic-board) ||
+    tb_die 1 "$id 沒有關：$(printf '%s' "$out" | head -n 1)"
+  printf '%s\n' "ok $id 已關（做完了，first mate 已驗證）"
+}
+
+cmd_todo() {
+  local sub=${1:-}
+  [ "$#" -gt 0 ] || usage_error "todo 的用法是 add、done、failed、obsolete 其中之一"
+  shift
+  require_main_home todo
+  case "$sub" in
+    add)
+      require_jq "todo add"
+      todo_add "$@"
+      ;;
+    done)
+      require_jq "todo done"
+      todo_done "$@"
+      ;;
+    failed | obsolete) cmd_service "todo-$sub" "$@" ;;
+    *) usage_error "todo 不認得 $sub；可用的是 add、done、failed、obsolete" ;;
+  esac
 }
 
 cmd_in_home() {
@@ -725,8 +845,11 @@ main() {
     --in-home) cmd_in_home "$@" ;;
     tag) cmd_tag "$@" ;;
     split) cmd_split "$@" ;;
+    # Internal: forget a hands-on item's mark after its text was rewritten.
+    todo-clear) cmd_service "$sub" "$@" ;;
     # Internal: the board's own split operation, without the task handling.
     split-topic) cmd_service "$@" ;;
+    todo) cmd_todo "$@" ;;
     list) cmd_list "$@" ;;
     order) cmd_order "$@" ;;
     setup) cmd_setup "$@" ;;

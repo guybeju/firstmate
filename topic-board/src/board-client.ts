@@ -306,6 +306,9 @@ const TOPIC_COMMANDS: Record<string, CommandShape> = {
   "reset-token": { positional: [] },
   which: { positional: ["task"], valued: ["home"] },
   find: { positional: ["query"] },
+  "todo-clear": { positional: ["task"] },
+  "todo-failed": { positional: ["task"], valued: ["reason"], required: ["reason"] },
+  "todo-obsolete": { positional: ["task"], valued: ["reason"], required: ["reason"] },
 };
 
 function buildTopicRequest(sub: string, shape: CommandShape, args: string[]): BoardRequest {

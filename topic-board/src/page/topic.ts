@@ -7,6 +7,7 @@ import {
   draftInput,
   holdCard,
   light,
+  liveTodos,
   questionRow,
   summaryRow,
   updateRow,
@@ -137,6 +138,17 @@ function header(page: Page, view: View, actions: Actions, id: string): Child {
   ];
 }
 
+function handsOn(page: Page, view: View, actions: Actions, id: string): Child {
+  const todos = liveTodos(view, id);
+  if (todos.length === 0) return null;
+  return h(
+    "section",
+    {},
+    h("h2", {}, "要你動手"),
+    todos.map((hold) => holdCard(page, view, actions, hold, false)),
+  );
+}
+
 function decisions(page: Page, view: View, actions: Actions, id: string): Child {
   const topic = view.topics[id];
   const holds = view.holds.filter((hold) => hold.topic === id);
@@ -159,7 +171,9 @@ function decisions(page: Page, view: View, actions: Actions, id: string): Child 
             h("button", { onclick: () => actions.topic("keep", { id }) }, "先不關"),
           ),
         ),
-    holds.filter((hold) => hold.live).map((hold) => holdCard(page, view, actions, hold, false)),
+    holds
+      .filter((hold) => hold.live && hold.todo === null)
+      .map((hold) => holdCard(page, view, actions, hold, false)),
     deferred.length === 0
       ? null
       : h(
@@ -290,6 +304,7 @@ export function topicPage(page: Page, view: View, actions: Actions, id: string):
       { class: "narrow" },
       h("p", {}, h("button", { class: "link", onclick: () => actions.open(null) }, "← 回首頁")),
       header(page, view, actions, id),
+      handsOn(page, view, actions, id),
       decisions(page, view, actions, id),
       updates(view, actions, id),
       h(

@@ -1,6 +1,6 @@
 import { h } from "./dom.js";
 import { mergeConfirm, mergeMenu } from "./home.js";
-import { draftInput, holdCard, light, questionRow, summaryRow, updateRow, when, writeRows, } from "./parts.js";
+import { draftInput, holdCard, light, liveTodos, questionRow, summaryRow, updateRow, when, writeRows, } from "./parts.js";
 import { QUEUE_LABEL } from "./state.js";
 const MAX_UPDATES = 200;
 /** A line of text with an edit button that swaps it for an input in place. */
@@ -69,13 +69,21 @@ function header(page, view, actions, id) {
         panels(page, view, actions, id),
     ];
 }
+function handsOn(page, view, actions, id) {
+    const todos = liveTodos(view, id);
+    if (todos.length === 0)
+        return null;
+    return h("section", {}, h("h2", {}, "要你動手"), todos.map((hold) => holdCard(page, view, actions, hold, false)));
+}
 function decisions(page, view, actions, id) {
     const topic = view.topics[id];
     const holds = view.holds.filter((hold) => hold.topic === id);
     const deferred = holds.filter((hold) => !hold.live);
     return h("section", {}, h("h2", {}, "待決"), topic?.close_reason == null
         ? null
-        : h("div", { class: "card" }, h("span", { class: "pill warn" }, "提議關閉"), ` first mate 認為這個議題可以關了：${topic.close_reason}`, h("div", { class: "btns" }, h("button", { onclick: () => actions.topic("archive", { id }) }, "關閉並封存"), h("button", { onclick: () => actions.topic("keep", { id }) }, "先不關"))), holds.filter((hold) => hold.live).map((hold) => holdCard(page, view, actions, hold, false)), deferred.length === 0
+        : h("div", { class: "card" }, h("span", { class: "pill warn" }, "提議關閉"), ` first mate 認為這個議題可以關了：${topic.close_reason}`, h("div", { class: "btns" }, h("button", { onclick: () => actions.topic("archive", { id }) }, "關閉並封存"), h("button", { onclick: () => actions.topic("keep", { id }) }, "先不關"))), holds
+        .filter((hold) => hold.live && hold.todo === null)
+        .map((hold) => holdCard(page, view, actions, hold, false)), deferred.length === 0
         ? null
         : h("details", { "data-key": `deferred:${id}` }, h("summary", {}, `暫緩 ${deferred.length}`), deferred.map((hold) => holdCard(page, view, actions, hold, false))), view.questions
         .filter((question) => question.topic === id)
@@ -126,7 +134,7 @@ export function topicPage(page, view, actions, id) {
     const key = `message:${id}`;
     const send = () => actions.message(id, key);
     return [
-        h("div", { class: "narrow" }, h("p", {}, h("button", { class: "link", onclick: () => actions.open(null) }, "← 回首頁")), header(page, view, actions, id), decisions(page, view, actions, id), updates(view, actions, id), h("section", {}, h("h2", {}, "關聯 agent"), view.agents
+        h("div", { class: "narrow" }, h("p", {}, h("button", { class: "link", onclick: () => actions.open(null) }, "← 回首頁")), header(page, view, actions, id), handsOn(page, view, actions, id), decisions(page, view, actions, id), updates(view, actions, id), h("section", {}, h("h2", {}, "關聯 agent"), view.agents
             .filter((agent) => agent.topic === id)
             .map((agent) => agentCard(page, actions, agent))), queued(view, id)),
         h("div", { class: "composer" }, h("div", { class: "inner" }, h("div", { class: "btns" }, draftInput(page, actions, key, `給 first mate 的訊息（會附上議題「${view.topics[id]?.name ?? id}」）`, send), h("button", { class: "primary", onclick: send }, "送給 first mate")), writeRows(page, actions, (write) => write.kind === "note" && write.topic === id))),

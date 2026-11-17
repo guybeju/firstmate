@@ -105,6 +105,7 @@ const ROUTES = {
     "POST messages": (host, body) => fromAction(actions.message(host.actionContext(), field(body, "topic"), field(body, "text"), "browser")),
     "POST direct": (host, body) => fromAction(actions.direct(host.actionContext(), field(body, "home"), field(body, "task"), field(body, "text"), "browser")),
     "POST holds/answer": answer,
+    "POST todos/claim": (host, body) => fromTopicOp(host.topicOp("todo-claim", { task: field(body, "task") })),
     "POST writes/resend": resend,
     "POST writes/ignore": (host, body) => fromProblem(host.writes.ignore(field(body, "write_id"))),
 };

@@ -252,6 +252,25 @@ describe("store", () => {
     });
   });
 
+  it("loads a file written before hands-on items existed, and drops marks it cannot read", () => {
+    fs.mkdirSync(path.dirname(paths.topics), { recursive: true });
+    const base = { v: 1, next_seq: 1, queues: {}, topics: {} };
+    fs.writeFileSync(paths.topics, JSON.stringify(base));
+    expect(loadTopicState(paths).doc.todos).toEqual({});
+    const todos = {
+      a: { state: "claimed", at: "2026-11-17T00:00:00Z" },
+      b: { state: "rejected", at: "2026-11-17T00:00:00Z", reason: "沒起來" },
+      c: { state: "unknown", at: "2026-11-17T00:00:00Z" },
+      d: { state: "claimed" },
+      e: "nope",
+      ["__proto__"]: { state: "claimed", at: "2026-11-17T00:00:00Z" },
+    };
+    fs.writeFileSync(paths.topics, JSON.stringify({ ...base, todos }));
+    expect(loadTopicState(paths).doc.todos).toEqual({ a: todos.a, b: todos.b });
+    fs.writeFileSync(paths.topics, JSON.stringify({ ...base, todos: [1] }));
+    expect(loadTopicState(paths).doc.todos).toEqual({});
+  });
+
   it("loads a file written before the history existed, and drops history entries it cannot read", () => {
     fs.mkdirSync(path.dirname(paths.topics), { recursive: true });
     const base = { v: 1, next_seq: 1, topics: {}, queues: {}, merged: { old: "a" } };

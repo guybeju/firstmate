@@ -4,7 +4,16 @@ import type { Queue } from "#board/topics.js";
 import type { AgentView } from "#board/view.js";
 import { h } from "./dom.js";
 import type { Child } from "./dom.js";
-import { agentRow, holdCard, questionRow, summaryRow, topicLink, topicName } from "./parts.js";
+import {
+  agentRow,
+  holdCard,
+  liveTodos,
+  needsCaptain,
+  questionRow,
+  summaryRow,
+  topicLink,
+  topicName,
+} from "./parts.js";
 import { BAD_WRITES, LIGHT_LABEL, QUEUES, QUEUE_LABEL } from "./state.js";
 import type { Actions, Page, View } from "./state.js";
 
@@ -46,7 +55,9 @@ function topicCard(view: View, actions: Actions, id: string): Child {
   const topic = view.topics[id];
   if (topic === undefined) return null;
   const agents = view.agents.filter((agent) => agent.topic === id);
-  const deciding = view.holds.filter((hold) => hold.topic === id && hold.live).length;
+  const live = view.holds.filter((hold) => hold.topic === id && hold.live);
+  const deciding = live.filter((hold) => hold.todo === null).length;
+  const doing = live.filter(needsCaptain).length;
   const waiting = view.queued.filter((item) => item.topic === id).length;
   const unsent = view.writes.filter(
     (write) => write.topic === id && BAD_WRITES.includes(write.state),
@@ -61,6 +72,7 @@ function topicCard(view: View, actions: Actions, id: string): Child {
       h("span", {}, `${agents.length} 個 agent`),
       lightCounts(agents),
       waiting > 0 ? h("span", {}, `排隊 ${waiting}`) : null,
+      doing > 0 ? h("span", { class: "pill red" }, `要你動手 ${doing}`) : null,
       deciding > 0 ? h("span", { class: "pill red" }, `待你決定 ${deciding}`) : null,
       topic.close_reason === null ? null : h("span", { class: "pill warn" }, "提議關閉"),
       unsent > 0 ? h("span", { class: "pill red" }, `沒送到 ${unsent}`) : null,
@@ -277,11 +289,17 @@ function unsorted(page: Page, view: View, actions: Actions): Child {
 export function home(page: Page, view: View, actions: Actions): Child {
   const active = ["working", "stuck", "unknown", "decide"];
   return [
+    liveTodos(view).length === 0
+      ? null
+      : section(
+          "要你動手",
+          liveTodos(view).map((hold) => holdCard(page, view, actions, hold, true)),
+        ),
     section(
       "等你決定",
       closeProposals(view, actions),
       view.holds
-        .filter((hold) => hold.live)
+        .filter((hold) => hold.live && hold.todo === null)
         .map((hold) => holdCard(page, view, actions, hold, true)),
     ),
     section(
