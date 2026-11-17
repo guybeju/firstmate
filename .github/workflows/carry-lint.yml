@@ -26,8 +26,10 @@ jobs:
   lint:
     name: Lint ${{ matrix.partition }}
     runs-on: ubuntu-24.04
-    # Same bound as ci.yml's lint job (its normal timeout tier).
-    timeout-minutes: 30
+    # Above ci.yml's 30: partition 2 took 27.5 minutes on this workflow's
+    # first green run, because several roots hit the memory ceiling and are
+    # linted twice.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
