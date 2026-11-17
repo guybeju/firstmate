@@ -37,6 +37,7 @@
 | `topic-board/spec/` | 這份 spec，副檔名 `.markdown` | 一 |
 | `topic-board/test/` | fork 自己的測試與 `run.sh` | 一起 |
 | `topic-board/package.json`、`pnpm-lock.yaml`、`tsconfig.json`、`.gitignore` | 只有開發期相依；`.gitignore` 忽略 `node_modules/` 與 `.metrics/` | 二 |
+| `FORK-SETUP.markdown`（根目錄） | 新機器從零安裝 fork 與看板的說明；`topic-board/test/check-guide.sh` 檢查它引用的名稱 | 上線後 |
 
 硬性限制（都實測過，見 [verification](verification.markdown)）：
 
@@ -339,7 +340,7 @@ argv 的確切形狀在第 7 節，結果怎麼判在 [第四段](stage-4-writes
 
 ### 11.3 其他
 
-- `tests/lib.sh`：看板的測試腳本 source 它，用 `fm_test_tmproot`、`fm_test_run`、`fm_test_cleanup`、`fm_git_init_commit`、`fm_write_meta`、`pass`、`fail`、`assert_equals`、`assert_contains`、`assert_not_contains`、`assert_grep`、`expect_code` 與變數 `ROOT`。改到這些，十個腳本都受影響。
+- `tests/lib.sh`：看板的測試腳本 source 它，用 `fm_test_tmproot`、`fm_test_run`、`fm_test_cleanup`、`fm_git_init_commit`、`fm_write_meta`、`pass`、`fail`、`assert_equals`、`assert_contains`、`assert_not_contains`、`assert_grep`、`expect_code` 與變數 `ROOT`。改到這些，十一個腳本都受影響。
 - 環境變數 `FM_HOME`、`FM_ROOT_OVERRIDE`、`FM_DATA_OVERRIDE`、`FM_CONFIG_OVERRIDE`、`FM_STATE_OVERRIDE`：看板的 Bash 指令照上游的慣例解析路徑。
 - 自我更新：主 home 的 `config/self-update-source` 指向 `carry`。看板的服務在下一個議題指令發現程式的 commit 變了，就換掉自己。
 - `data/captain.md`、`data/captain-shared.md`：`install-rules` 在裡面維護一個有標記的區塊；`/stow` 之類的整理不能動到標記行。
