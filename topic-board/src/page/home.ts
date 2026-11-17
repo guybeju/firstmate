@@ -9,10 +9,12 @@ import {
   holdCard,
   liveTodos,
   needsCaptain,
+  queuedRow,
   questionRow,
   summaryRow,
   topicLink,
   topicName,
+  untaggedQueued,
 } from "./parts.js";
 import { BAD_WRITES, LIGHT_LABEL, QUEUES, QUEUE_LABEL } from "./state.js";
 import type { Actions, Page, View } from "./state.js";
@@ -283,6 +285,19 @@ function unsorted(page: Page, view: View, actions: Actions): Child {
     view.questions
       .filter((question) => question.topic === null)
       .map((question) => questionRow(view, actions, question, false)),
+    untaggedList(view),
+  );
+}
+
+/** Queued work nobody gave a topic, folded: it is there to be noticed, not to crowd the page. */
+function untaggedList(view: View): Child {
+  const items = untaggedQueued(view);
+  if (items.length === 0) return null;
+  return h(
+    "details",
+    { "data-key": "queued:untagged" },
+    h("summary", {}, `沒標議題的排隊項目 ${items.length}`),
+    items.map(queuedRow),
   );
 }
 

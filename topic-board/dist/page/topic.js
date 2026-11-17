@@ -1,6 +1,6 @@
 import { h } from "./dom.js";
 import { mergeConfirm, mergeMenu } from "./home.js";
-import { draftInput, holdCard, light, liveTodos, questionRow, summaryRow, updateRow, when, writeRows, } from "./parts.js";
+import { draftInput, holdCard, light, liveTodos, queuedRow, questionRow, summaryRow, updateRow, when, writeRows, } from "./parts.js";
 import { QUEUE_LABEL } from "./state.js";
 const MAX_UPDATES = 200;
 /** A line of text with an edit button that swaps it for an input in place. */
@@ -116,9 +116,6 @@ function agentCard(page, actions, agent) {
         : h("div", { class: "note" }, "「已送達」只代表訊息到了 secondmate 的收件匣，它轉給 worker 可能還要一點時間。"), writeRows(page, actions, (write) => (write.kind === "send" || write.kind === "relay") &&
         write.home === agent.home &&
         write.task === agent.task));
-}
-function queuedRow(item) {
-    return h("div", { class: "meta" }, h("b", {}, item.task), h("span", {}, item.title), h("span", { class: "pill" }, item.home), h("span", { class: "note" }, item.waiting === null ? "可以派" : item.waiting));
 }
 /** Backlog items of this topic that no worker has been dispatched for, folded by default. */
 function queued(view, id) {

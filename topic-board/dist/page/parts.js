@@ -80,6 +80,18 @@ function answerConfirm(page, actions, key) {
 function holdMeta(view, actions, hold, showTopic) {
     return h("div", { class: "meta" }, showTopic ? topicLink(view, hold.topic, actions) : null, h("span", { class: "pill" }, hold.home), h("span", { class: "note" }, hold.task), hold.live ? null : h("span", { class: "pill warn" }, `暫緩：${hold.deferred_reason ?? ""}`), hold.stale ? h("span", { class: "pill warn" }, "可能已過時") : null);
 }
+/** One backlog item that no worker has been dispatched for. */
+export function queuedRow(item) {
+    return h("div", { class: "meta" }, h("b", {}, item.task), h("span", {}, item.title), h("span", { class: "pill" }, item.home), h("span", { class: "note" }, item.waiting === null ? "可以派" : item.waiting));
+}
+/**
+ * Queued work that has no topic and no card of its own. A captain hold is a
+ * queued item too, but it already shows as a card wherever holds are listed.
+ */
+export function untaggedQueued(view) {
+    const held = new Set(view.holds.map((hold) => `${hold.home}/${hold.task}`));
+    return view.queued.filter((item) => item.topic === null && !held.has(`${item.home}/${item.task}`));
+}
 /** True for a hands-on item the captain still has to act on. */
 export function needsCaptain(hold) {
     return hold.todo !== null && hold.todo.state !== "claimed";
