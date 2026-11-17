@@ -28,6 +28,11 @@
 # claim's owner are each published by fm_remote_job_link_exclusive, a hard link
 # that succeeds for exactly one caller, while their directories keep the
 # layout that an older worker or library on the same account still reads.
+# A holder that dies while publishing leaves its temporary records inside the
+# worker lock or job claim. Clearing a dead holder's claim removes them with
+# its records; reclaiming the worker lock removes them as the worker's
+# worker_lock_temps describes, keeping a pid temporary while its live worker
+# is still publishing.
 # seq is the worker's FIFO ordering key within a home, with the job id as the
 # deterministic tiebreak.
 # FIFO is defined over completed stagings: a stage that returns before another
