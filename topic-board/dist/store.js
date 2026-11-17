@@ -1,7 +1,7 @@
 // Loads and saves the topic files. The service is their only writer.
 import fs from "node:fs";
 import { isRecord, readJsonFile, stringField, stringRecord, textField, writeFileAtomic, } from "./files.js";
-import { HISTORY_KINDS, QUEUES, TODO_STATES, emptyState, isQueue } from "./topics.js";
+import { GOAL_MAX, HISTORY_ACTORS, HISTORY_KINDS, QUEUES, TODO_STATES, emptyState, isQueue, oneLine, } from "./topics.js";
 const FILE_MODE = 0o644;
 function parseCloseProposal(raw) {
     if (!isRecord(raw) || typeof raw["at"] !== "string" || typeof raw["reason"] !== "string")
@@ -58,6 +58,13 @@ function parseHistoryEntry(raw) {
         entry.from = from;
     if (fromName !== null)
         entry.from_name = fromName;
+    // A reason someone edited into something that is not one line is dropped, not printed.
+    const reason = oneLine(stringField(raw, "reason") ?? "", GOAL_MAX);
+    const by = HISTORY_ACTORS.find((actor) => actor === raw["by"]);
+    if (reason !== null)
+        entry.reason = reason;
+    if (by !== undefined)
+        entry.by = by;
     return entry;
 }
 function parseHistory(raw) {

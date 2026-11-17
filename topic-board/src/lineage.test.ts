@@ -130,7 +130,7 @@ describe("findLines", () => {
       "還有 3 個議題符合，請用更長的關鍵字。",
     ]);
     expect(lines.slice(1, 10)).toEqual([
-      "  還有 3 筆更早的紀錄",
+      "  還有 3 筆更早的紀錄，加 --all 看全部",
       ...[3, 4, 5, 6, 7, 8, 9, 10].map(
         (index) =>
           `  2026-11-18 「${index === 0 ? "同名 0" : `同名 0 第${index - 1}版`}」改名為「同名 0 第${index}版」`,
@@ -200,12 +200,67 @@ describe("findLines", () => {
     }
     expect(findLines(state, "同", [])).toHaveLength(5 + 8);
     state = done(topics.rename(state, "t0", "同 0 版8", "2026-11-18T00:00:00Z"));
-    expect(findLines(state, "t0", [])[1]).toBe("  還有 1 筆更早的紀錄");
+    expect(findLines(state, "t0", [])[1]).toBe("  還有 1 筆更早的紀錄，加 --all 看全部");
     add(5);
     expect(findLines(state, "同", []).at(-1)).toBe("還有 1 個議題符合，請用更長的關鍵字。");
   });
 
   it("treats the query as plain text, not as a pattern", () => {
     expect(findLines(fixture(), ".*", [])).toEqual(["找不到「.*」。"]);
+  });
+});
+
+describe("findLines for working out what happened", () => {
+  it("says where each change was made and why, when that was recorded", () => {
+    let state = fixture();
+    state = done(
+      topics.stampHistory(
+        topics.split(
+          state,
+          { from: "billing", name: "退款", goal: "g", id: "refunds", reason: "帳務太寬" },
+          "2026-11-16T19:36:44Z",
+        ),
+        0,
+        "command",
+      ),
+    );
+    state = done(topics.closePropose(state, "refunds", "都做完了", "2026-11-17T00:00:00Z"));
+    state = done(
+      topics.stampHistory(topics.archive(state, "refunds", "2026-11-17T03:26:21Z"), 1, "page"),
+    );
+    state = done(topics.merge(state, "login", "billing", "2026-11-18T00:00:00Z"));
+    expect(findLines(state, "退款", [])).toEqual([
+      "refunds　退款（已封存）",
+      "  2026-11-16 從「帳務重構」（billing）拆出「退款」（refunds）（用指令；原因：帳務太寬）",
+      "  2026-11-17 封存（在頁面上；原因：都做完了）",
+    ]);
+    expect(findLines(state, "login", []).at(-1)).toBe(
+      "  2026-11-18 「登入」（login）併入「帳務重構」",
+    );
+  });
+
+  it("prints every topic and every entry with exact times when asked for everything", () => {
+    let state = topics.emptyState();
+    for (let index = 0; index < 7; index += 1) {
+      state = done(
+        topics.propose(state, { name: `同 ${index}`, goal: "g", id: `t${index}`, by: "user" }, "T"),
+      );
+    }
+    for (let index = 0; index < 10; index += 1) {
+      state = done(topics.rename(state, "t0", `同 0 版${index}`, `2026-11-18T00:00:0${index}Z`));
+    }
+    const lines = findLines(state, "同", [], true);
+    expect(lines.filter((line) => !line.startsWith("  "))).toHaveLength(7);
+    expect(lines.filter((line) => line.startsWith("  "))).toHaveLength(10);
+    expect(lines[1]).toBe("  2026-11-18T00:00:00Z 「同 0」改名為「同 0 版0」");
+    expect(lines.join("\n")).not.toContain("還有");
+    expect(findLines(state, "同", [])).toContain("還有 2 個議題符合，請用更長的關鍵字。");
+    const tags = [
+      { home: "main", task: "w1", tags: [{ topic: "t1", atMs: Date.UTC(2026, 10, 19, 8, 7, 6) }] },
+    ];
+    expect(findLines(state, "w1", tags, true)).toEqual([
+      "task main/w1：同 1（2026-11-19T08:07:06.000Z）",
+    ]);
+    expect(findLines(state, "w1", tags)).toEqual(["task main/w1：同 1（2026-11-19）"]);
   });
 });

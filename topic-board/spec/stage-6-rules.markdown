@@ -21,11 +21,11 @@
 
 | fork 裡的檔名 | 來源 | 大小 |
 | --- | --- | --- |
-| `captain.block.md.tmpl` | `templates/captain.block.md` | 約 1020 token |
+| `captain.block.md.tmpl` | `templates/captain.block.md` | 約 1061 token |
 | `captain-shared.block.md.tmpl` | `templates/captain-shared.block.md` | 約 254 token |
 | `captain-shared.header.md.tmpl` | `templates/captain-shared.header.md` | 約 81 token |
 
-副檔名不能是 `.md`（[contracts](contracts.markdown) 第 2 節的限制）。token 用上游的算法：UTF-8 位元組數除以 3 無條件進位；三者合計約 1355，預設預算是 7500。
+副檔名不能是 `.md`（[contracts](contracts.markdown) 第 2 節的限制）。token 用上游的算法：UTF-8 位元組數除以 3 無條件進位；三者合計約 1396，預設預算是 7500。
 
 內容照搬，這一段不改任何字。之後要改規則，改的是 fork 裡的範本，然後重跑 `install-rules`；標記那一行的 `vN` 跟著加一。
 
@@ -72,6 +72,6 @@
    - 在 secondmate home：被拒，什麼都沒寫。
    - 備份檔存在，`rules-backup/` 是 0700。
    - `status` 的三種規則狀態；手動改掉區塊裡一個字之後顯示「和範本不同」。
-   - 三個範本合計的 token 數（位元組數除以 3 進位）小於 1400，防止之後不小心寫胖。
+   - 三個範本合計的 token 數（位元組數除以 3 進位）小於 1450，防止之後不小心寫胖。
 2. `diff` 三個範本與規劃目錄的 `templates/` 原檔，沒有差異。
 3. 前五段的驗收再跑一次，特別是 `bin/fm-doc-audience-check.sh` 仍回 `ok`（範本沒有被當成 `.md`）。

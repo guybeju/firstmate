@@ -383,9 +383,12 @@ test_decisions_made_on_the_page_reach_firstmate() {
   assert_equals 200 "$got" "merging on the page failed"
   wait_calls fm-inbox.sh $((before + 3))
   assert_contains "$(last_call fm-inbox.sh)" "議題「By hand」已併入「Fresh name」（id：fresh）" "a merge made on the page must reach firstmate"
+  assert_equals page "$(jq -r '[.history[] | select(.kind == "merged" and .from == "byhand")][0].by' "$MAIN/data/topics.json")" \
+    "a merge made on the page must be recorded as made there"
   assert_equals 200 "$(page archive '{"id":"fresh"}')" "archiving on the page failed"
   wait_calls fm-inbox.sh $((before + 4))
   assert_contains "$(last_call fm-inbox.sh)" "議題「Fresh name」已封存（id：fresh）" "archiving on the page must reach firstmate"
+  assert_contains "$(t find fresh)" "封存（在頁面上）" "find must say the archive was done on the page"
   pass "confirm, keep, merge, and archive done on the page are sent to firstmate; its own commands are not"
 }
 

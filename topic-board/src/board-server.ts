@@ -182,6 +182,13 @@ function markTodo(
   return topics.markTodo(service.state, input, now());
 }
 
+/** The `reason` argument: absent, a string, or null when it is something else. */
+function optionalReason(args: Record<string, unknown>): string | undefined | null {
+  const reason = args["reason"];
+  if (reason === undefined) return undefined;
+  return typeof reason === "string" ? reason : null;
+}
+
 const TOPIC_HANDLERS: Record<string, TopicHandler> = {
   "todo-claim": (service, args) => markTodo(service, args, "claimed"),
   "todo-failed": (service, args) => markTodo(service, args, "rejected"),
@@ -219,8 +226,10 @@ const TOPIC_HANDLERS: Record<string, TopicHandler> = {
   merge: (service, args) => {
     const from = stringField(args, "from");
     const into = stringField(args, "into");
+    const reason = optionalReason(args);
     if (from === null || into === null) return { usage: "merge 需要兩個議題 id。" };
-    return topics.merge(service.state, from, into, now());
+    if (reason === null) return { usage: "--reason 要是一行文字。" };
+    return topics.merge(service.state, from, into, now(), reason);
   },
   "close-propose": (service, args) => {
     const id = stringField(args, "id");
@@ -244,8 +253,16 @@ const TOPIC_HANDLERS: Record<string, TopicHandler> = {
     const id = args["id"];
     if (from === null || name === null || goal === null)
       return { usage: "split 需要來源議題、新名稱與 --goal。" };
+    const reason = optionalReason(args);
     if (id !== undefined && typeof id !== "string") return { usage: "--id 要是字串。" };
-    const input = id === undefined ? { from, name, goal } : { from, name, goal, id };
+    if (reason === null) return { usage: "--reason 要是一行文字。" };
+    const input = {
+      from,
+      name,
+      goal,
+      ...(id === undefined ? {} : { id }),
+      ...(reason === undefined ? {} : { reason }),
+    };
     const result = topics.split(service.state, input, now());
     // --dry answers what the split would do, so the caller can check its tasks first.
     if (args["dry"] !== true || !result.ok) return result;
@@ -427,7 +444,8 @@ async function find(service: Service, args: Record<string, unknown>): Promise<Bo
   const isTask = taskArg({ task: query }) !== null;
   if (isTask) await withTimeout(service.poller.readFresh(MAIN_HOME), LOOKUP_WAIT_MS, false);
   const tasks = isTask ? taskTags(service, query) : [];
-  return { ok: true, line: findLines(service.state, query, tasks).join("\n") };
+  const everything = args["all"] === true;
+  return { ok: true, line: findLines(service.state, query, tasks, everything).join("\n") };
 }
 
 function writeView(record: WriteRecord): Record<string, unknown> {
@@ -862,8 +880,10 @@ function topicOp(
   const handler = Object.hasOwn(TOPIC_HANDLERS, op) ? TOPIC_HANDLERS[op] : undefined;
   if (handler === undefined) return usage(`不認得的 op：${op}`);
   const claimed = isClaimed(service, args);
-  const result = handler(service, args);
-  if ("usage" in result) return usage(result.usage);
+  const recorded = service.state.doc.history.length;
+  const handled = handler(service, args);
+  if ("usage" in handled) return usage(handled.usage);
+  const result = topics.stampHistory(handled, recorded, fromPage ? "page" : "command");
   const response = commit(service, result);
   if (fromPage && result.ok) {
     const lines =

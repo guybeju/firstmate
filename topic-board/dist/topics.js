@@ -2,6 +2,7 @@
 // clock. Callers pass the current time and persist the returned state.
 export const QUEUES = ["high", "normal", "later"];
 export const HISTORY_KINDS = ["merged", "renamed", "split", "archived", "reopened"];
+export const HISTORY_ACTORS = ["page", "command"];
 export const TODO_STATES = ["claimed", "rejected", "obsolete"];
 export const NAME_MAX = 80;
 export const GOAL_MAX = 200;
@@ -162,7 +163,10 @@ export function confirm(state, rawId, queue) {
         },
     ]);
 }
-export function merge(state, rawFrom, rawInto, now) {
+export function merge(state, rawFrom, rawInto, now, reason) {
+    const why = reasonOf(reason);
+    if (why === null)
+        return refuse(REASON_PROBLEM);
     const into = resolveTopicId(state.doc, rawInto);
     const from = resolveTopicId(state.doc, rawFrom);
     if (from === into) {
@@ -189,10 +193,19 @@ export function merge(state, rawFrom, rawInto, now) {
         name: target.name,
         from,
         from_name: source.name,
+        ...why,
     });
     return changed(next, `ok ${from} 已併入 ${into}`, [
         { kind: "topic.merged", topic: into, text: `議題「${source.name}」已併入「${target.name}」` },
     ]);
+}
+const REASON_PROBLEM = `原因要是一行，最多 ${GOAL_MAX} 個字。`;
+/** The history fields for an optional reason: none when absent, null when it is not one line. */
+function reasonOf(reason) {
+    if (reason === undefined)
+        return {};
+    const line = oneLine(reason, GOAL_MAX);
+    return line === null ? null : { reason: line };
 }
 /**
  * Splits a new confirmed topic off `input.from`, placed right after it in the
@@ -200,6 +213,9 @@ export function merge(state, rawFrom, rawInto, now) {
  * caller's job; the history records only that the topic was split off.
  */
 export function split(state, input, now) {
+    const why = reasonOf(input.reason);
+    if (why === null)
+        return refuse(REASON_PROBLEM);
     const found = confirmedTopic(state, input.from);
     if ("ok" in found)
         return found;
@@ -232,6 +248,7 @@ export function split(state, input, now) {
         name,
         from: found.id,
         from_name: found.topic.name,
+        ...why,
     });
     return changed(next, `ok ${id} 已從 ${found.id} 拆出，放進「${QUEUE_LABEL[queue]}」`, [
         { kind: "topic.split", topic: id, text: `從議題「${found.topic.name}」拆出「${name}」` },
@@ -336,7 +353,8 @@ export function archive(state, rawId, now) {
     next.archive.topics[id] = { ...kept, archived_at: now };
     delete next.doc.topics[id];
     removeFromQueues(next.doc, id);
-    next.doc.history.push({ at: now, kind: "archived", topic: id, name: topic.name });
+    const why = topic.close_proposal === undefined ? {} : { reason: topic.close_proposal.reason };
+    next.doc.history.push({ at: now, kind: "archived", topic: id, name: topic.name, ...why });
     return changed(next, `ok ${id} 已封存`, [
         { kind: "topic.archived", topic: id, text: `議題「${topic.name}」已封存` },
     ]);
@@ -422,4 +440,13 @@ export function clearTodo(state, task) {
     const next = clone(state);
     delete next.doc.todos[task];
     return changed(next, `ok ${task} 回到還沒做`);
+}
+/** Marks the history entries a change just added with where the change was made. */
+export function stampHistory(result, before, by) {
+    if (!result.ok || !result.changed || result.state.doc.history.length <= before)
+        return result;
+    const state = clone(result.state);
+    for (const entry of state.doc.history.slice(before))
+        entry.by = by;
+    return { ...result, state };
 }

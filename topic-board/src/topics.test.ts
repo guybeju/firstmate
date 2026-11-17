@@ -599,3 +599,61 @@ describe("hands-on items", () => {
     expect(Object.keys(result.state.doc.todos)).toEqual(["constructor"]);
   });
 });
+
+describe("why and where a change was made", () => {
+  it("keeps the reason given with a merge or a split, and refuses one that is not a line", () => {
+    const merged = done(topics.merge(fixture(), "b", "c", NOW, "重複了"));
+    expect(merged.state.doc.history.at(-1)).toMatchObject({ kind: "merged", reason: "重複了" });
+    const plain = done(topics.merge(fixture(), "b", "c", NOW));
+    expect(plain.state.doc.history.at(-1)).not.toHaveProperty("reason");
+    const input = { from: "a", name: "A2", goal: "g", id: "a2" };
+    const split = done(topics.split(fixture(), { ...input, reason: "太寬" }, NOW));
+    expect(split.state.doc.history.at(-1)).toMatchObject({ kind: "split", reason: "太寬" });
+    for (const reason of ["", "a\nb", "x".repeat(201)]) {
+      expect(refusal(topics.merge(fixture(), "b", "c", NOW, reason))).toBe(
+        "原因要是一行，最多 200 個字。",
+      );
+      expect(refusal(topics.split(fixture(), { ...input, reason }, NOW))).toBe(
+        "原因要是一行，最多 200 個字。",
+      );
+    }
+  });
+
+  it("does not record a repeated split again, whatever reason the repeat carries", () => {
+    const input = { from: "a", name: "A2", goal: "g", id: "a2" };
+    const first = done(topics.split(fixture(), { ...input, reason: "太寬" }, NOW));
+    const again = done(topics.split(first.state, { ...input, reason: "另一個說法" }, "later"));
+    expect(again.changed).toBe(false);
+    expect(again.state.doc.history).toEqual(first.state.doc.history);
+  });
+
+  it("carries the close proposal into the archive's entry", () => {
+    const proposed = done(topics.closePropose(fixture(), "a", "都做完了", NOW));
+    const archived = done(topics.archive(proposed.state, "a", NOW));
+    expect(archived.state.doc.history.at(-1)).toEqual({
+      at: NOW,
+      kind: "archived",
+      topic: "a",
+      name: "A",
+      reason: "都做完了",
+    });
+    const plain = done(topics.archive(fixture(), "b", NOW));
+    expect(plain.state.doc.history.at(-1)).not.toHaveProperty("reason");
+  });
+
+  it("stamps only the entries a change added, and leaves the result it was given alone", () => {
+    const first = done(topics.rename(fixture(), "a", "A1", NOW));
+    const second = topics.rename(first.state, "a", "A2", NOW);
+    const stamped = done(topics.stampHistory(second, first.state.doc.history.length, "page"));
+    expect(stamped.state.doc.history.map((entry) => entry.by)).toEqual([undefined, "page"]);
+    expect(done(second).state.doc.history.at(-1)).not.toHaveProperty("by");
+    const unchangedResult = topics.rename(first.state, "a", "A1", NOW);
+    expect(topics.stampHistory(unchangedResult, 0, "page")).toBe(unchangedResult);
+    const refused = topics.rename(first.state, "nope", "x", NOW);
+    expect(topics.stampHistory(refused, 0, "page")).toBe(refused);
+    const noHistory = topics.setGoal(first.state, "a", "new goal");
+    expect(topics.stampHistory(noHistory, first.state.doc.history.length, "command")).toBe(
+      noHistory,
+    );
+  });
+});

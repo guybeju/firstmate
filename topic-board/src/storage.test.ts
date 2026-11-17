@@ -285,6 +285,15 @@ describe("store", () => {
     ];
     fs.writeFileSync(paths.topics, JSON.stringify({ ...base, history }));
     expect(loadTopicState(paths).doc.history).toEqual([good]);
+    const told = { ...good, reason: "重複了", by: "page" };
+    const odd = [
+      { ...good, reason: 7, by: "someone" },
+      { ...good, reason: "" },
+      { ...good, reason: "two\nlines" },
+      { ...good, reason: "x".repeat(201) },
+    ];
+    fs.writeFileSync(paths.topics, JSON.stringify({ ...base, history: [told, ...odd] }));
+    expect(loadTopicState(paths).doc.history).toEqual([told, good, good, good, good]);
     fs.writeFileSync(paths.topics, JSON.stringify({ ...base, history: "nope" }));
     expect(loadTopicState(paths).doc.history).toEqual([]);
   });
