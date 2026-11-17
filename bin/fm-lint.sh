@@ -40,6 +40,11 @@
 # backend-purity check. The backend-purity check rejects direct Beads CLI
 # invocations in the core bin/ and bin/backends/ scripts so every configured
 # backlog backend follows the same tasks-axi lifecycle path.
+# Every mode - default, zero changed targets, explicit paths, and partitions -
+# also runs the doctor-pin check: bin/fm-remote-entrypoint.sh must assign
+# DOCTOR_SHA256 exactly once, and it must equal the sha256 of
+# bin/fm-remote-doctor.sh, because the entrypoint refuses any other doctor on
+# a remote host without git.
 #
 # Lint defaults to two concurrency-limited workers over two stable logical
 # shards, and each worker runs ONE canonical root per ShellCheck process, so a
@@ -709,6 +714,40 @@ fm_lint_run_backend_purity() {
   }
 }
 
+# The remote entrypoint runs fm-remote-doctor.sh on a host without git only
+# when the doctor's digest equals its DOCTOR_SHA256 pin, so a doctor change
+# that leaves the pin stale breaks that bootstrap. Every lint mode checks the
+# pair; a tree without the entrypoint has no pin to keep.
+fm_lint_run_doctor_pin() {
+  local entrypoint=bin/fm-remote-entrypoint.sh doctor=bin/fm-remote-doctor.sh pins pin actual
+  [ -f "$entrypoint" ] || return 0
+  pins=$(grep -c '^DOCTOR_SHA256=' "$entrypoint")
+  pin=$(sed -n 's/^DOCTOR_SHA256=//p' "$entrypoint")
+  if [ "$pins" != 1 ]; then
+    printf 'fm-lint.sh: %s must assign DOCTOR_SHA256 exactly once.\n' "$entrypoint" >&2
+    return 1
+  fi
+  if [ ! -f "$doctor" ]; then
+    printf 'fm-lint.sh: %s pins DOCTOR_SHA256 but %s is missing.\n' "$entrypoint" "$doctor" >&2
+    return 1
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual=$(sha256sum "$doctor" | awk '{print $1}')
+  elif command -v shasum >/dev/null 2>&1; then
+    actual=$(shasum -a 256 "$doctor" | awk '{print $1}')
+  else
+    printf 'fm-lint.sh: cannot verify the DOCTOR_SHA256 pin: %s\n' \
+      'neither sha256sum nor shasum is on PATH.' >&2
+    return 1
+  fi
+  [ "$actual" != "$pin" ] || return 0
+  printf 'fm-lint.sh: %s (sha256 %s) does not match the DOCTOR_SHA256 pin %s in %s.\n' \
+    "$doctor" "$actual" "$pin" "$entrypoint" >&2
+  printf 'fm-lint.sh: a remote host without git refuses this doctor; %s DOCTOR_SHA256=%s.\n' \
+    'after confirming the doctor change is intended, set' "$actual" >&2
+  return 1
+}
+
 JOBS=${FM_LINT_JOBS:-2}
 TELEMETRY=${FM_LINT_TELEMETRY:-}
 FAST=0
@@ -938,6 +977,7 @@ if [ "$CHANGED_MODE" -eq 1 ] && [ "$ROOT_COUNT" -eq 0 ]; then
   printf 'fm-lint.sh: no changed lint targets\n'
   overall_rc=0
   fm_lint_run_backend_purity || overall_rc=$?
+  fm_lint_run_doctor_pin || overall_rc=$?
   fm_lint_run_workflows || overall_rc=$?
   exit "$overall_rc"
 fi
@@ -1266,10 +1306,11 @@ EOF
   } >> "$ROOTS_LOG"
 fi
 
-purity_rc=0
-fm_lint_run_backend_purity || purity_rc=$?
-if [ "$overall_rc" -eq 0 ] && [ "$purity_rc" -ne 0 ]; then
-  overall_rc=$purity_rc
+check_rc=0
+fm_lint_run_backend_purity || check_rc=$?
+fm_lint_run_doctor_pin || check_rc=$?
+if [ "$overall_rc" -eq 0 ] && [ "$check_rc" -ne 0 ]; then
+  overall_rc=$check_rc
 fi
 
 if [ "$overall_rc" -eq 0 ]; then

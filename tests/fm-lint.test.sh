@@ -1221,6 +1221,107 @@ test_rejects_direct_beads_cli_in_explicit_core_path() {
   pass "fm-lint.sh enforces backend purity for explicit core paths"
 }
 
+fm_lint_sha256() {  # <file>
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+# fm_lint_doctor_pin_repo <repo> <fakebin>: a lint fixture holding a remote
+# doctor and an entrypoint whose DOCTOR_SHA256 pins that doctor's digest.
+fm_lint_doctor_pin_repo() {
+  local repo=$1 fakebin=$2
+  mkdir -p "$repo/bin/backends" "$repo/tests"
+  cp "$LINT" "$repo/bin/fm-lint.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/bin/fm-lint-workflows.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/bin/backends/noop.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/tests/noop.test.sh"
+  printf '#!/usr/bin/env bash\necho doctor\n' > "$repo/bin/fm-remote-doctor.sh"
+  printf '#!/usr/bin/env bash\nPROTOCOL=1\nDOCTOR_SHA256=%s\n' \
+    "$(fm_lint_sha256 "$repo/bin/fm-remote-doctor.sh")" > "$repo/bin/fm-remote-entrypoint.sh"
+  chmod +x "$repo/bin/fm-lint.sh" "$repo/bin/fm-lint-workflows.sh"
+  fm_lint_stub_shellcheck "$fakebin" "$repo/../shellcheck.log"
+  fm_lint_stub_git "$fakebin"
+}
+
+# fm_lint_doctor_pin_run <repo> <fakebin> <mode>: run the fixture's lint in
+# full CI mode, local changed mode with no changed targets, or explicit-path
+# mode; prints the combined output and returns lint's exit status.
+fm_lint_doctor_pin_run() {
+  local repo=$1 fakebin=$2 mode=$3 diff_file
+  diff_file="$repo/../diff.nul"
+  : > "$diff_file"
+  case "$mode" in
+    ci)
+      (cd "$repo" && CI=true PATH="$fakebin:$PATH" bin/fm-lint.sh 2>&1)
+      ;;
+    changed)
+      (cd "$repo" && GITHUB_ACTIONS='' CI='' PATH="$fakebin:$PATH" FM_TEST_GIT_BRANCH=feature \
+        FM_TEST_GIT_DIFF_FILE="$diff_file" bin/fm-lint.sh 2>&1)
+      ;;
+    explicit)
+      (cd "$repo" && PATH="$fakebin:$PATH" bin/fm-lint.sh tests/noop.test.sh 2>&1)
+      ;;
+  esac
+}
+
+test_doctor_change_without_its_pin_fails_lint() {
+  local tmp fakebin repo mode out rc
+  tmp=$(fm_test_tmproot fm-lint-doctor-pin)
+  fakebin=$(fm_fakebin "$tmp")
+  repo="$tmp/repo"
+  fm_lint_doctor_pin_repo "$repo" "$fakebin"
+
+  for mode in ci changed explicit; do
+    rc=0
+    out=$(fm_lint_doctor_pin_run "$repo" "$fakebin" "$mode") || rc=$?
+    [ "$rc" -eq 0 ] || fail "lint failed a doctor that matches its pin ($mode mode)"$'\n'"$out"
+  done
+
+  printf 'echo changed\n' >> "$repo/bin/fm-remote-doctor.sh"
+  for mode in ci changed explicit; do
+    rc=0
+    out=$(fm_lint_doctor_pin_run "$repo" "$fakebin" "$mode") || rc=$?
+    [ "$rc" -ne 0 ] || fail "lint passed a doctor changed without its pin ($mode mode)"$'\n'"$out"
+    assert_contains "$out" "does not match the DOCTOR_SHA256 pin" \
+      "lint did not name the stale doctor pin ($mode mode)"
+    assert_contains "$out" "$(fm_lint_sha256 "$repo/bin/fm-remote-doctor.sh")" \
+      "lint did not report the doctor's actual digest ($mode mode)"
+  done
+  pass "fm-lint.sh fails a remote doctor change that leaves the entrypoint pin stale"
+}
+
+test_doctor_pin_check_refuses_an_unreadable_pin() {
+  local tmp fakebin repo case_name expected out rc
+  for case_name in missing-pin duplicate-pin missing-doctor; do
+    expected="assign DOCTOR_SHA256 exactly once"
+    tmp=$(fm_test_tmproot "fm-lint-doctor-pin-$case_name")
+    fakebin=$(fm_fakebin "$tmp")
+    repo="$tmp/repo"
+    fm_lint_doctor_pin_repo "$repo" "$fakebin"
+    case "$case_name" in
+      missing-pin)
+        printf '#!/usr/bin/env bash\nPROTOCOL=1\n' > "$repo/bin/fm-remote-entrypoint.sh"
+        ;;
+      duplicate-pin)
+        printf 'DOCTOR_SHA256=%s\n' "$(fm_lint_sha256 "$repo/bin/fm-remote-doctor.sh")" \
+          >> "$repo/bin/fm-remote-entrypoint.sh"
+        ;;
+      missing-doctor)
+        rm "$repo/bin/fm-remote-doctor.sh"
+        expected="pins DOCTOR_SHA256 but bin/fm-remote-doctor.sh is missing"
+        ;;
+    esac
+    rc=0
+    out=$(fm_lint_doctor_pin_run "$repo" "$fakebin" ci) || rc=$?
+    [ "$rc" -ne 0 ] || fail "lint passed with an unverifiable doctor pin ($case_name)"$'\n'"$out"
+    assert_contains "$out" "$expected" "lint did not explain the unverifiable pin ($case_name)"
+  done
+  pass "fm-lint.sh refuses a doctor pin it cannot verify"
+}
+
 test_ignores_ambient_shellcheck_opts() {
   if ! pinned_ready; then
     pass "SKIP (ShellCheck $REQUIRED not resolved): ambient options regression check"
@@ -2046,6 +2147,8 @@ test_rejects_wrong_shellcheck_version
 test_catches_a_real_lint_defect
 test_rejects_direct_beads_cli_invocations
 test_rejects_direct_beads_cli_in_explicit_core_path
+test_doctor_change_without_its_pin_fails_lint
+test_doctor_pin_check_refuses_an_unreadable_pin
 test_ignores_ambient_shellcheck_opts
 test_clean_fixture_passes
 test_jobs_are_deterministic_and_complete
