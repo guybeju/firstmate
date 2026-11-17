@@ -6,6 +6,7 @@
 #        fm-control.sh <task-id> exit
 #        fm-control.sh <task-id> relaunch [--harness <name>] [--model <name>]
 #                                         [--effort <level>] [--account <entry>]
+#                                         [--mode <no-mistakes|direct-PR>]
 #                                         (--note <text> | --note-file <path>)
 #
 # Why this exists, and how it differs from fm-send.sh. bin/fm-send.sh is the
@@ -102,6 +103,13 @@
 #              inherits the local copy but none of the conversation; a
 #              secondmate reconciles its own home's records at startup, so its
 #              standing charter is never rewritten.
+#              --mode <no-mistakes|direct-PR> also switches a live ship's
+#              delivery mode: before anything is stopped it re-renders the
+#              brief's contract sections for the new mode (bin/fm-dod-lib.sh
+#              fm_brief_switch_delivery), and fm-spawn.sh --relaunch --mode
+#              publishes the replacement's record with it; yolo is untouched.
+#              docs/agent-control.md "Switching a ship's delivery mode" owns
+#              what it refuses and how a failure keeps brief and record agreed.
 #              Records a durable checkpoint and that note, exits the old agent,
 #              then delegates the launch to its single owner,
 #              bin/fm-spawn.sh --relaunch. A failure before publication keeps
@@ -206,6 +214,10 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-omp-profile-lib.sh"
 # shellcheck source=bin/fm-exclude-tools-lib.sh
 . "$SCRIPT_DIR/fm-exclude-tools-lib.sh"
+# shellcheck source=bin/fm-dod-lib.sh
+. "$SCRIPT_DIR/fm-dod-lib.sh"
+# shellcheck source=bin/fm-role-lib.sh
+. "$SCRIPT_DIR/fm-role-lib.sh"
 
 POLL=${FM_CONTROL_POLL:-0.5}
 SETTLE_WAIT=${FM_CONTROL_SETTLE_WAIT:-5}
@@ -234,6 +246,9 @@ control_cleanup() {
   # the next lifecycle command for this task writes the same path.
   if [ -n "${FM_COMPOSER_DIALOG_SINK:-}" ]; then
     rm -f "$FM_COMPOSER_DIALOG_SINK"
+  fi
+  if [ "$CONTROL_LOCK_HELD" = 1 ] && [ -n "${SWITCH_BRIEF:-}" ]; then
+    rm -f "$SWITCH_BRIEF"
   fi
   if [ "$CONTROL_LOCK_HELD" = 1 ]; then
     CONTROL_LOCK_HELD=0
@@ -275,6 +290,8 @@ EFFORT_SET=0
 ACCOUNT_SET=0
 NOTE=
 NOTE_SET=0
+NEW_MODE=
+MODE_SET=0
 control_want_value=
 for control_arg in "$@"; do
   if [ -n "$control_want_value" ]; then
@@ -286,6 +303,7 @@ for control_arg in "$@"; do
       model) NEW_MODEL=$control_arg; MODEL_SET=1 ;;
       effort) NEW_EFFORT=$control_arg; EFFORT_SET=1 ;;
       account) NEW_ACCOUNT=$control_arg; ACCOUNT_SET=1 ;;
+      mode) NEW_MODE=$control_arg; MODE_SET=1 ;;
       note) NOTE=$control_arg; NOTE_SET=1 ;;
       note_file)
         [ -f "$control_arg" ] || die "--note-file '$control_arg' is not a readable file"
@@ -305,6 +323,8 @@ for control_arg in "$@"; do
     --effort=*) NEW_EFFORT=${control_arg#--effort=}; EFFORT_SET=1 ;;
     --account) control_want_value=account ;;
     --account=*) NEW_ACCOUNT=${control_arg#--account=}; ACCOUNT_SET=1 ;;
+    --mode) control_want_value=mode ;;
+    --mode=*) NEW_MODE=${control_arg#--mode=}; MODE_SET=1 ;;
     --note) control_want_value=note ;;
     --note=*) NOTE=${control_arg#--note=}; NOTE_SET=1 ;;
     --note-file) control_want_value=note_file ;;
@@ -323,8 +343,14 @@ fi
 
 if [ "$VERB" != relaunch ]; then
   [ "$HARNESS_SET" = 0 ] && [ "$MODEL_SET" = 0 ] && [ "$EFFORT_SET" = 0 ] && [ "$ACCOUNT_SET" = 0 ] && [ "$NOTE_SET" = 0 ] \
-    || die "--harness, --model, --effort, --account, and --note apply to 'relaunch' only"
+    && [ "$MODE_SET" = 0 ] \
+    || die "--harness, --model, --effort, --account, --mode, and --note apply to 'relaunch' only"
 fi
+case "$MODE_SET:$NEW_MODE" in
+  0:*|1:no-mistakes|1:direct-PR|1:local-only) ;;
+  1:no-mistakes-prod-only) die "no-mistakes-prod-only is a registry policy, not a task mode; classify this task's surface and pass --mode no-mistakes or --mode direct-PR" ;;
+  *) die "--mode must be one of no-mistakes, direct-PR (got '$NEW_MODE')" ;;
+esac
 [ "$ACCOUNT_SET" = 0 ] || [ -n "$NEW_ACCOUNT" ] || die "--account requires a non-empty value"
 [ "$HARNESS_SET" = 0 ] || [ -n "$NEW_HARNESS" ] || die "--harness requires a non-empty value"
 [ "$MODEL_SET" = 0 ] || [ -n "$NEW_MODEL" ] || die "--model requires a non-empty value"
@@ -884,6 +910,8 @@ TARGET_HARNESS=$HARNESS
 TARGET_MODEL=
 TARGET_EFFORT=
 TARGET_ACCOUNT=
+FROM_MODE=
+SWITCH_BRIEF="$JOURNAL.brief-next"
 
 journal_write() {  # <phase> [extra-line]...
   local phase=$1
@@ -914,6 +942,18 @@ journal_write() {  # <phase> [extra-line]...
   return 1
 }
 
+# A delivery-mode switch rewrote the brief before the stop. When the prior
+# record is kept, the prior brief comes back too, so brief and record keep
+# naming the same mode; the progress note survives in $NOTE_FILE.
+restore_switched_brief() {
+  [ "$MODE_SET" = 1 ] && [ -n "$RELAUNCH_BRIEF" ] && [ -f "$BRIEF_PRIOR" ] || return 0
+  if cp -p "$BRIEF_PRIOR" "$RELAUNCH_BRIEF" 2>/dev/null; then
+    echo "error: $ID's instructions were restored to mode=$FROM_MODE to match its kept record; its progress note is preserved at $NOTE_FILE" >&2
+  else
+    echo "error: $ID's instructions could not be restored to mode=$FROM_MODE; restore them from $BRIEF_PRIOR before any further relaunch" >&2
+  fi
+}
+
 relaunch_rollback() {
   local state
   [ "$RELAUNCH_ACTIVE" = 1 ] || return 0
@@ -940,6 +980,7 @@ relaunch_rollback() {
           echo "error: relaunch of $ID failed while stopping the old agent, which is still running; its original instructions were restored" >&2
           ;;
         dead)
+          restore_switched_brief
           journal_write "failed:$RELAUNCH_PHASE" "rollback=prior-record-kept-agent-dead" || true
           echo "error: $ID's agent stopped but relaunch did not reach replacement launch; no agent is running, and its work plus progress note are preserved at $WT" >&2
           ;;
@@ -972,6 +1013,7 @@ relaunch_rollback() {
         journal_write "failed:$RELAUNCH_PHASE" "rollback=none-new-record-kept" || true
         echo "error: $ID was relaunched on $TARGET_HARNESS but no running agent could be confirmed; its work is preserved at $WT" >&2
       else
+        restore_switched_brief
         journal_write "failed:$RELAUNCH_PHASE" "rollback=prior-record-kept" || true
         echo "error: $ID's agent was stopped but the replacement did not launch; no agent is running, and its work plus the recorded progress note are preserved at $WT" >&2
       fi
@@ -1181,6 +1223,54 @@ safe_checkpoint() {
   fi
 }
 
+# preflight_mode_switch: every refusal a --mode switch can meet, run before the
+# checkpoint so a refusal leaves the agent, the record, and the brief untouched.
+# The re-rendered brief is staged at $SWITCH_BRIEF for record_note to publish.
+preflight_mode_switch() {
+  local proj branch recorded_pr run_out run_id run_branch to_pr gate_rc consent
+  FROM_MODE=$(fm_meta_get "$META" mode)
+  [ -n "$FROM_MODE" ] || die "task $ID records no delivery mode, so there is no contract to switch from"
+  [ "$FROM_MODE" != "$NEW_MODE" ] || die "task $ID already ships mode=$NEW_MODE; there is nothing to switch"
+  if [ "$FROM_MODE" = local-only ] || [ "$NEW_MODE" = local-only ]; then
+    die "switching to or from local-only is not supported: it publishes nothing, latches its accepted head for the local merge, and carries no forge, base branch, or upstream consent, so its record does not translate to a publishing mode"
+  fi
+  recorded_pr=$(fm_meta_get "$META" pr)
+  [ ! -e "$STATE/$ID.pr-poll-merge-notified" ] \
+    || die "task $ID's PR ${recorded_pr:-}${recorded_pr:+ }is already merged; its delivery is over, so there is no mode to switch"
+  [ -z "$recorded_pr" ] \
+    || die "task $ID already has its PR registered ($recorded_pr); a delivery-mode switch is only for work that has not reached a PR yet"
+  branch=$(fm_meta_get "$META" branch)
+  [ -n "$branch" ] || branch="fm/$ID"
+  if [ "$FROM_MODE" = no-mistakes ]; then
+    run_out=$(fm_nm_run "$WT" 10 axi status)
+    run_id=$(fm_nm_strip_quotes "$(fm_nm_field "$run_out" id)")
+    run_branch=$(fm_nm_strip_quotes "$(fm_nm_field "$run_out" branch)")
+    if [ -n "$run_id" ] && [ "$run_branch" = "$branch" ] && fm_nm_run_is_active "$run_out"; then
+      die "task $ID has no-mistakes run $run_id still active on $branch; switching now would orphan it, so stop it first (no-mistakes axi abort --run $run_id, from $WT) or let it finish, then switch"
+    fi
+    [ -n "$run_out" ] || echo "notice: no-mistakes run status could not be read from $WT; proceeding without proof that no run is active on $branch" >&2
+  fi
+  proj=$(fm_meta_get "$META" project)
+  [ -n "$proj" ] || die "task $ID has no recorded project; refusing to switch its delivery mode"
+  to_pr=auto
+  if [ "$NEW_MODE" = no-mistakes ]; then
+    to_pr=$("$FM_ROOT/bin/fm-project-mode.sh" --pr "$(basename "$proj")") \
+      || die "the registry entry for $(basename "$proj") does not resolve to a PR-text posture (see the refusal above); correct data/projects.md before switching"
+    [ -n "$to_pr" ] || to_pr=auto
+  fi
+  consent=$(fm_meta_get "$META" upstream_consent)
+  gate_rc=0
+  fm_role_gate_self_publish "$FM_HOME" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" "$proj" "$FM_ROOT" "$consent" || gate_rc=$?
+  case $gate_rc in
+    0|2) ;;
+    *) die "switch refused for $ID: $FM_ROLE_PUB_DENIAL" ;;
+  esac
+  fm_brief_switch_delivery "$RELAUNCH_BRIEF" "$DATA" "$ID" "$NEW_MODE" "$to_pr" > "$SWITCH_BRIEF" \
+    || die "task $ID's instructions cannot be switched to mode=$NEW_MODE (see the refusal above); nothing changed"
+  [ "$FM_BRIEF_SWITCH_FROM" = "$FROM_MODE" ] \
+    || die "task $ID's instructions say mode=$FM_BRIEF_SWITCH_FROM but its record says mode=$FROM_MODE; reconcile them before switching"
+}
+
 # record_note: put the required progress note somewhere durable, and - for a
 # ship or scout, whose only record of the interrupted reasoning is the
 # conversation about to be discarded - into the instructions the replacement
@@ -1196,6 +1286,10 @@ record_note() {
     ship|scout)
       cp -p "$RELAUNCH_BRIEF" "$BRIEF_PRIOR" \
         || die "could not preserve task $ID's instructions before recording the progress note"
+      if [ "$MODE_SET" = 1 ]; then
+        cat "$SWITCH_BRIEF" > "$RELAUNCH_BRIEF" \
+          || die "could not write task $ID's mode=$NEW_MODE instructions"
+      fi
       {
         echo
         echo "## Progress note ($stamp)"
@@ -1203,6 +1297,12 @@ record_note() {
         echo "This task was relaunched. Continue from here; the local copy and every"
         echo "uncommitted change are exactly as the previous worker left them."
         echo
+        if [ "$MODE_SET" = 1 ]; then
+          echo "Its delivery mode changed from $FROM_MODE to $NEW_MODE. The Setup steps, rule 1,"
+          echo "rule 6, and Definition of done above are the $NEW_MODE contract now; follow them"
+          echo "instead of any $FROM_MODE step you took or were told before."
+          echo
+        fi
         inbox_q=$(printf '%s' "$STATE/$ID.inbox" | sed "s/'/'\\\\''/g")
         echo "First, check your instruction inbox: list it with"
         echo "\`find '$inbox_q' -maxdepth 1 -name '*.msg' 2>/dev/null | sort -V\`, act on"
@@ -1217,9 +1317,14 @@ record_note() {
 }
 
 do_relaunch() {
-  local exit_result state note_line
+  local exit_result state note_line mode_words
   local -a spawn_args
 
+  case "$MODE_SET:$KIND" in
+    0:*|1:ship) ;;
+    1:scout) die "task $ID is a scout, which records no delivery mode; promote it with bin/fm-promote.sh --mode instead" ;;
+    *) die "task $ID is a $KIND, which has no delivery mode to switch" ;;
+  esac
   require_state_verified_backend relaunch
   fm_control_backend_relaunch_supported "$BACKEND" \
     || die "task $ID runs on the $BACKEND backend, where a thread keeps its conversation and a new turn or provider change continues the same agent, so no fresh replacement can be launched into its endpoint; 'interrupt' ends its turn, and a fresh task needs a teardown and a new dispatch"
@@ -1248,7 +1353,9 @@ do_relaunch() {
   else
     note_line="note=none"
   fi
+  [ "$MODE_SET" = 0 ] || preflight_mode_switch
   safe_checkpoint
+  [ "$MODE_SET" = 0 ] || CHECKPOINT_LINES+=("from_mode=$FROM_MODE" "to_mode=$NEW_MODE")
   cp -p "$META" "$META_PRIOR" || die "could not preserve task $ID's durable record before relaunching"
   RELAUNCH_ACTIVE=1
   journal_write checkpoint "${CHECKPOINT_LINES[@]}" "$note_line"
@@ -1268,6 +1375,7 @@ do_relaunch() {
   [ "$TARGET_MODEL" = default ] || spawn_args+=(--model "$TARGET_MODEL")
   [ "$TARGET_EFFORT" = default ] || spawn_args+=(--effort "$TARGET_EFFORT")
   [ -z "$TARGET_ACCOUNT" ] || spawn_args+=(--account "$TARGET_ACCOUNT")
+  [ "$MODE_SET" = 0 ] || spawn_args+=(--mode "$NEW_MODE")
   if FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" \
       "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}" >/dev/null; then
     RELAUNCH_META_PUBLISHED=1
@@ -1301,7 +1409,9 @@ do_relaunch() {
 
   journal_write complete "${CHECKPOINT_LINES[@]}" "$note_line" "exit_result=$exit_result"
   RELAUNCH_ACTIVE=0
-  echo "relaunched $ID harness=$TARGET_HARNESS from=$PRIOR_RECORDED_HARNESS model=$TARGET_MODEL effort=$TARGET_EFFORT backend=$BACKEND endpoint=$T worktree=$WT"
+  mode_words=
+  [ "$MODE_SET" = 0 ] || mode_words=" mode=$NEW_MODE from_mode=$FROM_MODE"
+  echo "relaunched $ID harness=$TARGET_HARNESS from=$PRIOR_RECORDED_HARNESS model=$TARGET_MODEL effort=$TARGET_EFFORT backend=$BACKEND endpoint=$T worktree=$WT$mode_words"
 }
 
 # --- verbs ------------------------------------------------------------------

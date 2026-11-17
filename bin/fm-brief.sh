@@ -762,18 +762,8 @@ fi
 # The block opens with the fixed "Delivery contract: mode=<mode>" line that
 # bin/fm-spawn.sh checks against its own explicit --mode and the project's
 # registered forge before launching.
-case "$MODE" in
-  direct-PR)
-    SETUP2=""
-    ;;
-  local-only)
-    SETUP2=""
-    ;;
-  *)  # no-mistakes
-    SETUP2="
-2. Run \`no-mistakes doctor\`; if it reports the repo is not initialized here, run \`no-mistakes init\`."
-    ;;
-esac
+SETUP2=$(fm_ship_setup_steps "$MODE")
+[ -z "$SETUP2" ] || SETUP2=$'\n'"$SETUP2"
 RULE1=$(fm_ship_rule_one "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH") || exit 1
 DOD=$(fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CONSENT" "$PR_TEXT") || exit 1
 

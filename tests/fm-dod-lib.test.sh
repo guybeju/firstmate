@@ -824,6 +824,71 @@ test_external_review_done_with_backup_needs_the_copy() {
   pass "external review done with a backup: refused until HEAD is under refs/remotes/backup/backup/, then accepted"
 }
 
+# fm_brief_switch_delivery: a scaffold of one publishing mode, switched to the
+# other, is byte-identical to a fresh scaffold of the other mode, for every
+# forge, PR-text, base, and branch-prefix shape the two modes share.
+switch_case_home() {  # <name> -> echoes a fresh home holding data/
+  local home="$TMP_ROOT/switch-$1"
+  mkdir -p "$home/data"
+  printf '%s\n' "$home"
+}
+
+test_switch_matches_a_fresh_scaffold_of_the_other_mode() {
+  local from to to_mode to_pr name i=0 home_a home_b
+  while IFS='|' read -r from to to_mode to_pr; do
+    i=$((i + 1))
+    name="case$i"
+    home_a=$(switch_case_home "$name-a")
+    home_b=$(switch_case_home "$name-b")
+    # shellcheck disable=SC2086 # The scaffold flags are deliberately word-split.
+    FM_HOME="$home_a" bash "$ROOT/bin/fm-brief.sh" t1 proj $from >/dev/null || fail "$name: could not scaffold $from"
+    # shellcheck disable=SC2086 # The scaffold flags are deliberately word-split.
+    FM_HOME="$home_a" bash "$ROOT/bin/fm-brief.sh" t2 proj $to >/dev/null || fail "$name: could not scaffold $to"
+    mv "$home_a/data/t2" "$home_b/data/t1-raw"
+    perl -pe 's/\bt2\b/t1/g' "$home_b/data/t1-raw/brief.md" > "$home_b/expected.md"
+    FM_HOME="$home_a" fm_brief_switch_delivery "$home_a/data/t1/brief.md" "$home_a/data" t1 "$to_mode" "$to_pr" \
+      > "$home_a/switched.md" || fail "$name: the switch from '$from' to $to_mode was refused"
+    cmp -s "$home_a/switched.md" "$home_b/expected.md" \
+      || fail "$name: switching '$from' to $to_mode differs from a fresh '$to' scaffold:"$'\n'"$(diff "$home_a/switched.md" "$home_b/expected.md")"
+  done <<'CASES'
+--mode no-mistakes|--mode direct-PR|direct-PR|auto
+--mode direct-PR|--mode no-mistakes|no-mistakes|auto
+--mode no-mistakes --forge gerrit|--mode direct-PR --forge gerrit|direct-PR|auto
+--mode direct-PR --forge gerrit|--mode no-mistakes --forge gerrit|no-mistakes|auto
+--mode no-mistakes --forge forgejo|--mode direct-PR --forge forgejo|direct-PR|auto
+--mode no-mistakes --pr manual|--mode direct-PR|direct-PR|auto
+--mode direct-PR|--mode no-mistakes --pr manual|no-mistakes|manual
+--mode no-mistakes --base-branch carry|--mode direct-PR --base-branch carry|direct-PR|auto
+--mode direct-PR --branch-prefix fix/ --herdr-lab|--mode no-mistakes --branch-prefix fix/ --herdr-lab|no-mistakes|auto
+CASES
+  pass "fm_brief_switch_delivery: a switched scaffold equals a fresh scaffold of the other mode across forge, PR-text, base, and branch shapes"
+}
+
+test_switch_refuses_what_it_cannot_translate() {
+  local home reason
+  home=$(switch_case_home external)
+  mkdir -p "$home/config"
+  printf 'Upload with the review tool.\n' > "$home/config/external-review.md"
+  FM_HOME="$home" bash "$ROOT/bin/fm-brief.sh" t1 proj --mode direct-PR --forge external >/dev/null \
+    || fail "could not scaffold the external-review brief"
+  reason=$(FM_HOME="$home" fm_brief_switch_delivery "$home/data/t1/brief.md" "$home/data" t1 no-mistakes auto 2>&1 >/dev/null) \
+    && fail "an external-review brief was switched to no-mistakes"
+  assert_contains "$reason" "forge=external ships direct-PR only" "the external refusal did not name the forge"
+  home=$(switch_case_home missing-intent)
+  FM_HOME="$home" bash "$ROOT/bin/fm-brief.sh" t1 proj --mode direct-PR >/dev/null
+  perl -0pi -e "s/## Captain's intent\n\{TASK\}\n//" "$home/data/t1/brief.md"
+  reason=$(fm_brief_switch_delivery "$home/data/t1/brief.md" "$home/data" t1 no-mistakes auto 2>&1 >/dev/null) \
+    && fail "a brief with no Captain's intent was switched to no-mistakes"
+  assert_contains "$reason" "no ## Captain's intent subsection" "the intent refusal did not name the subsection"
+  home=$(switch_case_home two-contracts)
+  FM_HOME="$home" bash "$ROOT/bin/fm-brief.sh" t1 proj --mode direct-PR >/dev/null
+  printf 'Delivery contract: mode=direct-PR\n' >> "$home/data/t1/brief.md"
+  reason=$(fm_brief_switch_delivery "$home/data/t1/brief.md" "$home/data" t1 no-mistakes auto 2>&1 >/dev/null) \
+    && fail "a brief with two contract lines was switched"
+  assert_contains "$reason" "records 2 Delivery contract lines" "the duplicate-contract refusal did not count the lines"
+  pass "fm_brief_switch_delivery: refuses an external forge, a missing Captain's intent, and an ambiguous contract"
+}
+
 test_external_forge_is_direct_pr_only
 test_external_rule_one_forbids_every_task_push
 test_external_dod_renders_the_adapter
@@ -831,5 +896,7 @@ test_external_review_done_without_backup_is_accepted_on_the_url
 test_external_review_done_with_backup_needs_the_copy
 
 test_worker_role_names_skill_and_fallback_file
+test_switch_matches_a_fresh_scaffold_of_the_other_mode
+test_switch_refuses_what_it_cannot_translate
 
 echo "all fm-dod-lib tests passed"
