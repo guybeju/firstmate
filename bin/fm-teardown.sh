@@ -208,8 +208,11 @@
 # work, kills child runtime endpoints, and removes the retired home. A home that
 # is not a pool slot is deleted. A leased home is a pool slot whose return keeps
 # ignored files, so teardown first moves its two secondmate markers and its
-# captain-private paths (.env, config/, data/, state/, projects/, .no-mistakes/)
-# into a stage directory beside the home, then releases the durable treehouse
+# private paths (the list bin/fm-secondmate-home-paths-lib.sh owns, including
+# the .claude/settings.local.json that holds the permission rules granted to
+# that secondmate) into a stage directory beside the home, refusing a listed
+# path that holds tracked files or sits under a symlinked directory, then
+# releases the durable treehouse
 # lease so the pool slot is freed, never left leased forever, and the next
 # holder starts without the retired home's identity or records. The stage is
 # deleted once the return succeeds. If the treehouse return fails, teardown moves
@@ -361,8 +364,6 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 SECONDMATE_REG="$DATA/secondmates.md"
-SUB_HOME_MARKER=".fm-secondmate-home"
-SUB_HOME_PARENT_MARKER=".fm-secondmate-parent"
 # A missing `.` target is not a teardown result. Stock Bash 3.2 can abort it
 # into an EXIT trap whose status is 0, and a newer Bash can print the
 # diagnostic and continue into cleanup. Refuse by name before sourcing.
@@ -403,6 +404,7 @@ for _teardown_source in \
   fm-env-lib.sh \
   fm-secondmate-registry-lib.sh \
   fm-secondmate-parent-lib.sh \
+  fm-secondmate-home-paths-lib.sh \
   fm-pending-reply-lib.sh \
   fm-operational-input.sh \
   fm-marker-lib.sh \
@@ -440,6 +442,10 @@ unset _teardown_source
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 # shellcheck source=bin/fm-secondmate-parent-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-parent-lib.sh"
+# SUB_HOME_MARKER, SUB_HOME_PARENT_MARKER and the private paths a retired
+# leased home stages out before its slot is returned.
+# shellcheck source=bin/fm-secondmate-home-paths-lib.sh
+. "$SCRIPT_DIR/fm-secondmate-home-paths-lib.sh"
 # shellcheck source=bin/fm-nm-run-lib.sh
 . "$SCRIPT_DIR/fm-nm-run-lib.sh"
 # The bounded remote-ref refresh is shared with the done-claim gate.
@@ -2983,20 +2989,25 @@ t3code_secondmate_home_shutdown_barrier() {  # <home> <task-id>
 }
 
 # A pool slot keeps ignored files across `treehouse return`, so a retired home's
-# markers and captain-private paths are staged out beside the home before the
+# markers and captain-private paths (FM_SECONDMATE_HOME_PRIVATE_PATHS, owned by
+# bin/fm-secondmate-home-paths-lib.sh) are staged out beside the home before the
 # return, restored when it fails, and deleted once it succeeds. See the script
 # header.
-FIRSTMATE_HOME_PRIVATE_PATHS=("$SUB_HOME_MARKER" "$SUB_HOME_PARENT_MARKER" .env config data state projects .no-mistakes)
-
 stage_firstmate_home_private_paths() {  # <home> <label>; prints the stage dir
-  local home=$1 label=$2 stage name
+  local home=$1 label=$2 stage name why
+  while IFS= read -r name; do
+    if why=$(fm_secondmate_home_path_unsafe "$home" "$name"); then
+      echo "REFUSED: cannot stage $name out of $label $home before returning its pool slot: $why" >&2
+      return 1
+    fi
+  done < <(fm_secondmate_home_present_paths "$home")
   stage=$(umask 077; mktemp -d "${home%/*}/.fm-home-retire.XXXXXX") || {
     echo "REFUSED: cannot stage the private paths of $label $home before returning its pool slot" >&2
     return 1
   }
-  for name in "${FIRSTMATE_HOME_PRIVATE_PATHS[@]}"; do
+  for name in "${FM_SECONDMATE_HOME_PRIVATE_PATHS[@]}"; do
     [ -e "$home/$name" ] || [ -L "$home/$name" ] || continue
-    mv -- "$home/$name" "$stage/$name" && continue
+    mkdir -p -- "$stage/$(dirname -- "$name")" && mv -- "$home/$name" "$stage/$name" && continue
     echo "REFUSED: cannot move $home/$name out of $label before returning its pool slot" >&2
     unstage_firstmate_home_private_paths "$home" "$label" "$stage" || true
     return 1
@@ -3005,13 +3016,16 @@ stage_firstmate_home_private_paths() {  # <home> <label>; prints the stage dir
 }
 
 unstage_firstmate_home_private_paths() {  # <home> <label> <stage>
-  local home=$1 label=$2 stage=$3 name
-  for name in "${FIRSTMATE_HOME_PRIVATE_PATHS[@]}"; do
+  local home=$1 label=$2 stage=$3 name dir
+  for name in "${FM_SECONDMATE_HOME_PRIVATE_PATHS[@]}"; do
     [ -e "$stage/$name" ] || [ -L "$stage/$name" ] || continue
-    if [ -e "$home/$name" ] || [ -L "$home/$name" ] || ! mv -- "$stage/$name" "$home/$name"; then
+    if [ -e "$home/$name" ] || [ -L "$home/$name" ] \
+      || ! mkdir -p -- "$home/$(dirname -- "$name")" || ! mv -- "$stage/$name" "$home/$name"; then
       echo "error: could not restore $home/$name for $label; recover it from $stage" >&2
       return 1
     fi
+    dir=$(dirname -- "$name")
+    [ "$dir" = . ] || rmdir -- "$stage/$dir"
   done
   rmdir -- "$stage"
 }

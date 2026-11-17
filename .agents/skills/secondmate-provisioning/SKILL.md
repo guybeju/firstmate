@@ -251,6 +251,7 @@ When retirement proceeds, teardown kills the direct endpoint, removes every pare
 An endpoint close that could not be made stops the retirement before any record naming that endpoint is removed, so a cleanup never reports success for an agent that may still be live with nothing left on disk naming it.
 [`bin/fm-teardown.sh`](../../../bin/fm-teardown.sh)'s `endpoint_close_refusal` contract owns backend-specific `--force` limits; [endpoint-close verification](../../../docs/verification/runtime-backends.md#endpoint-close) records what each backend can prove.
 Removing a leased home releases its durable treehouse lease via `treehouse return`, so the pool slot is freed for reuse rather than left leased forever.
+Because the pool keeps ignored files, teardown first stages out the home's markers and private paths, including the `.claude/settings.local.json` permission rules granted to that mate, as listed in [`bin/fm-secondmate-home-paths-lib.sh`](../../../bin/fm-secondmate-home-paths-lib.sh).
 A plain-clone home with no pool slot is simply removed.
 If `treehouse return` fails for a leased home, teardown stops with state intact rather than raw-removing the directory and hiding a held lease.
 Before either return or direct removal, teardown asks the target home's process-event runner to retire its registrations and physically owned machine-wide claims through the safe generation-bound path.

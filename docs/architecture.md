@@ -346,6 +346,7 @@ Codex App support is recorded in `docs/codex-app-backend.md`; it is not selectab
 
 Crewmates never intentionally touch your project clone; [treehouse](https://github.com/kunchenguid/treehouse) pools clean worktrees for session-provider-only backends, while Orca creates its own worktrees for `backend=orca`.
 The [`fm-spawn.sh` header](../bin/fm-spawn.sh) owns ship/scout worktree isolation and fresh-base refusal rules, including spawns from linked homes.
+A drawn pooled copy that still carries a former secondmate home's marker is cleared of that home's private paths before launch, or refused untouched while a secondmate registry still binds a home to it ([`fm-spawn.sh`](../bin/fm-spawn.sh) `spawn_clear_drawn_copy_secondmate_leftovers`).
 A home can opt in to starting a local-only ship or a scout from the primary checkout's default branch instead of origin's tip ([`configuration.md`](configuration.md#spawn-base-from-the-primary-checkout-configspawn-base-primary-checkout)).
 Portable regressions live in [`tests/fm-spawn-pool-base-freshen.test.sh`](../tests/fm-spawn-pool-base-freshen.test.sh) for spawn isolation and base freshness, and [`tests/fm-control-relaunch.test.sh`](../tests/fm-control-relaunch.test.sh) for preserving the recorded copy on relaunch.
 
@@ -396,6 +397,7 @@ The signal cannot be mixed with project names or omitted accidentally, and a pop
 Herdr secondmate and child placement follows the launcher-binding contract in [Watching and task containers](herdr-backend.md#watching-and-task-containers).
 When seeded with `-`, the home is a durable treehouse lease under the secondmate id, so it survives with no live process and is not recycled by later `treehouse get` or pruning.
 Retirement or seed rollback returns the leased home; normal restart/recovery keeps it leased.
+A returned slot keeps ignored files, so retirement first clears the home's markers and private paths, a seed rollback clears the ones it wrote, and a spawn that draws a slot still carrying a secondmate marker clears them before launch; [`bin/fm-secondmate-home-paths-lib.sh`](../bin/fm-secondmate-home-paths-lib.sh) owns that list and its safety limits.
 If returning the lease fails during teardown, firstmate leaves the route and home intact instead of hiding a still-held lease.
 Seeding is transactional: if validation, cloning, initialization, or registry update fails, generated briefs, new homes, new project clones, and registry edits are rolled back.
 `local-only` projects stay with the main first mate because they merge into the main local checkout instead of a remote-backed PR path.

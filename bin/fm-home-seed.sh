@@ -22,6 +22,9 @@
 #       generated briefs, new homes, new project clones, and registry edits are
 #       rolled back. Treehouse-acquired homes are returned only when the rollback
 #       target is safe; a failed return warns because the lease may still be held.
+#       A pool slot keeps ignored files across that return, so the rollback first
+#       removes the private paths (bin/fm-secondmate-home-paths-lib.sh) the seed
+#       wrote into the slot, keeping any the slot already held when leased.
 #       Set FM_SECONDMATE_CHARTER='<charter>' to seed from inline charter text
 #       when no filled charter brief exists. Set FM_SECONDMATE_SCOPE='<scope>'
 #       to override the registry routing scope. Otherwise the registry summary
@@ -39,8 +42,10 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 REG="$DATA/secondmates.md"
-SUB_HOME_MARKER=".fm-secondmate-home"
-SUB_HOME_PARENT_MARKER=".fm-secondmate-parent"
+# SUB_HOME_MARKER, SUB_HOME_PARENT_MARKER and the private paths a rolled-back
+# seed removes from a slot it leased.
+# shellcheck source=bin/fm-secondmate-home-paths-lib.sh
+. "$SCRIPT_DIR/fm-secondmate-home-paths-lib.sh"
 # shellcheck source=bin/fm-secondmate-registry-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 # shellcheck source=bin/fm-secondmate-parent-lib.sh
@@ -593,6 +598,7 @@ seed_rollback_target() {
 seed_return_treehouse_home() {
   local home=$1 abs_home
   abs_home=$(seed_rollback_target "$home" "treehouse-acquired home") || return 0
+  seed_clear_acquired_home_writes "$abs_home"
   if ! command -v treehouse >/dev/null 2>&1; then
     echo "warning: failed to return treehouse-acquired home $abs_home during seed rollback; treehouse command not found" >&2
     return 0
@@ -601,6 +607,40 @@ seed_return_treehouse_home() {
     echo "warning: failed to return treehouse-acquired home $abs_home during seed rollback; lease may still be held" >&2
     return 0
   }
+}
+
+# A leased slot keeps ignored files across `treehouse return`, so before the
+# return a rolled-back seed undoes its own writes: the existing-home restore
+# below, then every listed private path (bin/fm-secondmate-home-paths-lib.sh)
+# that was absent when the slot was leased. Paths the slot already held stay.
+seed_clear_acquired_home_writes() {
+  local home=$1 name written=()
+  seed_restore_existing_home_writes
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    printf '%s\n' "$SEED_ACQUIRED_PRESENT_PATHS" | grep -Fx -- "$name" >/dev/null && continue
+    written+=("$name")
+  done < <(fm_secondmate_home_present_paths "$home")
+  [ "${#written[@]}" -gt 0 ] || return 0
+  fm_secondmate_home_remove_paths "$home" "treehouse-acquired home" "${written[@]}" || {
+    echo "warning: seed rollback left ${written[*]} in treehouse-acquired home $home; remove them before the slot is reused" >&2
+  }
+}
+
+seed_restore_existing_home_writes() {
+  local project_path
+  if [ -n "${SEED_CREATED_PROJECTS_FILE:-}" ] && [ -f "$SEED_CREATED_PROJECTS_FILE" ]; then
+    while IFS= read -r project_path; do
+      [ -n "$project_path" ] || continue
+      seed_remove_created_project "$project_path"
+    done < "$SEED_CREATED_PROJECTS_FILE"
+  fi
+  if [ -n "${SEED_BACKUP_DIR:-}" ] && [ "${SEED_HOME_BACKED_UP:-0}" = 1 ]; then
+    restore_seed_file "$SEED_MARKER_EXISTED" "$SEED_BACKUP_DIR/marker" "$SEED_HOME/$SUB_HOME_MARKER"
+    restore_seed_file "$SEED_PARENT_MARKER_EXISTED" "$SEED_BACKUP_DIR/parent-marker" "$SEED_HOME/$SUB_HOME_PARENT_MARKER"
+    restore_seed_file "$SEED_CHARTER_EXISTED" "$SEED_BACKUP_DIR/charter.md" "$SEED_HOME/data/charter.md"
+    restore_seed_file "$SEED_SUB_REG_EXISTED" "$SEED_BACKUP_DIR/sub-projects.md" "$SEED_HOME/data/projects.md"
+  fi
 }
 
 seed_remove_created_home() {
@@ -639,7 +679,6 @@ seed_project_was_created() {
 }
 
 seed_rollback() {
-  local project_path
   [ "${SEED_ROLLBACK_ACTIVE:-0}" = 1 ] || return 0
   [ "${SEED_COMMITTED:-0}" = 0 ] || return 0
 
@@ -656,18 +695,7 @@ seed_rollback() {
     elif [ "$SEED_HOME_CREATED" = 1 ]; then
       seed_remove_created_home "$SEED_HOME"
     else
-      if [ -n "${SEED_CREATED_PROJECTS_FILE:-}" ] && [ -f "$SEED_CREATED_PROJECTS_FILE" ]; then
-        while IFS= read -r project_path; do
-          [ -n "$project_path" ] || continue
-          seed_remove_created_project "$project_path"
-        done < "$SEED_CREATED_PROJECTS_FILE"
-      fi
-      if [ -n "${SEED_BACKUP_DIR:-}" ] && [ "${SEED_HOME_BACKED_UP:-0}" = 1 ]; then
-        restore_seed_file "$SEED_MARKER_EXISTED" "$SEED_BACKUP_DIR/marker" "$SEED_HOME/$SUB_HOME_MARKER"
-        restore_seed_file "$SEED_PARENT_MARKER_EXISTED" "$SEED_BACKUP_DIR/parent-marker" "$SEED_HOME/$SUB_HOME_PARENT_MARKER"
-        restore_seed_file "$SEED_CHARTER_EXISTED" "$SEED_BACKUP_DIR/charter.md" "$SEED_HOME/data/charter.md"
-        restore_seed_file "$SEED_SUB_REG_EXISTED" "$SEED_BACKUP_DIR/sub-projects.md" "$SEED_HOME/data/projects.md"
-      fi
+      seed_restore_existing_home_writes
     fi
   fi
 
@@ -878,7 +906,7 @@ seed_home() {
   SEED_HOME=
   SEED_HOME_ACQUIRED=0
   SEED_HOME_CREATED=0
-  SEED_HOME_ACQUIRED=0
+  SEED_ACQUIRED_PRESENT_PATHS=
   SEED_HOME_BACKED_UP=0
   SEED_BACKUP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-home-seed.XXXXXX")
   SEED_CREATED_PROJECTS_FILE="$SEED_BACKUP_DIR/created-projects"
@@ -898,6 +926,7 @@ seed_home() {
   if [ "$requested_home" = "-" ]; then
     SEED_HOME_ACQUIRED=1
     home=$(acquire_treehouse_home "$id")
+    SEED_ACQUIRED_PRESENT_PATHS=$(fm_secondmate_home_present_paths "$home")
     SEED_HOME="$home"
     home=$(verify_firstmate_home "$home")
   else
