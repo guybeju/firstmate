@@ -80,6 +80,9 @@ FM_ROOT=${FM_ROOT_OVERRIDE:-$(CDPATH='' cd "$SCRIPT_DIR/.." && pwd -P)}
 WORKER_LOCK=
 WORKER_LOCK_HELD=0
 WORKER_LOCK_BOUND=
+WORKER_LOCK_PID_TMP=
+WORKER_LOCK_START_TMP=
+WORKER_LOCK_COMMAND_TMP=
 WORKER_RELEASE_OWNERSHIP=1
 WORKER_SUPERVISED_PID=
 WORKER_HEARTBEAT_PID=
@@ -165,28 +168,80 @@ worker_publish_identity() { # <identity>
 # Record this process as the lock owner. The pid is published first and
 # exclusively, because mkdir may have reported success to every worker that
 # raced to create the lock; start and command follow only once the pid is
-# ours. Returns 0 when published, 1 when another worker's pid is recorded,
-# 2 on any other failure.
+# ours. Each temporary stays named in WORKER_LOCK_*_TMP until it is published
+# or removed, so an exit inside publication can still release the lock.
+# Returns 0 when published, 1 when another worker's pid is recorded, 2 on any
+# other failure.
 worker_publish_lock_owner() {
-  local pid start command pid_tmp start_tmp command_tmp
+  local pid start command pid_tmp start_tmp command_tmp published=0
   pid=${BASHPID:-$$}
   start=$(fm_remote_job_process_start "$pid") || return 2
   command=$(fm_remote_job_process_command "$pid") || return 2
   pid_tmp=$(umask 077; mktemp "$WORKER_LOCK/.pid.XXXXXX") || return 2
+  WORKER_LOCK_PID_TMP=$pid_tmp
   if ! printf '%s\n' "$pid" > "$pid_tmp" || ! chmod 600 "$pid_tmp"; then
-    rm -f -- "$pid_tmp"
+    worker_discard_lock_temps
     return 2
   fi
-  fm_remote_job_link_exclusive "$pid_tmp" "$WORKER_LOCK/pid" || return
+  fm_remote_job_link_exclusive "$pid_tmp" "$WORKER_LOCK/pid" || published=$?
+  WORKER_LOCK_PID_TMP=
+  [ "$published" -eq 0 ] || return "$published"
   start_tmp=$(umask 077; mktemp "$WORKER_LOCK/.start.XXXXXX") || return 2
-  command_tmp=$(umask 077; mktemp "$WORKER_LOCK/.command.XXXXXX") || { rm -f -- "$start_tmp"; return 2; }
+  WORKER_LOCK_START_TMP=$start_tmp
+  command_tmp=$(umask 077; mktemp "$WORKER_LOCK/.command.XXXXXX") || { worker_discard_lock_temps; return 2; }
+  WORKER_LOCK_COMMAND_TMP=$command_tmp
   if ! printf '%s\n' "$start" > "$start_tmp" || ! printf '%s\n' "$command" > "$command_tmp" \
     || ! chmod 600 "$start_tmp" "$command_tmp" \
     || ! mv -f -- "$command_tmp" "$WORKER_LOCK/command" \
     || ! mv -f -- "$start_tmp" "$WORKER_LOCK/start"; then
-    rm -f -- "$start_tmp" "$command_tmp" "$WORKER_LOCK/start" "$WORKER_LOCK/command"
+    worker_discard_lock_temps
+    rm -f -- "$WORKER_LOCK/start" "$WORKER_LOCK/command"
     return 2
   fi
+  WORKER_LOCK_START_TMP=
+  WORKER_LOCK_COMMAND_TMP=
+}
+
+# Remove only the unpublished temporaries this process itself created in the
+# lock; another worker publishing into the same directory keeps its own.
+worker_discard_lock_temps() {
+  local file
+  for file in "$WORKER_LOCK_PID_TMP" "$WORKER_LOCK_START_TMP" "$WORKER_LOCK_COMMAND_TMP"; do
+    [ -n "$file" ] && [ ! -L "$file" ] && rm -f -- "$file" 2>/dev/null || true
+  done
+  WORKER_LOCK_PID_TMP=
+  WORKER_LOCK_START_TMP=
+  WORKER_LOCK_COMMAND_TMP=
+}
+
+# The temporaries this code and earlier versions of it create inside the lock
+# before publishing pid, start, command, or quarantine. A holder that died while
+# publishing leaves them behind, and its lock cannot be removed until they go.
+# Only .pid.* can belong to a worker that has not published pid: it holds that
+# worker's pid, so it is still in use while the pid is a live remote job worker.
+# start, command, and quarantine are written only by a holder whose pid is
+# already published, so the lock owner checks already cover them; an
+# unpublished quarantine means its holder died before quarantining, which the
+# replacement's orphan recovery handles as for any crashed holder.
+# check returns 0 when every temporary may go, 1 while a .pid.* temporary names
+# a live remote job worker, and 2 when one is a symlink or not a regular file;
+# remove deletes them.
+worker_lock_temps() { # check|remove
+  local mode=$1 file pid command
+  for file in "$WORKER_LOCK"/.pid.* "$WORKER_LOCK"/.start.* "$WORKER_LOCK"/.command.* \
+    "$WORKER_LOCK"/.quarantine.*; do
+    [ -e "$file" ] || [ -L "$file" ] || continue
+    [ -f "$file" ] && [ ! -L "$file" ] || return 2
+    if [ "$mode" = remove ]; then
+      rm -f -- "$file" || return 2
+      continue
+    fi
+    case "${file##*/}" in .pid.*) ;; *) continue ;; esac
+    pid=$(fm_remote_job_read_single_line "$file" 64 2>/dev/null) || continue
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    command=$(fm_remote_job_process_command "$pid") || continue
+    case "$command" in *fm-remote-job-worker.sh*) return 1 ;; esac
+  done
 }
 
 worker_lock_recent() {
@@ -222,7 +277,7 @@ worker_recover_quarantine() { # <account-home>
 }
 
 worker_acquire_lock() { # <account-home> <identity>
-  local account_home=$1 identity=$2 attempt=0 published
+  local account_home=$1 identity=$2 attempt=0 published busy
   while [ "$attempt" -lt 150 ]; do
     if (umask 077; mkdir "$WORKER_LOCK") 2>/dev/null; then
       WORKER_LOCK_HELD=1
@@ -250,13 +305,21 @@ worker_acquire_lock() { # <account-home> <identity>
       continue
     fi
     if fm_remote_job_lock_owner_matches_process "$account_home"; then return 2; fi
+    busy=0
     if fm_remote_job_probe "$account_home" || worker_lock_recent; then
+      busy=1
+    else
+      worker_lock_temps check || busy=$?
+    fi
+    [ "$busy" -ne 2 ] || return 1
+    if [ "$busy" -eq 1 ]; then
       attempt=$((attempt + 1))
       sleep 0.1
       continue
     fi
     [ ! -L "$WORKER_LOCK/pid" ] && [ ! -L "$WORKER_LOCK/start" ] && [ ! -L "$WORKER_LOCK/command" ] || return 1
     rm -f -- "$WORKER_LOCK/pid" "$WORKER_LOCK/start" "$WORKER_LOCK/command" || return 1
+    worker_lock_temps remove || return 1
     rmdir "$WORKER_LOCK" || return 1
   done
   return 1
@@ -338,6 +401,7 @@ worker_cleanup() {
   if [ -z "$owner_pid" ]; then
     [ ! -L "$WORKER_LOCK/start" ] && [ ! -L "$WORKER_LOCK/command" ] &&
       rm -f -- "$WORKER_LOCK/start" "$WORKER_LOCK/command" 2>/dev/null || true
+    worker_discard_lock_temps
     rmdir "$WORKER_LOCK" 2>/dev/null || true
     WORKER_LOCK_HELD=0
     return 0
@@ -350,6 +414,7 @@ worker_cleanup() {
   [ ! -L "$ready" ] && rm -f -- "$ready" 2>/dev/null || true
   [ ! -L "$identity" ] && rm -f -- "$identity" 2>/dev/null || true
   rm -f -- "$WORKER_LOCK/pid" "$WORKER_LOCK/start" "$WORKER_LOCK/command" 2>/dev/null || true
+  worker_discard_lock_temps
   rmdir "$WORKER_LOCK" 2>/dev/null || true
   WORKER_LOCK_HELD=0
 }
