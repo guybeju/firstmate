@@ -153,12 +153,21 @@ fi
 # stale bound for the whole wait - live writers repeatedly re-taking it, or an
 # mtime in the future - still ends in a lock-timeout refusal, about
 # FM_BUSY_LOCK_STALE_SECS + 2 seconds after the wait began.
+# The lock is held by whoever publishes the owner link inside the lock
+# directory, not by whoever mkdir reports created it: some mkdir builds report
+# success to a writer whose lock directory a racer created moments earlier.
+# ln -s fails for every writer but one, and readlink confirms the link is ours.
+lock_try() {
+  mkdir "$LOCK" 2>/dev/null || return 1
+  ln -sn "$$" "$LOCK/owner" 2>/dev/null || return 1
+  [ "$(readlink "$LOCK/owner" 2>/dev/null)" = "$$" ]
+}
 lock_acquire() {
   local stale=${FM_BUSY_LOCK_STALE_SECS:-5} start now mtime age
   case "$stale" in ''|*[!0-9]*) stale=5 ;; esac
   stale=$((10#$stale))
   start=$(date +%s)
-  while ! mkdir "$LOCK" 2>/dev/null; do
+  while ! lock_try; do
     now=$(date +%s)
     mtime=$(lock_mtime "$LOCK" || true)
     # Anything unreadable or non-numeric reads as "just created", so an
@@ -168,7 +177,7 @@ lock_acquire() {
     age=$((now - mtime))
     if [ "$age" -ge "$stale" ]; then
       rmdir "$LOCK" 2>/dev/null || rm -rf "$LOCK" 2>/dev/null || true
-      mkdir "$LOCK" 2>/dev/null && break
+      lock_try && break
     fi
     # Whole-second clocks: once stale + 2 seconds have passed since the wait
     # began, any lock that already existed then has crossed the stale bound
@@ -181,7 +190,11 @@ lock_acquire() {
   done
   return 0
 }
-lock_release() { rmdir "$LOCK" 2>/dev/null || true; }
+lock_release() {
+  [ "$(readlink "$LOCK/owner" 2>/dev/null)" = "$$" ] || return 0
+  rm -f "$LOCK/owner"
+  rmdir "$LOCK" 2>/dev/null || true
+}
 
 write_record() {  # <gen> <seq>
   local tmp

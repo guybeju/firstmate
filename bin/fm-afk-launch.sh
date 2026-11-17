@@ -179,16 +179,42 @@ fm_afk_launch_lock_owned() {
   [ -n "$expected" ] && [ "$actual" = "$expected" ]
 }
 
+# Record this process as the lock holder only while no holder is recorded.
+# mkdir may report success to every contender that raced to create the lock
+# directory, so the hard link of the pid decides: it succeeds for one caller
+# only, and the inode comparison confirms the pid is this process's. Returns
+# 0 when recorded, 1 when another holder's pid is recorded or the lock was
+# released meanwhile, 2 on any other failure.
+fm_afk_launch_lock_record_holder() {
+  local tmp=
+  if tmp=$(mktemp "$FM_AFK_LAUNCH_LOCK/.pid.XXXXXX" 2>/dev/null) \
+    && printf '%s' "$$" > "$tmp" \
+    && ln "$tmp" "$FM_AFK_LAUNCH_LOCK/pid" 2>/dev/null \
+    && [ "$FM_AFK_LAUNCH_LOCK/pid" -ef "$tmp" ]; then
+    rm -f "$tmp"
+    return 0
+  fi
+  [ -z "$tmp" ] || rm -f "$tmp"
+  if [ -e "$FM_AFK_LAUNCH_LOCK/pid" ] || [ ! -d "$FM_AFK_LAUNCH_LOCK" ]; then return 1; fi
+  return 2
+}
+
 fm_afk_launch_lock_acquire() {
-  local attempt=0 incomplete=0 identity
+  local attempt=0 incomplete=0 identity recorded
   mkdir -p "$FM_AFK_LAUNCH_STATE" || return 1
   while [ "$attempt" -lt 200 ]; do
     attempt=$((attempt + 1))
+    recorded=1
     if mkdir "$FM_AFK_LAUNCH_LOCK" 2>/dev/null; then
-      if ! printf '%s' "$$" > "$FM_AFK_LAUNCH_LOCK/pid"; then
-        rm -rf "$FM_AFK_LAUNCH_LOCK"
-        return 1
-      fi
+      recorded=0
+      fm_afk_launch_lock_record_holder || recorded=$?
+    fi
+    if [ "$recorded" -eq 2 ]; then
+      # Nothing of this process's is published; rmdir leaves a holder's lock.
+      rmdir "$FM_AFK_LAUNCH_LOCK" 2>/dev/null
+      return 1
+    fi
+    if [ "$recorded" -eq 0 ]; then
       identity=$(fm_pid_identity "$$" 2>/dev/null) || {
         rm -rf "$FM_AFK_LAUNCH_LOCK"
         return 1

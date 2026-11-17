@@ -60,8 +60,8 @@ exec "$FM_TEST_REAL_TOUCH" "$@"
 SH
 # Hold lock-owner publication so probes run against crash leftovers before
 # the replacement has recorded ownership or published its code identity.
-REAL_MV=$(command -v mv)
-cat > "$STUB_BIN/mv" <<'SH'
+REAL_LN=$(command -v ln)
+cat > "$STUB_BIN/ln" <<'SH'
 #!/bin/bash
 last=${!#}
 if [ "$last" = "$FM_TEST_STATE/worker.lock/pid" ] && [ -f "$FM_TEST_OWNER_GATE" ]; then
@@ -72,7 +72,7 @@ if [ "$last" = "$FM_TEST_STATE/worker.lock/pid" ] && [ -f "$FM_TEST_OWNER_GATE" 
   done
   [ -f "$FM_TEST_OWNER_GATE.release" ] || exit 1
 fi
-exec "$FM_TEST_REAL_MV" "$@"
+exec "$FM_TEST_REAL_LN" "$@"
 SH
 cat > "$STUB_BIN/launchctl" <<'SH'
 #!/bin/bash
@@ -143,11 +143,11 @@ case "${1:-}" in
   *) exit 2 ;;
 esac
 SH
-chmod +x "$STUB_BIN/rmdir" "$STUB_BIN/touch" "$STUB_BIN/mv" "$STUB_BIN/launchctl"
+chmod +x "$STUB_BIN/rmdir" "$STUB_BIN/touch" "$STUB_BIN/ln" "$STUB_BIN/launchctl"
 export PATH="$STUB_BIN:$PATH"
 export FM_TEST_REAL_RMDIR="$REAL_RMDIR" FM_TEST_LAUNCH_LOG="$LAUNCH_LOG"
 export FM_TEST_REAL_TOUCH="$REAL_TOUCH" FM_TEST_STALE_GATE="$TMP_ROOT/stale-gate"
-export FM_TEST_REAL_MV="$REAL_MV"
+export FM_TEST_REAL_LN="$REAL_LN"
 export FM_TEST_OWNER_GATE="$TMP_ROOT/owner-gate"
 export FM_TEST_ROOT="$REMOTE_ROOT" FM_TEST_ACCOUNT="$ACCOUNT_HOME"
 export FM_TEST_WORKER="$REMOTE_ROOT/bin/fm-remote-job-worker.sh"

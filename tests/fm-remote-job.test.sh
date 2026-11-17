@@ -27,6 +27,9 @@ STALL_REPLACEMENT_PID=
 STALL_JOB_GROUP=
 QUIET_WORKER_PID=
 SCAN_LANE_PID=
+EXCL_FIRST_PID=
+EXCL_SECOND_PID=
+EXCL_LANES=()
 mkdir -p "$REMOTE_ROOT/bin" "$REMOTE_HOME" "$ACCOUNT_HOME" "$RUNTIME_BIN"
 # worker.pid records the serving child, not its restart supervisor, so stopping
 # that pid alone leaves the supervisor to respawn - the leak
@@ -40,6 +43,12 @@ cleanup_remote_job_fixture() {
   [ -z "$REPLACEMENT_OWNER_PID" ] || kill -KILL "$REPLACEMENT_OWNER_PID" 2>/dev/null || true
   [ -z "$QUIET_WORKER_PID" ] || kill -KILL "$QUIET_WORKER_PID" 2>/dev/null || true
   [ -z "$SCAN_LANE_PID" ] || kill -KILL "$SCAN_LANE_PID" 2>/dev/null || true
+  [ -z "$EXCL_FIRST_PID" ] || kill -KILL "$EXCL_FIRST_PID" 2>/dev/null || true
+  [ -z "$EXCL_SECOND_PID" ] || kill -KILL "$EXCL_SECOND_PID" 2>/dev/null || true
+  local excl_lane
+  for excl_lane in ${EXCL_LANES[@]+"${EXCL_LANES[@]}"}; do
+    kill -KILL "$excl_lane" 2>/dev/null || true
+  done
   local stall_pid
   for stall_pid in "$STALL_WORKER_PID" "$STALL_REPLACEMENT_PID"; do
     [ -n "$stall_pid" ] || continue
@@ -1574,5 +1583,113 @@ RESTART_SUPERVISOR_PID=
 assert_grep "remote job worker exited 3 times; stopping the supervisor" "$TMP_ROOT/restart-supervisor.err" \
   "the restart guard did not explain why it stopped"
 pass "barely healthy worker failures remain bounded by the restart guard"
+
+# A mkdir that reports success for a directory that already exists - as uutils
+# coreutils 0.10.0 does for a racer that lost - must not let a second worker
+# take ownership from a live one, nor let a second lane act on a job another
+# lane has claimed. The barrier holds both lanes until each has checked that
+# the job is unclaimed, so they reach the claim together. A second claimant
+# fails on the running lane's output pipes and publishes its own result, so
+# a caller would read a failure while the job is still running.
+EXCL_ROOT="$TMP_ROOT/exclusive-root"
+EXCL_HOME="$TMP_ROOT/exclusive-account"
+EXCL_STATE="$TMP_ROOT/exclusive-jobs"
+EXCL_RUNS="$TMP_ROOT/exclusive-runs"
+EXCL_BARRIER="$TMP_ROOT/exclusive-barrier"
+mkdir -p "$EXCL_ROOT/bin" "$EXCL_HOME" "$EXCL_BARRIER"
+chmod 700 "$EXCL_HOME"
+cp "$ROOT/bin/fm-remote-job-lib.sh" "$ROOT/bin/fm-remote-job-worker.sh" "$EXCL_ROOT/bin/"
+printf 'fixture\n' > "$EXCL_ROOT/AGENTS.md"
+cat > "$EXCL_ROOT/bin/fm-append-job.sh" <<'SH'
+#!/bin/bash
+printf 'ran\n' >> "$1"
+sleep "$2"
+SH
+chmod +x "$EXCL_ROOT/bin"/*.sh
+git -C "$EXCL_ROOT" init -q -b main
+git -C "$EXCL_ROOT" config user.email test@example.com
+git -C "$EXCL_ROOT" config user.name Test
+git -C "$EXCL_ROOT" add AGENTS.md bin
+git -C "$EXCL_ROOT" commit -qm 'exclusive claim fixture'
+EXCL_BIN=$(fm_fakebin "$TMP_ROOT/exclusive-mkdir")
+fm_fake_nonexclusive_mkdir "$EXCL_BIN" || fail "could not install the nonexclusive mkdir fake"
+
+HOME="$EXCL_HOME" FM_ROOT_OVERRIDE="$EXCL_ROOT" FM_REMOTE_JOB_STATE_ROOT="$EXCL_STATE" \
+  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$EXCL_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/exclusive-first.out" 2> "$TMP_ROOT/exclusive-first.err" &
+EXCL_FIRST_PID=$!
+for _ in $(seq 1 300); do
+  [ -f "$EXCL_STATE/worker.ready" ] && break
+  sleep 0.05
+done
+assert_present "$EXCL_STATE/worker.ready" "the first exclusive-lock worker did not become ready"
+[ "$(cat "$EXCL_STATE/worker.lock/pid")" = "$EXCL_FIRST_PID" ] \
+  || fail "the first exclusive-lock worker does not own the worker lock"
+# shellcheck disable=SC2031 # Cadence fixture PATH changes stayed in their subshells.
+PATH="$EXCL_BIN:$PATH" HOME="$EXCL_HOME" FM_ROOT_OVERRIDE="$EXCL_ROOT" FM_REMOTE_JOB_STATE_ROOT="$EXCL_STATE" \
+  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$EXCL_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/exclusive-second.out" 2> "$TMP_ROOT/exclusive-second.err" &
+EXCL_SECOND_PID=$!
+for _ in $(seq 1 200); do
+  kill -0 "$EXCL_SECOND_PID" 2>/dev/null || break
+  sleep 0.05
+done
+if kill -0 "$EXCL_SECOND_PID" 2>/dev/null; then
+  fail "a second worker kept serving beside a live owner under a nonexclusive mkdir"
+fi
+wait "$EXCL_SECOND_PID" 2>/dev/null || true
+EXCL_SECOND_PID=
+[ "$(cat "$EXCL_STATE/worker.lock/pid")" = "$EXCL_FIRST_PID" ] \
+  || fail "a second worker took the worker lock from a live owner under a nonexclusive mkdir"
+kill -0 "$EXCL_FIRST_PID" 2>/dev/null || fail "the live worker lock owner stopped"
+kill -TERM "$EXCL_FIRST_PID" 2>/dev/null || true
+wait "$EXCL_FIRST_PID" 2>/dev/null || true
+EXCL_FIRST_PID=
+assert_absent "$EXCL_STATE/worker.lock" "the exclusive-lock worker did not release its lock"
+pass "a second worker defers to a live lock owner under a mkdir that reports success for an existing directory"
+
+# shellcheck disable=SC2016 # The staging shell expands its own positional parameters.
+EXCL_JOB=$(env FM_REMOTE_JOB_STATE_ROOT="$EXCL_STATE" FM_REMOTE_JOB_QUEUE_TIMEOUT=60 \
+  FM_REMOTE_JOB_TIMEOUT=30 bash -c '
+  . "$1"
+  fm_remote_job_stage "$2" "$3" "$4" fm-append-job.sh "$5" 3 </dev/null >/dev/null || exit 1
+  printf "%s\n" "$FM_REMOTE_JOB_ID"
+' _ "$ROOT/bin/fm-remote-job-lib.sh" "$EXCL_HOME" "$EXCL_ROOT" "$REMOTE_HOME" "$EXCL_RUNS") \
+  || fail "could not stage the exclusive-claim job"
+EXCL_LANES=()
+for _ in 1 2; do
+  # shellcheck disable=SC2031 # Cadence fixture PATH changes stayed in their subshells.
+  PATH="$EXCL_BIN:$PATH" FM_FAKE_MKDIR_BARRIER="$EXCL_BARRIER" FM_FAKE_MKDIR_BARRIER_MATCH='*/.claim' \
+    HOME="$EXCL_HOME" FM_ROOT_OVERRIDE="$EXCL_ROOT" FM_REMOTE_JOB_STATE_ROOT="$EXCL_STATE" \
+    FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$EXCL_ROOT/bin/fm-remote-job-worker.sh" --lane "$EXCL_JOB" \
+    >> "$TMP_ROOT/exclusive-lanes.out" 2>> "$TMP_ROOT/exclusive-lanes.err" &
+  EXCL_LANES+=("$!")
+done
+for _ in $(seq 1 200); do
+  [ -s "$EXCL_RUNS" ] && break
+  sleep 0.05
+done
+assert_present "$EXCL_RUNS" "neither racing lane started the claimed job"
+EXCL_EARLY=
+for _ in $(seq 1 40); do
+  if [ "$(fm_remote_job_read_state "$EXCL_STATE/jobs/$EXCL_JOB")" = 'done' ]; then
+    EXCL_EARLY=$(cat "$EXCL_STATE/jobs/$EXCL_JOB/exit" 2>/dev/null || true)
+    break
+  fi
+  sleep 0.05
+done
+[ -z "$EXCL_EARLY" ] \
+  || fail "a second lane published exit $EXCL_EARLY while the claimed job was still running under a nonexclusive mkdir"
+for pid in "${EXCL_LANES[@]}"; do
+  wait "$pid" || fail "a lane racing for one job failed"
+done
+[ "$(find "$EXCL_BARRIER" -name 'arrived.*' | wc -l | tr -d ' ')" = 2 ] \
+  || fail "the two lanes did not both reach the job claim"
+[ "$(wc -l < "$EXCL_RUNS" | tr -d ' ')" = 1 ] \
+  || fail "two lanes ran one job under a nonexclusive mkdir: $(wc -l < "$EXCL_RUNS" | tr -d ' ') runs"
+[ "$(fm_remote_job_read_state "$EXCL_STATE/jobs/$EXCL_JOB")" = 'done' ] \
+  && [ "$(cat "$EXCL_STATE/jobs/$EXCL_JOB/exit")" = 0 ] \
+  || fail "the claimed job did not complete with its own exit status"
+pass "one lane claims a job when two reach its claim together under a nonexclusive mkdir"
 
 echo "ALL TESTS PASSED"

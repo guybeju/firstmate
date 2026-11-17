@@ -271,6 +271,56 @@ test_lock_that_stays_young_is_refused_within_a_bound() {
   pass "a lock that stays younger than the stale bound is refused within a bound"
 }
 
+# A mkdir that reports success for a directory that already exists - as uutils
+# coreutils 0.10.0 does for a racer that lost - must not let a second writer
+# into the critical section while the first still holds the lock. The fake mv
+# holds the first writer at its record publication until released.
+test_writer_lock_excludes_under_nonexclusive_mkdir() {
+  local state gen fakebin real_mv gate first second record
+  state=$(new_state_dir nonexclusive-mkdir)
+  gen=$("$EV" arm "$state" t1)
+  fakebin=$(fm_fakebin "$TMP_ROOT/nonexclusive-mkdir")
+  fm_fake_nonexclusive_mkdir "$fakebin" || fail "could not install the nonexclusive mkdir fake"
+  real_mv=$(command -v mv)
+  gate="$TMP_ROOT/nonexclusive-mkdir/gate"
+  cat > "$fakebin/mv" <<SH
+#!/usr/bin/env bash
+if [ -n "\${FM_TEST_HOLD_GATE:-}" ]; then
+  case "\${!#}" in
+    */t1.busy-state)
+      : > "\$FM_TEST_HOLD_GATE.held"
+      for _ in \$(seq 1 200); do [ -e "\$FM_TEST_HOLD_GATE.release" ] && break; sleep 0.05; done
+      ;;
+  esac
+fi
+exec "$real_mv" "\$@"
+SH
+  chmod +x "$fakebin/mv"
+  PATH="$fakebin:$PATH" FM_TEST_HOLD_GATE="$gate" \
+    "$EV" apply "$state" t1 idle --gen "$gen" --source claude-hook --event first &
+  first=$!
+  for _ in $(seq 1 200); do
+    [ -e "$gate.held" ] && break
+    sleep 0.05
+  done
+  [ -e "$gate.held" ] || fail "the first writer never reached its record publication"
+  PATH="$fakebin:$PATH" "$EV" apply "$state" t1 busy --gen "$gen" --source claude-hook --event second &
+  second=$!
+  sleep 1
+  kill -0 "$second" 2>/dev/null \
+    || fail "a second writer finished while the first held the lock under a nonexclusive mkdir"
+  : > "$gate.release"
+  wait "$first" || fail "the first writer failed"
+  wait "$second" || fail "the second writer failed after the first released the lock"
+  record=$(cat "$state/t1.busy-state")
+  case "$record" in
+    *" seq=3 state=busy source=claude-hook event=second "*) : ;;
+    *) fail "the two writers did not both land in order: $record" ;;
+  esac
+  [ ! -e "$state/t1.busy-state.lock" ] || fail "the writers left their lock behind"
+  pass "a second writer waits for the lock under a mkdir that reports success for an existing directory"
+}
+
 test_retire_missing_sidecar_is_idempotent() {
   local state gen
   state=$(new_state_dir retire-missing)
@@ -832,6 +882,7 @@ test_fresh_orphan_lock_is_broken_on_the_first_retire
 test_live_writer_lock_is_waited_for_not_broken
 test_leading_zero_stale_setting_waits_for_live_writer
 test_lock_that_stays_young_is_refused_within_a_bound
+test_writer_lock_excludes_under_nonexclusive_mkdir
 test_stale_gen_event_rejected
 test_stale_gen_record_unknown
 test_missing_record_unknown_not_idle

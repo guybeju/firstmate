@@ -365,6 +365,22 @@ cmd_owns() {
 
 not_filed() { printf 'not-filed: %s\n' "$1"; exit 3; }
 
+# A filing is claimed by whoever publishes the owner link inside its claim
+# directory, not by whoever mkdir reports created it: some mkdir builds report
+# success to a caller whose directory a concurrent filing created. ln -s
+# fails for every caller but one, and readlink confirms the link is ours.
+claim_filing() {  # <claim-dir>
+  mkdir "$1" 2>/dev/null || return 1
+  ln -sn "$$" "$1/owner" 2>/dev/null || return 1
+  [ "$(readlink "$1/owner" 2>/dev/null)" = "$$" ]
+}
+
+# Undo this filing's own claim so a later wake can file again.
+release_claim() {  # <claim-dir>
+  rm -f -- "$1/owner"
+  rmdir "$1" 2>/dev/null || true
+}
+
 cmd_route() {
   local sid='' seq='' file=0 snap meta url result routed project lifecycle presentation
   local claim filed title body task out items
@@ -414,7 +430,7 @@ cmd_route() {
 
   claim="$STATE/lavish-url/filed/$sid.$seq"
   mkdir -p "$STATE/lavish-url/filed" || die "cannot create $STATE/lavish-url/filed"
-  if ! mkdir "$claim" 2>/dev/null; then
+  if ! claim_filing "$claim"; then
     filed=$(cat "$claim/task" 2>/dev/null || true)
     [ -n "$filed" ] || die "an earlier filing of $sid $seq was interrupted; check the backlog for it, then remove $claim"
     printf 'already-filed: %s\n' "$filed"
@@ -428,7 +444,7 @@ where = (parts.hostname or "") + (parts.path if parts.path not in ("", "/") else
 print(("Lavish review feedback: " + where)[:120])
 PY
 )
-  body="$(mktemp "${TMPDIR:-/tmp}/fm-lavish-url-body.XXXXXX")" || { rmdir "$claim"; die "cannot stage the backlog body"; }
+  body="$(mktemp "${TMPDIR:-/tmp}/fm-lavish-url-body.XXXXXX")" || { release_claim "$claim"; die "cannot stage the backlog body"; }
   {
     printf 'Reviewed page: %s\n' "$url"
     printf 'Captured: %s (%s)\n' "$(jq -r '.captured_at // "unknown"' "$meta")" "$(jq -r '.viewport // "desktop"' "$meta")"
@@ -439,12 +455,12 @@ PY
   if ! out=$("$SCRIPT_DIR/fm-tasks-axi.sh" add "$title" --mint --kind ship --repo "$project" \
       --queue --body-file "$body" --json 2>&1); then
     rm -f -- "$body"
-    rmdir "$claim" 2>/dev/null || true
+    release_claim "$claim"
     die "cannot file the feedback: $out"
   fi
   rm -f -- "$body"
   task=$(printf '%s\n' "$out" | jq -r '.task.id // empty' 2>/dev/null)
-  [ -n "$task" ] || { rmdir "$claim" 2>/dev/null || true; die "the backlog did not report the filed task id: $out"; }
+  [ -n "$task" ] || { release_claim "$claim"; die "the backlog did not report the filed task id: $out"; }
   printf '%s\n' "$task" > "$claim/task"
   printf 'filed: %s\n' "$task"
   printf 'project: %s\n' "$project"

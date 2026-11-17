@@ -162,21 +162,31 @@ worker_publish_identity() { # <identity>
   mv -f -- "$tmp" "$identity_file"
 }
 
+# Record this process as the lock owner. The pid is published first and
+# exclusively, because mkdir may have reported success to every worker that
+# raced to create the lock; start and command follow only once the pid is
+# ours. Returns 0 when published, 1 when another worker's pid is recorded,
+# 2 on any other failure.
 worker_publish_lock_owner() {
   local pid start command pid_tmp start_tmp command_tmp
   pid=${BASHPID:-$$}
-  start=$(fm_remote_job_process_start "$pid") || return 1
-  command=$(fm_remote_job_process_command "$pid") || return 1
-  pid_tmp=$(umask 077; mktemp "$WORKER_LOCK/.pid.XXXXXX") || return 1
-  start_tmp=$(umask 077; mktemp "$WORKER_LOCK/.start.XXXXXX") || { rm -f -- "$pid_tmp"; return 1; }
-  command_tmp=$(umask 077; mktemp "$WORKER_LOCK/.command.XXXXXX") || { rm -f -- "$pid_tmp" "$start_tmp"; return 1; }
-  printf '%s\n' "$pid" > "$pid_tmp" || { rm -f -- "$pid_tmp" "$start_tmp" "$command_tmp"; return 1; }
-  printf '%s\n' "$start" > "$start_tmp" || { rm -f -- "$pid_tmp" "$start_tmp" "$command_tmp"; return 1; }
-  printf '%s\n' "$command" > "$command_tmp" || { rm -f -- "$pid_tmp" "$start_tmp" "$command_tmp"; return 1; }
-  chmod 600 "$pid_tmp" "$start_tmp" "$command_tmp" || { rm -f -- "$pid_tmp" "$start_tmp" "$command_tmp"; return 1; }
-  mv -f -- "$command_tmp" "$WORKER_LOCK/command" || { rm -f -- "$pid_tmp" "$start_tmp" "$command_tmp"; return 1; }
-  mv -f -- "$start_tmp" "$WORKER_LOCK/start" || { rm -f -- "$pid_tmp" "$start_tmp" "$WORKER_LOCK/command"; return 1; }
-  mv -f -- "$pid_tmp" "$WORKER_LOCK/pid" || { rm -f -- "$pid_tmp" "$WORKER_LOCK/start" "$WORKER_LOCK/command"; return 1; }
+  start=$(fm_remote_job_process_start "$pid") || return 2
+  command=$(fm_remote_job_process_command "$pid") || return 2
+  pid_tmp=$(umask 077; mktemp "$WORKER_LOCK/.pid.XXXXXX") || return 2
+  if ! printf '%s\n' "$pid" > "$pid_tmp" || ! chmod 600 "$pid_tmp"; then
+    rm -f -- "$pid_tmp"
+    return 2
+  fi
+  fm_remote_job_link_exclusive "$pid_tmp" "$WORKER_LOCK/pid" || return
+  start_tmp=$(umask 077; mktemp "$WORKER_LOCK/.start.XXXXXX") || return 2
+  command_tmp=$(umask 077; mktemp "$WORKER_LOCK/.command.XXXXXX") || { rm -f -- "$start_tmp"; return 2; }
+  if ! printf '%s\n' "$start" > "$start_tmp" || ! printf '%s\n' "$command" > "$command_tmp" \
+    || ! chmod 600 "$start_tmp" "$command_tmp" \
+    || ! mv -f -- "$command_tmp" "$WORKER_LOCK/command" \
+    || ! mv -f -- "$start_tmp" "$WORKER_LOCK/start"; then
+    rm -f -- "$start_tmp" "$command_tmp" "$WORKER_LOCK/start" "$WORKER_LOCK/command"
+    return 2
+  fi
 }
 
 worker_lock_recent() {
@@ -212,16 +222,27 @@ worker_recover_quarantine() { # <account-home>
 }
 
 worker_acquire_lock() { # <account-home> <identity>
-  local account_home=$1 identity=$2 attempt=0
+  local account_home=$1 identity=$2 attempt=0 published
   while [ "$attempt" -lt 150 ]; do
     if (umask 077; mkdir "$WORKER_LOCK") 2>/dev/null; then
       WORKER_LOCK_HELD=1
       # Discard the predecessor's heartbeat before publishing our identity:
       # readiness must come from this owner after lock publication succeeds.
       rm -f -- "$(fm_remote_job_worker_ready_path)" || return 1
-      worker_publish_lock_owner || return 1
-      worker_publish_identity "$identity" || return 4
-      return 0
+      published=0
+      worker_publish_lock_owner || published=$?
+      if [ "$published" -eq 0 ]; then
+        worker_publish_identity "$identity" || return 4
+        return 0
+      fi
+      if [ "$published" -ne 1 ]; then
+        # A failure is retried only when the lock was released meanwhile.
+        [ ! -d "$WORKER_LOCK" ] || return 1
+        WORKER_LOCK_HELD=0
+        continue
+      fi
+      # Another worker's pid won the lock this mkdir reported as created.
+      WORKER_LOCK_HELD=0
     fi
     [ -d "$WORKER_LOCK" ] && [ ! -L "$WORKER_LOCK" ] || return 1
     if [ -e "$WORKER_LOCK/quarantine" ] || [ -L "$WORKER_LOCK/quarantine" ]; then
@@ -594,23 +615,34 @@ worker_exit_cleanup() {
   worker_cleanup
 }
 
+# mkdir can report success to every lane that raced for this job, so the
+# exclusive owner publication decides which lane runs it; a lane that loses
+# leaves the claim and the winner's records alone.
 worker_claim() { # <job-dir>
-  local job=$1 claim pid start pid_tmp start_tmp
+  local job=$1 claim pid start pid_tmp start_tmp published
   claim="$job/.claim"
   [ ! -e "$claim" ] && [ ! -L "$claim" ] || return 1
   (umask 077; mkdir "$claim") || return 1
   pid=${BASHPID:-$$}
   start=$(fm_remote_job_process_start "$pid") || { rmdir "$claim" 2>/dev/null || true; return 1; }
   pid_tmp=$(umask 077; mktemp "$claim/.owner.XXXXXX") || { rmdir "$claim" 2>/dev/null || true; return 1; }
-  start_tmp=$(umask 077; mktemp "$claim/.owner_start.XXXXXX") || {
+  if ! printf '%s\n' "$pid" > "$pid_tmp" || ! chmod 600 "$pid_tmp"; then
     rm -f -- "$pid_tmp"
     rmdir "$claim" 2>/dev/null || true
     return 1
+  fi
+  published=0
+  fm_remote_job_link_exclusive "$pid_tmp" "$claim/owner" || published=$?
+  [ "$published" -ne 1 ] || return 1
+  [ "$published" -eq 0 ] || { rmdir "$claim" 2>/dev/null || true; return 1; }
+  start_tmp=$(umask 077; mktemp "$claim/.owner_start.XXXXXX") || {
+    rm -f -- "$claim/owner"
+    rmdir "$claim" 2>/dev/null || true
+    return 1
   }
-  if ! printf '%s\n' "$pid" > "$pid_tmp" || ! printf '%s\n' "$start" > "$start_tmp" \
-    || ! chmod 600 "$pid_tmp" "$start_tmp" || ! mv -f -- "$start_tmp" "$claim/owner_start" \
-    || ! mv -f -- "$pid_tmp" "$claim/owner"; then
-    rm -f -- "$pid_tmp" "$start_tmp" "$claim/owner" "$claim/owner_start"
+  if ! printf '%s\n' "$start" > "$start_tmp" || ! chmod 600 "$start_tmp" \
+    || ! mv -f -- "$start_tmp" "$claim/owner_start"; then
+    rm -f -- "$start_tmp" "$claim/owner" "$claim/owner_start"
     rmdir "$claim" 2>/dev/null || true
     return 1
   fi
