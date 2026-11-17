@@ -151,7 +151,7 @@
   "ledger_enabled": true,
   "tasks": [ { "id": "…", "kind": "ship|scout|…", "state": "working", "source": "…", "detail": "…" } ],
   "queued": [ { "id": "…", "kind": "…", "title": "<backlog 項目的標題>", "hold": "<hold reason 原文或 null>",
-                "captain": false, "blockers": [] } ],
+                "captain": false, "blockers": [], "topic_hint": "<內文 topic: 那一行的 id 或 null>" } ],
   "holds": [ { "id": "…", "title": "<backlog 項目的標題>", "question": "<hold reason 原文>",
                "hold_bucket": "live|aged|dated|blocked", "hold_until": null,
                "unresolved_blocker_ids": [], "hold_age_days": 0, "origin": "<origin task id 或空字串>" } ],
@@ -322,6 +322,7 @@ snapshot 的 JSON 裡用到的欄位（少了哪一個，對應的東西就從�
 | `backlog.records[]` 的 `structured`、`state`（`queued`、`done`）、`id`、`title`、`kind` | 排隊中的項目；`order` 的分組 |
 | `backlog.records[]` 的 `hold_kind`（`captain`）、`hold_reason`、`hold_bucket`（`live`、`aged`、`dated`、`blocked`）、`hold_until`、`hold_age_days`、`unresolved_blocker_ids` | 待決事項、要你動手的項目、排隊項目在等什麼 |
 | `backlog.records[].body_lines[]` 裡 `Captain hold origin: <id>` 那一行 | 待決事項沒有自己的議題標記時，跟著來源 task 的議題 |
+| `backlog.records[].body_lines[]` 裡 `topic: <議題 id>` 那一行 | 排隊中的項目沒有議題標記時用它（C51）；first mate 轉交項目時寫的 |
 
 ### 11.2 寫入
 

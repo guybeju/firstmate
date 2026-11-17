@@ -26,6 +26,12 @@ export interface ReportQueued {
   captain: boolean;
   /** Ids of unfinished items this one waits for. */
   blockers: string[];
+  /**
+   * The topic a "topic: <id>" line in the item's body names. Firstmate writes
+   * that line on items it hands to a secondmate, whose home has no tag for the
+   * item until it dispatches it.
+   */
+  topic_hint: string | null;
 }
 
 export interface ReportHold {
@@ -148,6 +154,7 @@ function parseQueued(raw: Record<string, unknown>): ReportQueued | null {
     hold: stringField(raw, "hold"),
     captain: raw["captain"] === true,
     blockers: strings(raw["blockers"]),
+    topic_hint: stringField(raw, "topic_hint"),
   }));
 }
 

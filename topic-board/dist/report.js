@@ -74,6 +74,7 @@ function parseQueued(raw) {
         hold: stringField(raw, "hold"),
         captain: raw["captain"] === true,
         blockers: strings(raw["blockers"]),
+        topic_hint: stringField(raw, "topic_hint"),
     }));
 }
 function parseSecondmate(raw) {

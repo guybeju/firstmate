@@ -197,7 +197,39 @@ describe("queued", () => {
     hold: null,
     captain: false,
     blockers: [],
+    topic_hint: null,
     ...extra,
+  });
+
+  it("places an untagged queued item by the topic its body names, until a tag says otherwise", () => {
+    const view = buildView(
+      input({
+        homes: [
+          home("main"),
+          home("sm1", {
+            report: report({
+              queued: [
+                item("handed", { topic_hint: "hi" }),
+                item("merged-hint", { topic_hint: "old" }),
+                item("tagged", { topic_hint: "hi" }),
+                item("proposed-hint", { topic_hint: "idea" }),
+                item("unknown-hint", { topic_hint: "nope" }),
+                item("bare"),
+              ],
+              topics: { tagged: "n2 2026-07-01T00:00:00Z" },
+            }),
+          }),
+        ],
+      }),
+    );
+    expect(Object.fromEntries(view.queued.map((entry) => [entry.task, entry.topic]))).toEqual({
+      handed: "hi",
+      "merged-hint": "n1",
+      tagged: "n2",
+      "proposed-hint": null,
+      "unknown-hint": null,
+      bare: null,
+    });
   });
 
   it("lists every home's queued items under their topics with what each waits for", () => {
@@ -676,6 +708,7 @@ describe("hands-on items", () => {
       hold: "動手：登入",
       captain: true,
       blockers: [],
+      topic_hint: null,
     });
     const view = buildView(
       input({

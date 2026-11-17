@@ -216,7 +216,9 @@ main() {
                   | select(.structured == true and .state == "queued")
                   | {id, kind: (.kind // ""), title: (.title // ""), hold: .hold_reason,
                      captain: (.hold_kind == "captain"),
-                     blockers: (.unresolved_blocker_ids // [])} ],
+                     blockers: (.unresolved_blocker_ids // []),
+                     topic_hint: ([ (.body_lines // [])[]
+                                    | capture("^topic: *(?<topic>[A-Za-z0-9._-]+) *$") | .topic ][0] // null)} ],
         status_decisions: [ $snap.tasks[] | .id as $id
                             | (.hints.open_decisions // [])[]
                             | select(.verb == "needs-decision")
