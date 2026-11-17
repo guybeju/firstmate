@@ -143,6 +143,9 @@ tb_mode() {
 # tb_op <home> <op> [json-args]: send one raw request to the board's socket and
 # print the response's "data" member. For ops fm-topic.sh does not expose.
 tb_op() {
+  # Not "${3:-{\}}": bash versions disagree on whether that backslash is kept.
+  local args=${3:-}
+  [ -n "$args" ] || args='{}'
   node -e '
     const [socket, op, args] = process.argv.slice(1);
     const connection = require("node:net").connect(socket);
@@ -155,7 +158,7 @@ tb_op() {
       console.log(JSON.stringify(response.data ?? {}));
     });
     connection.on("error", (error) => { console.error(error.message); process.exit(1); });
-  ' "$1/state/topic-board/board.sock" "$2" "${3:-{\}}"
+  ' "$1/state/topic-board/board.sock" "$2" "$args"
 }
 
 # tb_make_fake_root <dir>: a private code root with this checkout's scripts and
