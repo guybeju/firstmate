@@ -1,5 +1,5 @@
 // One topic's page: pending decisions, updates, its agents, and the message box.
-import type { AgentView, QueuedView, SummaryView, UpdateView } from "#board/view.js";
+import type { AgentView, SummaryView, UpdateView } from "#board/view.js";
 import { h } from "./dom.js";
 import type { Child } from "./dom.js";
 import { mergeConfirm, mergeMenu } from "./home.js";
@@ -8,6 +8,7 @@ import {
   holdCard,
   light,
   liveTodos,
+  queuedRow,
   questionRow,
   summaryRow,
   updateRow,
@@ -257,17 +258,6 @@ function agentCard(page: Page, actions: Actions, agent: AgentView): Child {
         write.home === agent.home &&
         write.task === agent.task,
     ),
-  );
-}
-
-function queuedRow(item: QueuedView): Child {
-  return h(
-    "div",
-    { class: "meta" },
-    h("b", {}, item.task),
-    h("span", {}, item.title),
-    h("span", { class: "pill" }, item.home),
-    h("span", { class: "note" }, item.waiting === null ? "可以派" : item.waiting),
   );
 }
 

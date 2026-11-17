@@ -48,6 +48,9 @@ cat > "$MAIN/data/backlog.md" <<EOF
 - [ ] call-1 - A call (repo: sample) (kind: captain) (hold: 要合併嗎？ 選項：合併 | 先不要) (hold-kind: captain)
   Captain hold set: 2026-07-24T00:00:00Z
 - [ ] next-1 - Next step (repo: sample) (kind: ship)
+- [ ] loose-1 - Loose work (repo: sample) (kind: ship)
+- [ ] loose-call - A loose call (repo: sample) (kind: captain) (hold: 這個要不要做？) (hold-kind: captain)
+  Captain hold set: 2026-07-24T00:00:00Z
 - [ ] wait-1 - Vendor reply (repo: sample) (kind: ship) (hold: waiting for a vendor)
 
 ## Done

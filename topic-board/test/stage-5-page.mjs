@@ -40,6 +40,21 @@ export default async function run(page) {
   }
   await page.waitFor("the milestone summary", has("PR 開好了"));
 
+  // Queued work nobody tagged with a topic is listed under 未分類, folded. A captain hold
+  // without a topic already has its card, so it is not listed a second time.
+  const untagged = `document.querySelector('details[data-key="queued:untagged"]')`;
+  await page.waitFor("the untagged queued items", `${untagged} !== null`);
+  if ((await page.evaluate(`${untagged}.querySelector("summary").textContent`)) !== "沒標議題的排隊項目 1")
+    throw new Error("only work without a topic and without its own card counts as untagged");
+  if (!(await page.evaluate(`${untagged}.closest("section").querySelector("h2").textContent === "未分類"`)))
+    throw new Error("untagged queued items belong under 未分類");
+  if (await page.evaluate(`${untagged}.open`)) throw new Error("the list starts folded");
+  await page.click('details[data-key="queued:untagged"] summary', "沒標議題的排隊項目");
+  await page.waitFor("the untagged item", `${untagged}.innerText.includes("loose-1") && ${untagged}.innerText.includes("Loose work") && ${untagged}.innerText.includes("可以派")`);
+  if (await page.evaluate(`${untagged}.innerText.includes("loose-call") || ${untagged}.innerText.includes("next-1")`))
+    throw new Error("a hold with its own card and tagged work must not be listed as untagged");
+  await page.waitFor("the loose call as a decision card", has("這個要不要做？"));
+
   // Something the captain has to do by hand: its own section, the commands exactly as written,
   // a copy button, and a claim that firstmate checks before the item goes away.
   const COMMAND = 'sudo x --now "a b" && echo $HOME `date`\n\tps | grep x';
