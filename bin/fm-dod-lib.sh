@@ -401,11 +401,12 @@ fm_brief_switch_render() {  # <mode> <pr>
 # older-format brief is recognized.
 fm_brief_switch_delivery() {  # <brief> <data-dir> <task-id> <to-mode> <to-pr>
   local brief=$1 data=$2 id=$3 to=$4 to_pr=$5
-  local from='' forge=none consent='' from_pr=auto branch='' base='' text count name old new
-  local old_setup old_ask old_dod new_setup new_ask new_dod
+  local from='' forge=none consent='' from_pr=auto branch='' base='' text count index name
+  local -a names=(setup ask dod) old new
   FM_BRIEF_SWITCH_FROM=
   [ -f "$brief" ] || { echo "error: no instructions at $brief to switch" >&2; return 1; }
   fm_brief_switch_parse "$brief" || return 1
+  # shellcheck disable=SC2034 # Read by bin/fm-control.sh after this call returns.
   FM_BRIEF_SWITCH_FROM=$from
   [ "$from" != "$to" ] || { echo "error: the task already ships mode=$to; there is nothing to switch" >&2; return 1; }
   for name in "$from" "$to"; do
@@ -423,19 +424,19 @@ fm_brief_switch_delivery() {  # <brief> <data-dir> <task-id> <to-mode> <to-pr>
     return 1
   fi
   fm_brief_switch_render "$to" "$to_pr" || return 1
-  new_setup=$FM_BRIEF_SWITCH_SETUP new_ask=$FM_BRIEF_SWITCH_ASK new_dod=$FM_BRIEF_SWITCH_DOD
+  new=("$FM_BRIEF_SWITCH_SETUP" "$FM_BRIEF_SWITCH_ASK" "$FM_BRIEF_SWITCH_DOD")
   fm_brief_switch_render "$from" "$from_pr" || return 1
-  old_setup=$FM_BRIEF_SWITCH_SETUP old_ask=$FM_BRIEF_SWITCH_ASK old_dod=$FM_BRIEF_SWITCH_DOD
+  old=("$FM_BRIEF_SWITCH_SETUP" "$FM_BRIEF_SWITCH_ASK" "$FM_BRIEF_SWITCH_DOD")
   text=$(cat "$brief" && printf x) || return 1
   text=$'\n'"${text%x}"
-  for name in setup ask dod; do
-    old="old_$name" new="new_$name"
-    count=$(fm_brief_fragment_count "$text" "${!old}")
+  for index in 0 1 2; do
+    name=${names[index]}
+    count=$(fm_brief_fragment_count "$text" "${old[index]}")
     [ "$count" = 1 ] || {
       echo "error: $brief does not carry its mode=$from $name section exactly as bin/fm-brief.sh renders it (found $count); it was edited by hand or scaffolded by another version, so the switch cannot tell which text to replace" >&2
       return 1
     }
-    text="${text%%"${!old}"*}${!new}${text#*"${!old}"}"
+    text="${text%%"${old[index]}"*}${new[index]}${text#*"${old[index]}"}"
   done
   printf '%s' "${text#$'\n'}"
 }
