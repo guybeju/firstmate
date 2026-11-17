@@ -38,6 +38,8 @@ umask 022
 # header owns the invariant and the layers it deliberately leaves in force.
 # shellcheck source=tests/git-config-helpers.sh
 . "$(dirname "${BASH_SOURCE[0]}")/git-config-helpers.sh"
+# shellcheck source=tests/nonexclusive-mkdir-fixture.sh
+. "$(dirname "${BASH_SOURCE[0]}")/nonexclusive-mkdir-fixture.sh"
 
 # Exempt firstmate's own test suite from the gate-lifecycle refusal
 # (bin/fm-gate-refuse-lib.sh). The no-mistakes gate runs this suite FROM a gate
@@ -646,7 +648,8 @@ fm_tmux_isolation_gate() {
 # uses to crash the process under test deterministically. fm_fake_version_tool
 # drops a stub for a tool whose installed version bootstrap gates, so a fixture
 # cannot be reported as an unparseable build simply for answering `--version`
-# with nothing.
+# with nothing. fm_fake_nonexclusive_mkdir (tests/nonexclusive-mkdir-fixture.sh)
+# drops a mkdir that reports success for a directory that already exists.
 
 fm_fakebin() {
   local dir=$1 fakebin="$1/fakebin"

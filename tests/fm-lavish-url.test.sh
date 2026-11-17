@@ -412,6 +412,54 @@ test_feedback_notification_routes_to_the_project_backlog_once() {
   pass "a captured Lavish feedback notification routes to exactly one queued item in the mapped project's backlog"
 }
 
+# A mkdir that reports success for a directory that already exists - as uutils
+# coreutils 0.10.0 does for a racer that lost - must not let a second filing
+# of the same feedback through while the first is still filing it. The
+# tasks-axi wrapper holds the first filing inside its backlog add.
+test_concurrent_filing_files_once_under_nonexclusive_mkdir() {
+  local home out snap sid task rc real_tasks first gate
+  home=$(make_home concurrent-filing)
+  printf 'portal.example.test portal-app\n' > "$home/config/lavish-url-domains"
+  odoo_page "$home/pages/www.portal.example.test.html"
+  out=$(lu "$home" snapshot "https://www.portal.example.test/" 2>&1) || fail "the capture failed: $out"
+  snap=$(field "$out" snapshot)
+  sid=$(field "$out" source-id)
+  feedback_result "$home/lavish-state/poll-result.1" "$snap"
+  wait_for_result "$home" "$sid" 1
+
+  fm_fake_nonexclusive_mkdir "$home/fakebin" || fail "could not install the nonexclusive mkdir fake"
+  real_tasks=$(command -v tasks-axi)
+  gate="$home/filing-gate"
+  cat > "$home/fakebin/tasks-axi" <<SH
+#!/usr/bin/env bash
+if [ -n "\${FM_TEST_FILE_GATE:-}" ] && [ "\${1:-}" = add ]; then
+  : > "\$FM_TEST_FILE_GATE.held"
+  for _ in \$(seq 1 200); do [ -e "\$FM_TEST_FILE_GATE.release" ] && break; sleep 0.05; done
+fi
+exec "$real_tasks" "\$@"
+SH
+  chmod +x "$home/fakebin/tasks-axi"
+  FM_TEST_FILE_GATE="$gate" lu "$home" route "$sid" 1 --file > "$home/first.out" 2>&1 &
+  first=$!
+  for _ in $(seq 1 200); do
+    [ -e "$gate.held" ] && break
+    sleep 0.05
+  done
+  [ -e "$gate.held" ] || fail "the first filing never reached its backlog add"
+  rc=0; out=$(lu "$home" route "$sid" 1 --file 2>&1) || rc=$?
+  : > "$gate.release"
+  wait "$first" || fail "the first filing failed: $(cat "$home/first.out")"
+  [ -z "$(field "$out" filed)" ] || fail "a second filing ran while the first held the claim: $out"
+  [ "$rc" -ne 0 ] || fail "the filing that found the claim held reported success: $out"
+  task=$(field "$(cat "$home/first.out")" filed)
+  [ -n "$task" ] || fail "the first filing reported no task: $(cat "$home/first.out")"
+  assert_equals 1 "$(grep -c 'Lavish review feedback' "$home/data/backlog.md")" \
+    "concurrent filings put the feedback in the backlog twice"
+  out=$(lu "$home" route "$sid" 1 --file) || fail "a filing after the first finished failed: $out"
+  assert_equals "$task" "$(field "$out" already-filed)" "a later filing did not find the first one"
+  pass "concurrent filings of one feedback file it once under a mkdir that reports success for an existing directory"
+}
+
 test_route_refuses_to_file_unresolved_routes() {
   local home out snap sid rc
   home=$(make_home refuse)
@@ -628,5 +676,6 @@ fm_test_run \
   test_project_url_selects_matching_enhancers \
   test_resolve_routes_domains_to_registered_projects \
   test_feedback_notification_routes_to_the_project_backlog_once \
+  test_concurrent_filing_files_once_under_nonexclusive_mkdir \
   test_route_refuses_to_file_unresolved_routes \
   test_snapshot_refuses_bad_urls_and_failed_captures

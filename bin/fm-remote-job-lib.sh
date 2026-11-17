@@ -14,22 +14,30 @@
 # supervisor, supervisor_start, group, group_start, and armed records while
 # work executes.
 # Stage writes state=queued last. seq is a queue-wide monotonic staging
-# sequence reserved atomically by its persistent .seq-claims directory; the
-# counter is only a forward-moving allocation hint. If the bounded hint walk
-# is exhausted, allocation rescans the claims for the maximum and continues
-# above it. Expired claims are reaped by an independently hourly-rate-limited
-# sweep that remains inline in the worker loop but uses one directory walk
-# with batched rmdir rather than per-claim uname/stat subprocesses.
+# sequence reserved atomically by its persistent .seq-claims entry - the
+# number's directory, plus the N.owner record beside it that decides which
+# caller reserved it; the counter is only a forward-moving allocation hint. If
+# the bounded hint walk is exhausted, allocation rescans the claim directories
+# for the maximum and continues above it. Expired claims and their owner
+# records are reaped by an independently hourly-rate-limited sweep that remains
+# inline in the worker loop but uses one directory walk per entry kind with
+# batched removal rather than per-claim uname/stat subprocesses.
+# No exclusion here rests on mkdir's exit status: some mkdir builds (uutils
+# coreutils 0.10.0) also report success to a caller whose directory a racer
+# created. A sequence claim's owner record, the worker lock's pid, and a job
+# claim's owner are each published by fm_remote_job_link_exclusive, a hard link
+# that succeeds for exactly one caller, while their directories keep the
+# layout that an older worker or library on the same account still reads.
 # seq is the worker's FIFO ordering key within a home, with the job id as the
 # deterministic tiebreak.
 # FIFO is defined over completed stagings: a stage that returns before another
 # begins executes first; concurrently overlapping stagings have no relative
 # ordering contract.
-# The worker atomically claims a job with .claim, establishes its execution
-# deadline, changes state to running, writes bounded stdout/stderr and exit,
-# then publishes state=done last. Callers wait for done, relay stdout and
-# stderr separately, then reap only their completed record. Input, argv,
-# stdout, and stderr are each capped at 1048576 bytes.
+# The worker atomically claims a job with .claim and its owner record,
+# establishes its execution deadline, changes state to running, writes bounded
+# stdout/stderr and exit, then publishes state=done last. Callers wait for
+# done, relay stdout and stderr separately, then reap only their completed
+# record. Input, argv, stdout, and stderr are each capped at 1048576 bytes.
 #
 # The worker serves one lane per staged home: jobs for the same home run
 # strictly FIFO in seq order while lanes for different homes run concurrently,
@@ -584,8 +592,33 @@ fm_remote_job_advance_seq_hint() { # <value>
   fi
 }
 
+# Publish <tmp> at <dest> only while <dest> does not exist, then remove <tmp>.
+# link(2) fails for every caller but one, so this decides a winner where a
+# mkdir's success cannot; the inode comparison confirms <dest> is this
+# caller's file. Returns 0 when published, 1 when another caller's <dest>
+# exists, 2 on any other failure.
+fm_remote_job_link_exclusive() { # <tmp> <dest>
+  local tmp=$1 dest=$2
+  if ln -- "$tmp" "$dest" 2>/dev/null && [ "$dest" -ef "$tmp" ]; then
+    rm -f -- "$tmp"
+    return 0
+  fi
+  rm -f -- "$tmp"
+  if [ -e "$dest" ] || [ -L "$dest" ]; then return 1; fi
+  return 2
+}
+
+# Record this caller as the owner of sequence number <value>, whose claim
+# directory it has just created or been told it created.
+fm_remote_job_own_seq() { # <value>
+  local tmp
+  tmp=$(umask 077; mktemp "$FM_REMOTE_JOB_STATE/.seqowner.XXXXXX") || return 2
+  printf '%s\n' "${BASHPID:-$$}" > "$tmp" || { rm -f -- "$tmp"; return 2; }
+  fm_remote_job_link_exclusive "$tmp" "$FM_REMOTE_JOB_SEQ_CLAIMS/$1.owner"
+}
+
 fm_remote_job_next_seq() { # [stage-dir destination]
-  local stage=${1:-} destination=${2:-} counter value claim attempt=0 recovered=0 maximum entry
+  local stage=${1:-} destination=${2:-} counter value claim attempt=0 recovered=0 maximum entry owned
   [ -n "$FM_REMOTE_JOB_STATE" ] && [ -n "$FM_REMOTE_JOB_SEQ_CLAIMS" ] || return 1
   counter="$FM_REMOTE_JOB_STATE/seq"
   value=$(cat "$counter" 2>/dev/null || true)
@@ -608,6 +641,10 @@ fm_remote_job_next_seq() { # [stage-dir destination]
     value=$((value + 1))
     claim="$FM_REMOTE_JOB_SEQ_CLAIMS/$value"
     if (umask 077; mkdir "$claim") 2>/dev/null; then
+      owned=0
+      fm_remote_job_own_seq "$value" || owned=$?
+      [ "$owned" -ne 1 ] || continue
+      [ "$owned" -eq 0 ] || return 1
       chmod 700 "$claim" || return 1
       fm_remote_job_advance_seq_hint "$value" || true
       if [ -n "$stage" ]; then
@@ -863,12 +900,16 @@ fm_remote_job_reap_stale() { # <account-home>
       tmp=$(umask 077; mktemp "$FM_REMOTE_JOB_STATE/.seqreap.XXXXXX") || tmp=
       if [ -n "$tmp" ] && printf '%s\n' "$now" > "$tmp" && chmod 600 "$tmp" \
         && mv -f -- "$tmp" "$marker"; then
-        # One directory walk: ! -newer matches whole-second mtime <= cutoff
+        # One walk per entry kind: ! -newer matches whole-second mtime <= cutoff
         # (the former >= age check). Batched rmdir tolerates concurrent mkdir/rmdir races
         # and non-empty dirs the same way the old per-claim rmdir || true did.
+        # A claim's N.owner record expires with it.
         find "$FM_REMOTE_JOB_SEQ_CLAIMS" -mindepth 1 -maxdepth 1 -type d \
           -name '[0-9]*' ! -name '*[!0-9]*' ! -name 0 \
           ! -newer "$ref" -exec rmdir {} + 2>/dev/null || true
+        find "$FM_REMOTE_JOB_SEQ_CLAIMS" -mindepth 1 -maxdepth 1 -type f \
+          -name '[0-9]*.owner' ! -name '*[!0-9]*.owner' \
+          ! -newer "$ref" -exec rm -f {} + 2>/dev/null || true
       else
         [ -z "$tmp" ] || rm -f -- "$tmp"
       fi

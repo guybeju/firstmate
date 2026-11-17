@@ -151,6 +151,40 @@ assert_absent "$STATE_ROOT/.seq-claims/999997" "an expired sequence claim surviv
 rmdir "$STATE_ROOT/.seq-claims/999999"
 pass "atomic sequence claims remain unique and reap only after expiry"
 
+# A mkdir that reports success for a directory that already exists - as uutils
+# coreutils 0.10.0 does for a racer that lost - must not hand out a number
+# twice, whether the allocation hint was lost and allocation walks back over
+# existing claims, or allocators contend for the same numbers at once.
+NONEXCLUSIVE_BIN=$(fm_fakebin "$TMP_ROOT/nonexclusive-mkdir")
+fm_fake_nonexclusive_mkdir "$NONEXCLUSIVE_BIN" || fail "could not install the nonexclusive mkdir fake"
+rm -f -- "$STATE_ROOT/seq"
+WALKED=$(PATH="$NONEXCLUSIVE_BIN:$PATH" fm_remote_job_next_seq) || fail "allocation over existing claims failed"
+[ "$WALKED" = 21 ] \
+  || fail "allocation with a lost hint reissued a claimed number under a nonexclusive mkdir: $WALKED"
+SEQ_PIDS=()
+for i in $(seq 1 20); do
+  PATH="$NONEXCLUSIVE_BIN:$PATH" fm_remote_job_next_seq > "$TMP_ROOT/fake-seq-$i" &
+  SEQ_PIDS+=("$!")
+done
+for pid in "${SEQ_PIDS[@]}"; do
+  wait "$pid" || fail "a concurrent allocator failed under a nonexclusive mkdir"
+done
+SEQ_RESULTS=$(cat "$TMP_ROOT"/fake-seq-* | sort -n)
+[ "$SEQ_RESULTS" = "$(seq 22 41)" ] \
+  || fail "concurrent claims under a nonexclusive mkdir were not unique and monotonic: $SEQ_RESULTS"
+for i in $(seq 1 41); do
+  touch -t 200001010000 "$STATE_ROOT/.seq-claims/$i"*
+done
+touch -t 200001010000 "$STATE_ROOT/.seq-claims-reaped"
+fm_remote_job_reap_stale "$ACCOUNT_HOME" || fail "expired claim reaping failed"
+for i in $(seq 1 41); do
+  for entry in "$STATE_ROOT/.seq-claims/$i" "$STATE_ROOT/.seq-claims/$i".*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    fail "an expired sequence claim left $entry behind"
+  done
+done
+pass "sequence claims stay unique under a mkdir that reports success for an existing directory"
+
 fm_on() {
   FM_HOME="$LOCAL_HOME" \
   FM_ROOT_OVERRIDE="$REMOTE_ROOT" \

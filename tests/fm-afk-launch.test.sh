@@ -21,6 +21,8 @@ set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LAUNCH="$ROOT/bin/fm-afk-launch.sh"
+# shellcheck source=tests/nonexclusive-mkdir-fixture.sh
+. "$ROOT/tests/nonexclusive-mkdir-fixture.sh"
 START="$ROOT/bin/fm-afk-start.sh"
 CONTRACT="$ROOT/bin/fm-afk-contract.sh"
 # The daemon paths refuse on a Pi primary, so pin a daemon-running harness for
@@ -781,6 +783,52 @@ unit_lock_initialization_grace() {
     fail "launcher lock: contender removed a lock during initialization"
   fi
   wait "$initializer" 2>/dev/null || true
+  rm -rf "$st"
+}
+
+# A mkdir that reports success for a directory that already exists - as uutils
+# coreutils 0.10.0 does for a racer that lost - must not let a contender into
+# the launcher lock while its holder is still inside.
+unit_lock_excludes_under_nonexclusive_mkdir() {
+  local st fakebin log holder contender
+  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-lock-exclusive.XXXXXX")
+  mkdir -p "$st/state"
+  fakebin="$st/fakebin"
+  mkdir -p "$fakebin"
+  fm_fake_nonexclusive_mkdir "$fakebin" || { fail "launcher lock: could not install the nonexclusive mkdir fake"; return; }
+  log="$st/entries"
+  PATH="$fakebin:$PATH" FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" bash -c '
+    . "$1"
+    fm_afk_launch_lock_acquire || exit 1
+    printf "holder in\n" >> "$2"
+    for _ in $(seq 1 100); do [ -e "$3" ] && break; sleep 0.05; done
+    printf "holder out\n" >> "$2"
+    fm_afk_launch_lock_release
+  ' _ "$LAUNCH" "$log" "$st/release" &
+  # shellcheck disable=SC2031 # The background PID is captured immediately in this shell.
+  holder=$!
+  for _ in $(seq 1 200); do
+    grep -qx 'holder in' "$log" 2>/dev/null && break
+    sleep 0.05
+  done
+  PATH="$fakebin:$PATH" FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" bash -c '
+    . "$1"
+    fm_afk_launch_lock_acquire || exit 1
+    printf "contender in\n" >> "$2"
+    fm_afk_launch_lock_release
+  ' _ "$LAUNCH" "$log" &
+  # shellcheck disable=SC2031 # The background PID is captured immediately in this shell.
+  contender=$!
+  sleep 1
+  : > "$st/release"
+  wait "$holder" 2>/dev/null || true
+  wait "$contender" 2>/dev/null || true
+  if [ "$(cat "$log" 2>/dev/null)" = "$(printf 'holder in\nholder out\ncontender in')" ] \
+    && [ ! -e "$st/state/.afk-launch.lock" ]; then
+    pass "launcher lock: a contender waits for the holder under a mkdir that reports success for an existing directory"
+  else
+    fail "launcher lock: a contender entered while the holder was inside: $(tr '\n' ',' < "$log" 2>/dev/null)"
+  fi
   rm -rf "$st"
 }
 
@@ -1918,6 +1966,7 @@ unit_stop_rejects_reused_pid
 unit_failed_start_rolls_back_state
 unit_concurrent_start_serialized
 unit_lock_initialization_grace
+unit_lock_excludes_under_nonexclusive_mkdir
 unit_signal_exits_with_lock_cleanup
 unit_herdr_partial_create_recovery
 unit_herdr_error_with_exact_ids_closes_exact
