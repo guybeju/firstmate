@@ -174,7 +174,7 @@ test_the_tripwires_fire() {
 
 test_nothing_dictates_the_dispatcher() {
   local out
-  assert_equals "" "$(cd "$ROOT" && board_files | xargs grep -nE 'fm-tasks-axi|fm-spawn|unhold|--reason "topic-board：' || true)" \
+  assert_equals "" "$(cd "$ROOT" && board_files | xargs grep -nE 'fm-tasks-axi|fm-spawn|unhold|--reason "看板佇列：' || true)" \
     "the board tree must not name the dispatcher's commands"
   assert_equals "" "$(cd "$ROOT" && grep -nE '(^|[^a-z-])order\)' bin/myshape.sh || true)" \
     "order must not be a subcommand of the board's command"
