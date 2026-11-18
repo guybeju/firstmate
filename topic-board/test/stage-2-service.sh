@@ -17,6 +17,9 @@ trap 'tb_stop_boards; fm_test_cleanup' EXIT
 test_starts_on_demand_and_stays_single() {
   local home out pid
   home=$(tb_make_service_home demand)
+  # A home's first open starts its board; later commands start it when it is down.
+  tb_run "$home" "$TOPIC" open >/dev/null || fail "open must start the board"
+  tb_run "$home" "$TOPIC" stop >/dev/null || fail "stop must stop the board"
   out=$(tb_run "$home" "$TOPIC" status)
   assert_contains "$out" "沒在跑" "status must report a stopped board"
   assert_equals 0 "$(tb_board_count "$home")" "status must not start the board"
@@ -53,6 +56,7 @@ test_starts_on_demand_and_stays_single() {
 test_recovers_from_a_crash() {
   local home pid
   home=$(tb_make_service_home crash)
+  tb_run "$home" "$TOPIC" open >/dev/null
   tb_run "$home" "$TOPIC" create "Keep me" --goal "survive" --id keep >/dev/null
   pid=$(tb_board_pid "$home")
   kill -KILL "$pid"
@@ -77,6 +81,7 @@ test_recovers_from_a_crash() {
 test_replaces_a_hung_board() {
   local home pid
   home=$(tb_make_service_home hung)
+  tb_run "$home" "$TOPIC" open >/dev/null
   tb_run "$home" "$TOPIC" create "Hang" --goal "wait" --id hang >/dev/null
   pid=$(tb_board_pid "$home")
   kill -STOP "$pid"
@@ -93,8 +98,7 @@ make_code_root() {
   local root=$TMP_ROOT/$1
   fm_git_init_commit "$root"
   mkdir -p "$root/bin" "$root/topic-board"
-  cp "$ROOT"/bin/fm-topic.sh "$ROOT"/bin/fm-topic-lib.sh "$ROOT"/bin/fm-primary-scope-lib.sh \
-    "$ROOT"/bin/fm-secondmate-registry-lib.sh "$root/bin/"
+  cp "$ROOT"/bin/fm-topic.sh "$ROOT"/bin/fm-topic-lib.sh "$root/bin/"
   ln -s "$ROOT/topic-board/dist" "$root/topic-board/dist"
   printf '%s\n' "$root"
 }
@@ -103,6 +107,7 @@ test_replaces_the_board_when_code_or_port_changes() {
   local home root pid
   home=$(tb_make_service_home replace)
   root=$(make_code_root replace-root)
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-topic.sh" open >/dev/null
   FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-topic.sh" create "V1" --goal "old code" >/dev/null
   pid=$(tb_board_pid "$home")
   FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-topic.sh" status | grep -q "restart" &&
@@ -138,7 +143,9 @@ test_replaces_the_board_when_code_or_port_changes() {
 
 test_startup_failures_exit_69() {
   local home root out rc holder port fakebin tool
+  # Each home's board has run before, so the command tries to start it again.
   home=$(tb_make_service_home fail-port)
+  tb_board_has_run "$home"
   port=$(cat "$home/config/topic-board-port")
   node -e 'require("node:net").createServer().listen(Number(process.argv[1]), "127.0.0.1"); setTimeout(() => {}, 60000);' "$port" &
   holder=$!
@@ -155,16 +162,18 @@ test_startup_failures_exit_69() {
   expect_code 69 "$(tb_code "$home" "$TOPIC" create "Bad" --goal "port")" "an invalid configured port"
 
   home=$(tb_make_service_home fail-dist)
+  tb_board_has_run "$home"
   root="$TMP_ROOT/no-dist-root"
   mkdir -p "$root/bin"
-  cp "$ROOT"/bin/fm-topic.sh "$ROOT"/bin/fm-topic-lib.sh "$ROOT"/bin/fm-primary-scope-lib.sh \
-    "$ROOT"/bin/fm-secondmate-registry-lib.sh "$root/bin/"
+  cp "$ROOT"/bin/fm-topic.sh "$ROOT"/bin/fm-topic-lib.sh "$root/bin/"
   rc=0
   out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-topic.sh" create "X" --goal "y" 2>&1) || rc=$?
   assert_equals 69 "$rc" "a missing build must exit 69"
-  assert_contains "$out" "編譯結果不見了" "the missing-build failure must say so"
+  assert_equals "看板服務無法啟動：編譯結果不見了（$root/topic-board/dist）。確認 checkout 完整。這次的要求沒有寫入。" "$out" \
+    "the missing-build failure must say so, sending nobody to another tool"
 
   home=$(tb_make_service_home fail-json)
+  tb_board_has_run "$home"
   printf 'not json' > "$home/data/topics.json"
   rc=0
   out=$(tb_run "$home" "$TOPIC" create "X" --goal "y" 2>&1) || rc=$?
@@ -174,6 +183,7 @@ test_startup_failures_exit_69() {
   assert_equals 0 "$(tb_board_count "$home")" "a failed start must leave no board behind"
 
   home=$(tb_make_service_home fail-node)
+  tb_board_has_run "$home"
   fakebin=$(fm_fakebin "$home")
   for tool in bash dirname cat env git wc tr; do
     ln -s "$(command -v "$tool")" "$fakebin/$tool"
@@ -190,7 +200,7 @@ test_startup_failures_exit_69() {
   rc=0
   out=$(tb_run "$home" "$TOPIC" create "X" --goal "y" 2>&1) || rc=$?
   assert_equals 1 "$rc" "a socket subcommand in a secondmate home must exit 1"
-  assert_contains "$out" "只在主 home" "the secondmate refusal must explain itself"
+  assert_contains "$out" "這裡沒有看板" "the secondmate refusal must explain itself"
   assert_absent "$home/state/topic-board" "a secondmate home must never start a board"
   pass "each startup failure exits 69 with its one-line reason and writes nothing"
 }

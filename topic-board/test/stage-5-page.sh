@@ -30,6 +30,7 @@ EOF
 chmod +x "$TMP_ROOT/topic"
 export TB_TOPIC="$TMP_ROOT/topic"
 
+"$TB_TOPIC" open >/dev/null || fail "the board did not start"
 "$TB_TOPIC" create "Billing" --goal "rework billing" --id billing >/dev/null
 "$TB_TOPIC" create "Login" --goal "new login" --id login --queue high >/dev/null
 "$TB_TOPIC" create "Parked" --goal "later" --id parked --queue later >/dev/null

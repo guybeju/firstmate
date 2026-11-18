@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Shared helpers for the topic board's two Bash entry points, fm-topic.sh and
-# fm-topic-board-read.sh. Sourced only; defines functions and has no side
-# effects on source.
-#
-# The caller must already have sourced fm-secondmate-registry-lib.sh.
+# The topic board's own shell helpers: id checks, error exits, and reading
+# which live topic an id names. Sourced only; defines functions, has no side
+# effects on source, and sources nothing. bin/fm-topic.sh needs no other
+# library; Firstmate's side of the board (bin/fm-board.sh,
+# bin/fm-dispatch-plan.sh, bin/fm-topic-board-read.sh) sources it too.
 
 # tb_valid_id <value>: 0 when <value> is a usable task id or topic id. The
 # grammar is the one topic ids share with task ids: [A-Za-z0-9._-], at most 128
@@ -30,37 +30,39 @@ tb_jq_install_hint() {
   printf '%s\n' "brew install jq  # or the platform's package manager"
 }
 
-# tb_local_secondmate_home <registry-file> <secondmate-id>: print the home of a
-# LOCAL registered secondmate. Returns 1 after printing the reason to stderr
-# when the id is malformed, unregistered, or remote.
-tb_local_secondmate_home() {
-  local reg=$1 id=$2 remote home
-  tb_valid_id "$id" || {
-    printf '%s\n' "--in-home：secondmate id 格式不對：$id" >&2
-    return 1
-  }
-  remote=$(secondmate_registry_field "$reg" "$id" remote) || {
-    printf '%s\n' "--in-home：data/secondmates.md 裡沒有 $id" >&2
-    return 1
-  }
-  [ "$remote" = 0 ] || {
-    printf '%s\n' "--in-home：$id 是遠端的 secondmate，請改用 bin/fm-on.sh $id" >&2
-    return 1
-  }
-  home=$(secondmate_registry_field "$reg" "$id" home) || return 1
-  [ -d "$home" ] || {
-    printf '%s\n' "--in-home：$id 的 home 不存在：$home" >&2
-    return 1
-  }
-  printf '%s\n' "$home"
+# tb_resolve_live_topic <topics-file> <topic-id>: the live (unarchived) id that
+# <topic-id> resolves to through the merged table, or nothing when it resolves
+# to no live topic or the file does not exist. Fails when jq cannot read it.
+tb_resolve_live_topic() {
+  [ -f "$1" ] || return 0
+  jq -r --arg id "$2" '
+    . as $doc
+    | {id: $id, hops: 0}
+    | until(.hops > 64 or (($doc.merged // {})[.id] == null);
+            {id: ($doc.merged[.id]), hops: (.hops + 1)})
+    | .id as $final
+    | if $doc.topics[$final] != null then $final else empty end
+  ' "$1"
 }
 
-# tb_exec_in_home <home> <command...>: replace this process with <command> run
-# against <home>. Path overrides that pointed at the calling home are dropped
-# so the command resolves state/, data/, and config/ from <home>.
-tb_exec_in_home() {
-  local home=$1
-  shift
-  exec env -u FM_STATE_OVERRIDE -u FM_DATA_OVERRIDE -u FM_CONFIG_OVERRIDE \
-    -u FM_PROJECTS_OVERRIDE FM_HOME="$home" "$@"
+# tb_topic_for_tag <topics-file> <topic-id>: the topic id a tag should record
+# for <topic-id>: the live topic it resolves to. Exits 1 after listing the live
+# topics when there is none. Without jq it warns and prints <topic-id> as given.
+tb_topic_for_tag() {
+  local file=$1 wanted=$2 resolved
+  if ! command -v jq >/dev/null 2>&1; then
+    printf '%s\n' "警告：找不到 jq，沒有檢查 $wanted 是不是看板上的議題。安裝：$(tb_jq_install_hint)" >&2
+    printf '%s\n' "$wanted"
+    return 0
+  fi
+  resolved=$(tb_resolve_live_topic "$file" "$wanted") ||
+    tb_die 1 "讀不懂 ${file}，沒有寫入標記。"
+  if [ -z "$resolved" ]; then
+    {
+      printf '%s\n' "$wanted 不是看板上還開著的議題，沒有寫入標記。可用的議題："
+      [ ! -f "$file" ] || jq -r '.topics | to_entries[] | "  \(.key)\t\(.value.name)"' "$file" || true
+    } >&2
+    exit 1
+  fi
+  printf '%s\n' "$resolved"
 }

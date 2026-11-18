@@ -98,6 +98,7 @@ hold_backlog() {  # <home> <task> [close|release]: the outcome the hold records,
 }
 
 setup_fleet() {
+  t open >/dev/null || fail "the board did not start"
   t create "Billing" --goal "rework billing" --id billing >/dev/null
   t create "Login" --goal "new login" --id login >/dev/null
   t create "Parked" --goal "later" --id parked --queue later >/dev/null
@@ -230,7 +231,7 @@ test_tagging() {
   mkdir -p "$MAIN/projects/loose"
   id=$(write tag home main task loose-task topic login)
   settle "$id" delivered
-  assert_equals login "$(cut -d' ' -f1 "$MAIN/data/loose-task/topic")" "a main-home tag must be written by fm-topic.sh tag"
+  assert_equals login "$(cut -d' ' -f1 "$MAIN/data/loose-task/topic")" "a main-home tag must be written by fm-board.sh tag"
   id=$(write tag home sm1 task sm-loose topic login)
   settle "$id" delivered
   assert_equals login "$(cut -d' ' -f1 "$LOCAL_SM/data/sm-loose/topic")" "a local secondmate tag must land in that home"
@@ -238,7 +239,7 @@ test_tagging() {
   refused tag home main task loose-task topic nope || fail "tagging with an unknown topic must be refused"
 
   # Transport fails, but the tag did land: the retry reads the home and stops.
-  play fm-on.sh.fm-topic.sh '255'
+  play fm-on.sh.fm-board.sh '255'
   mkdir -p "$REMOTE_SM/data/far-a"
   id=$(write tag home far1 task far-a topic billing)
   printf 'billing 2026-07-02T00:00:00Z\n' > "$REMOTE_SM/data/far-a/topic"
@@ -246,7 +247,7 @@ test_tagging() {
   assert_equals 1 "$(grep -c '|tag|far-a|' "$TB_LOG")" "a tag already in place must not be written again"
 
   # Transport fails and someone else tags the task with another topic meanwhile.
-  play fm-on.sh.fm-topic.sh '255'
+  play fm-on.sh.fm-board.sh '255'
   id=$(write tag home far1 task far-b topic billing)
   mkdir -p "$REMOTE_SM/data/far-b"
   printf 'login 2026-07-02T00:00:00Z\n' > "$REMOTE_SM/data/far-b/topic"
@@ -254,7 +255,7 @@ test_tagging() {
   assert_equals login "$(tail -n 1 "$REMOTE_SM/data/far-b/topic" | cut -d' ' -f1)" "another topic's tag must not be overwritten"
 
   # Transport fails and nothing changed: the retry writes the tag.
-  play fm-on.sh.fm-topic.sh '255'
+  play fm-on.sh.fm-board.sh '255'
   id=$(write tag home far1 task far-c topic billing)
   settle "$id" delivered
   assert_equals billing "$(cut -d' ' -f1 "$REMOTE_SM/data/far-c/topic")" "an unchanged home must get the tag on retry"
@@ -654,6 +655,7 @@ test_hands_on_item_with_the_real_hold_tool() {
   local home out HOLD_TOOL="$ROOT/bin/fm-captain-hold.sh"
   command -v tasks-axi >/dev/null 2>&1 || { pass "skip: tasks-axi not found"; return 0; }
   home=$(tb_make_service_home real-todo)
+  tb_board_has_run "$home"
   printf '## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
   printf '%s' '{"v":1,"next_seq":1,"queues":{"high":["t"],"normal":[],"later":[]},"topics":{"t":{"name":"T","goal":"g","status":"confirmed","created_at":""}},"merged":{}}' \
     > "$home/data/topics.json"
@@ -725,7 +727,7 @@ test_audit_log() {
     "every state change must be exactly one audit line"
   grep "\"write_id\":\"$id\"" "$audit" | head -n 1 | jq -e '.sending.text == "稽核" and .sending.plan.requestId != null' >/dev/null ||
     fail "the first audit line must carry the full text and the dedupe key"
-  grep -v '^cmd=\(fm-inbox.sh\|fm-send.sh\|fm-captain-hold.sh\|fm-on.sh.fm-captain-hold.sh\|fm-on.sh.fm-topic.sh\)	' "$TB_LOG" |
+  grep -v '^cmd=\(fm-inbox.sh\|fm-send.sh\|fm-captain-hold.sh\|fm-on.sh.fm-captain-hold.sh\|fm-on.sh.fm-board.sh\)	' "$TB_LOG" |
     grep -q '^cmd=' && fail "the board ran a stand-in outside the allow-list"
   t stop >/dev/null
   FM_TOPIC_BOARD_TEST=0 t open >/dev/null

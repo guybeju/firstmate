@@ -158,7 +158,7 @@ describe("write commands", () => {
     expect(
       invocationFor({ kind: "answer", placement: "local", secondmate: "sm1", line }, KNOWN),
     ).toEqual({
-      script: "fm-topic.sh",
+      script: "fm-board.sh",
       args: ["--in-home", "sm1", "answers"],
       stdin: `${line}\n`,
     });
@@ -200,7 +200,7 @@ describe("write commands", () => {
     expect(
       invocationFor({ kind: "tag", placement: "main", task: "t1", topic: "billing" }, KNOWN),
     ).toEqual({
-      script: "fm-topic.sh",
+      script: "fm-board.sh",
       args: ["tag", "t1", "billing"],
     });
     expect(
@@ -209,7 +209,7 @@ describe("write commands", () => {
         KNOWN,
       ),
     ).toEqual({
-      script: "fm-topic.sh",
+      script: "fm-board.sh",
       args: ["--in-home", "sm1", "tag", "t1", "billing"],
     });
     expect(
@@ -219,7 +219,7 @@ describe("write commands", () => {
       ),
     ).toEqual({
       script: "fm-on.sh",
-      args: ["far1", "fm-topic.sh", "tag", "t1", "billing"],
+      args: ["far1", "fm-board.sh", "tag", "t1", "billing"],
     });
     expect(refusedFor({ kind: "tag", placement: "main", task: "--from", topic: "x" })).toContain(
       "malformed task id",
@@ -284,7 +284,7 @@ describe("commandRunner", () => {
     );
     expect(missing.code).toBeNull();
     expect(missing.stderr).not.toBe("");
-    script("fm-topic.sh", "sleep 5");
+    script("fm-board.sh", "sleep 5");
     const slow = await run({ kind: "tag", placement: "main", task: "t", topic: "x" }, KNOWN, 200);
     expect(slow.code).toBeNull();
   });

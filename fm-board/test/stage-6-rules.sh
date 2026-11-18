@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# fm-topic.sh install-rules and the rules line of status: the board's rules go
-# into the captain's two preference files as one marked block each, and nothing
-# else in those files is touched.
+# fm-board.sh install-rules and rules: the board's rules go into the captain's
+# two preference files as one marked block each, and nothing else in those
+# files is touched.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -11,18 +11,18 @@ set -u
 # shellcheck source=bin/fm-config-inherit-lib.sh
 . "$ROOT/bin/fm-config-inherit-lib.sh"
 
-TMP_ROOT=$(fm_test_tmproot tb-s6)
-RULES="$ROOT/topic-board/rules"
+TMP_ROOT=$(fm_test_tmproot fm-board-s6)
+RULES="$ROOT/fm-board/rules"
 BEGIN='<!-- topic-board:begin'
 END='<!-- topic-board:end -->'
 
 install() {  # <home>
-  tb_run "$1" "$TOPIC" install-rules
+  tb_run "$1" "$BOARD" install-rules
 }
 
-# rules_line <home>: the rules line of status (the board need not be running).
+# rules_line <home>: the one line fm-board.sh rules prints.
 rules_line() {
-  tb_run "$1" "$TOPIC" status | grep '^規則：'
+  tb_run "$1" "$BOARD" rules
 }
 
 test_creates_both_files() {
@@ -30,19 +30,19 @@ test_creates_both_files() {
   home=$(tb_make_home fresh)
   assert_equals "規則：captain.md 未裝；captain-shared.md 未裝" "$(rules_line "$home")" "status must report missing rules"
   out=$(install "$home") || fail "install-rules failed on an empty home: $out"
-  assert_contains "$out" "captain.md：新增（v8）" "install-rules must report the new main block"
-  assert_contains "$out" "captain-shared.md：新增（v2）" "install-rules must report the new shared block"
+  assert_contains "$out" "captain.md：新增（v9）" "install-rules must report the new main block"
+  assert_contains "$out" "captain-shared.md：新增（v3）" "install-rules must report the new shared block"
   assert_contains "$out" "生效時間" "install-rules must say when the rules take effect"
   assert_contains "$(cat "$home/data/captain.md")" "fm-topic.sh retract" "the main rules must say how to take back a wrong summary"
   assert_contains "$(cat "$home/data/captain.md")" "fm-topic.sh find" "the main rules must say how to look up a topic's history"
-  assert_contains "$(cat "$home/data/captain.md")" "fm-topic.sh split" "the main rules must say how to split a topic"
+  assert_contains "$(cat "$home/data/captain.md")" "fm-board.sh split" "the main rules must say how to split a topic"
   assert_contains "$out" "已註冊的 secondmate" "install-rules must list the secondmates"
   assert_equals "$(cat "$RULES/captain.block.md.tmpl")" "$(cat "$home/data/captain.md")" "a new captain.md must be exactly the template"
   assert_equals "$(cat "$RULES/captain-shared.header.md.tmpl" "$RULES/captain-shared.block.md.tmpl")" "$(cat "$home/data/captain-shared.md")" \
     "a new captain-shared.md must be the header followed by the template"
   gap=$(shared_captain_header_valid "$home/data/captain-shared.md") || fail "upstream rejects the new shared file's header (missing: $gap)"
-  assert_equals "drwx------" "$(tb_mode "$home/state/topic-board/rules-backup")" "the backup directory must be 0700"
-  assert_equals "規則：captain.md 和範本相同（v8）；captain-shared.md 和範本相同（v2）" "$(rules_line "$home")" \
+  assert_equals "drwx------" "$(tb_mode "$home/state/fm-board/rules-backup")" "the backup directory must be 0700"
+  assert_equals "規則：captain.md 和範本相同（v9）；captain-shared.md 和範本相同（v3）" "$(rules_line "$home")" \
     "status must report installed rules that match the templates"
   pass "install-rules creates both files, and upstream accepts the shared file's header"
 }
@@ -54,11 +54,11 @@ test_keeps_everything_outside_the_block() {
   { cat "$RULES/captain-shared.header.md.tmpl"; printf '\n- 共用的偏好\n'; } > "$home/data/captain-shared.md"
   before=$(cat "$home/data/captain.md")
   out=$(install "$home") || fail "install-rules failed on existing files: $out"
-  assert_contains "$out" "captain.md：新增（v8），原檔備份在" "appending to an existing file must be reported with its backup"
+  assert_contains "$out" "captain.md：新增（v9），原檔備份在" "appending to an existing file must be reported with its backup"
   assert_equals "$before" "$(head -n 3 "$home/data/captain.md")" "the captain's own lines must be unchanged"
   assert_equals "" "$(sed -n 4p "$home/data/captain.md")" "one blank line must separate the block from what was there"
   assert_equals "$(cat "$RULES/captain.block.md.tmpl")" "$(tail -n +5 "$home/data/captain.md")" "the block must be appended whole"
-  assert_equals "$before" "$(cat "$home"/state/topic-board/rules-backup/captain.md.*)" "the backup must be the original file"
+  assert_equals "$before" "$(cat "$home"/state/fm-board/rules-backup/captain.md.*)" "the backup must be the original file"
   grep -q '^- 共用的偏好$' "$home/data/captain-shared.md" || fail "the shared file's own lines must be kept"
   pass "an existing file keeps its content and gets the block at its end, with a backup"
 }
@@ -73,7 +73,7 @@ test_replaces_an_old_block_in_place() {
   } > "$home/data/captain.md"
   assert_contains "$(rules_line "$home")" "captain.md 和範本不同（v0）" "status must notice an outdated block"
   out=$(install "$home") || fail "install-rules failed to update: $out"
-  assert_contains "$out" "captain.md：已更新（和範本不同（v0） → v8）" "an update must report the old and new versions"
+  assert_contains "$out" "captain.md：已更新（和範本不同（v0） → v9）" "an update must report the old and new versions"
   assert_equals "# 前面" "$(head -n 1 "$home/data/captain.md")" "text before the block must be kept"
   assert_equals "- 不能動" "$(tail -n 1 "$home/data/captain.md")" "text after the block must be kept"
   grep -q '舊的規則' "$home/data/captain.md" && fail "the old block must be gone"
@@ -91,19 +91,52 @@ test_second_run_changes_nothing() {
     stat -f '%m %i' "$home/data/captain.md" "$home/data/captain-shared.md")
   sleep 1.1
   out=$(install "$home") || fail "a second install-rules failed"
-  assert_contains "$out" "captain.md：已是最新（v8）" "an unchanged file must be reported as current"
-  assert_contains "$out" "captain-shared.md：已是最新（v2）" "an unchanged shared file must be reported as current"
+  assert_contains "$out" "captain.md：已是最新（v9）" "an unchanged file must be reported as current"
+  assert_contains "$out" "captain-shared.md：已是最新（v3）" "an unchanged shared file must be reported as current"
   assert_equals "$stamp" "$(stat -c '%Y %i' "$home/data/captain.md" "$home/data/captain-shared.md" 2>/dev/null ||
     stat -f '%m %i' "$home/data/captain.md" "$home/data/captain-shared.md")" "an unchanged file must not be rewritten"
-  assert_equals 0 "$(find "$home/state/topic-board/rules-backup" -type f | wc -l | tr -d ' ')" "nothing may be backed up when nothing changes"
+  assert_equals 0 "$(find "$home/state/fm-board/rules-backup" -type f | wc -l | tr -d ' ')" "nothing may be backed up when nothing changes"
   printf '多一行\n' >> "$home/data/captain.md"
-  assert_contains "$(rules_line "$home")" "captain.md 和範本相同（v8）" "text outside the block does not make the rules differ"
+  assert_contains "$(rules_line "$home")" "captain.md 和範本相同（v9）" "text outside the block does not make the rules differ"
   sed -i.bak 's/停著的項目不派/停著的項目照派/' "$home/data/captain.md"
-  assert_contains "$(rules_line "$home")" "captain.md 和範本不同（v8）" "an edit inside the block must show as differing"
+  assert_contains "$(rules_line "$home")" "captain.md 和範本不同（v9）" "an edit inside the block must show as differing"
   install "$home" >/dev/null
-  assert_contains "$(rules_line "$home")" "captain.md 和範本相同（v8）" "install-rules must restore an edited block"
+  assert_contains "$(rules_line "$home")" "captain.md 和範本相同（v9）" "install-rules must restore an edited block"
   grep -q '^多一行$' "$home/data/captain.md" || fail "restoring the block must keep the text outside it"
   pass "install-rules is idempotent and status compares the block's content"
+}
+
+# A home whose rules came from fm-topic.sh install-rules (main v8, shared v2)
+# gets the new blocks in the same place, not a second block beside the old one.
+# shellcheck disable=SC2016 # the backticks in the planted lines are Markdown code spans.
+test_upgrades_blocks_installed_by_the_old_command() {
+  local home out
+  home=$(tb_make_home upgrade)
+  {
+    printf '# 前面\n\n'
+    printf '%s v8（由 fm-topic.sh install-rules 維護，要改請改 fork 裡的範本） -->\n' "$BEGIN"
+    printf -- '- 重新評估排隊中的工作前先跑 `bin/fm-topic.sh order`\n%s\n' "$END"
+    printf '\n# 後面\n'
+  } > "$home/data/captain.md"
+  {
+    cat "$RULES/captain-shared.header.md.tmpl"
+    printf '%s v2（由 fm-topic.sh install-rules 維護，要改請改 fork 裡的範本） -->\n' "$BEGIN"
+    printf -- '- 建立 backlog 項目時就跑 `bin/fm-topic.sh tag <task-id> <議題 id>`\n%s\n' "$END"
+  } > "$home/data/captain-shared.md"
+  assert_equals "規則：captain.md 和範本不同（v8）；captain-shared.md 和範本不同（v2）" "$(rules_line "$home")" \
+    "rules must report the blocks the old command installed"
+  out=$(install "$home") || fail "install-rules failed on blocks from the old command: $out"
+  assert_contains "$out" "captain.md：已更新（和範本不同（v8） → v9），原檔備份在" "the main block must be updated from v8"
+  assert_contains "$out" "captain-shared.md：已更新（和範本不同（v2） → v3），原檔備份在" "the shared block must be updated from v2"
+  assert_equals "$(printf '# 前面\n\n'; cat "$RULES/captain.block.md.tmpl"; printf '\n# 後面\n')" "$(cat "$home/data/captain.md")" \
+    "the v8 block must be replaced in place by v9"
+  assert_equals "$(cat "$RULES/captain-shared.header.md.tmpl" "$RULES/captain-shared.block.md.tmpl")" "$(cat "$home/data/captain-shared.md")" \
+    "the v2 block must be replaced in place by v3"
+  assert_not_contains "$(cat "$home/data/captain.md" "$home/data/captain-shared.md")" "fm-topic.sh order" \
+    "no old block may be left beside the new one"
+  assert_equals "規則：captain.md 和範本相同（v9）；captain-shared.md 和範本相同（v3）" "$(rules_line "$home")" \
+    "rules must report the upgraded blocks as current"
+  pass "blocks the old fm-topic.sh install-rules wrote are replaced in place"
 }
 
 # A curation pass or an editor may reshape the marker lines without removing them.
@@ -121,7 +154,7 @@ test_finds_reshaped_markers() {
       esac
       printf '\n# 後面\n'
     } > "$home/data/captain.md"
-    assert_contains "$(rules_line "$home")" "captain.md 和範本不同（v8）" "status must still find the $variant block"
+    assert_contains "$(rules_line "$home")" "captain.md 和範本不同（v9）" "status must still find the $variant block"
     out=$(install "$home") || fail "install-rules failed on $variant markers: $out"
     assert_contains "$out" "captain.md：已更新" "the $variant block must be replaced in place"
     assert_equals "$(printf '# 前面\n\n'; cat "$RULES/captain.block.md.tmpl"; printf '\n# 後面\n')" "$(cat "$home/data/captain.md")" \
@@ -174,8 +207,8 @@ test_main_home_only() {
   assert_contains "$out" "只能在主 home 跑" "the refusal must explain itself"
   assert_absent "$home/data/captain.md" "nothing may be written in a secondmate home"
   assert_absent "$home/data/captain-shared.md" "the read-only shared copy must not be touched"
-  assert_absent "$home/state/topic-board" "no directory may be created in a secondmate home"
-  expect_code 2 "$(tb_code "$(tb_make_home usage)" "$TOPIC" install-rules extra)" "install-rules with an argument"
+  assert_absent "$home/state/fm-board" "no directory may be created in a secondmate home"
+  expect_code 2 "$(tb_code "$(tb_make_home usage)" "$BOARD" install-rules extra)" "install-rules with an argument"
   pass "install-rules runs only in the main home"
 }
 
@@ -196,4 +229,4 @@ test_templates() {
 
 fm_test_run test_creates_both_files test_keeps_everything_outside_the_block test_replaces_an_old_block_in_place \
   test_second_run_changes_nothing test_finds_reshaped_markers test_refuses_unpaired_markers test_refuses_a_shared_file_with_a_bad_header \
-  test_main_home_only test_templates
+  test_main_home_only test_templates test_upgrades_blocks_installed_by_the_old_command

@@ -13,12 +13,21 @@ unset tmpdir_default
 
 TOPIC="$ROOT/bin/fm-topic.sh"
 BOARD_READ="$ROOT/bin/fm-topic-board-read.sh"
+BOARD="$ROOT/bin/fm-board.sh"
 
 # tb_make_home <name>: create an empty main home under TMP_ROOT and print it.
 tb_make_home() {
   local home=$TMP_ROOT/$1
   mkdir -p "$home/state" "$home/data" "$home/config" "$home/projects"
   printf '%s\n' "$home"
+}
+
+# tb_board_has_run <home>: give <home> the token the board service writes the
+# first time it starts, so fm-topic.sh treats it as a home whose board has run.
+tb_board_has_run() {
+  mkdir -p "$1/state/topic-board"
+  printf '%064d\n' 0 > "$1/state/topic-board/token"
+  chmod 600 "$1/state/topic-board/token"
 }
 
 # tb_make_secondmate_home <name> <id>: like tb_make_home plus the marker file
@@ -237,7 +246,7 @@ esac
 input=$(cat)
 tb_fake "fm-on.sh.$script" "$input" "$id" "$@"
 case "$script" in
-  fm-topic.sh) FM_HOME="$TB_REMOTES/$id" exec "$(dirname "$0")/$script" "$@" ;;
+  fm-board.sh) FM_HOME="$TB_REMOTES/$id" exec "$(dirname "$0")/$script" "$@" ;;
   fm-captain-hold.sh) printf 'closed: %s\n' "${input%%$'\t'*}" ;;
 esac
 SH

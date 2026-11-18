@@ -68,6 +68,11 @@ t() {
   FM_HOME="$MAIN" FM_ROOT_OVERRIDE="$CODE_ROOT" "$CODE_ROOT/bin/fm-topic.sh" "$@"
 }
 
+# b: firstmate's side of the board, for the tags a test needs.
+b() {
+  FM_HOME="$MAIN" FM_ROOT_OVERRIDE="$CODE_ROOT" "$CODE_ROOT/bin/fm-board.sh" "$@"
+}
+
 # view [jq filter]: read every home now, then print (part of) the board state.
 view() {
   t open >/dev/null || fail "the board did not start"
@@ -94,6 +99,7 @@ tag_at() {  # <home> <task> <topic> <iso time>
 }
 
 setup_fleet() {
+  t open >/dev/null || fail "the board did not start"
   t create "Billing" --goal "rework billing" --id billing >/dev/null
   t create "Login" --goal "new login page" --id login --queue high >/dev/null
   t create "Later" --goal "someday" --id later --queue later >/dev/null
@@ -322,7 +328,7 @@ test_dump_is_test_only() {
 test_which_follows_a_retag_nobody_is_watching() {
   t restart >/dev/null || fail "the board did not restart"
   assert_equals "Login：" "$(t which ship-a)" "the task starts in its first topic"
-  t tag ship-a billing >/dev/null || fail "retagging failed"
+  b tag ship-a billing >/dev/null || fail "retagging failed"
   assert_equals "Billing：" "$(t which ship-a)" "which must follow a retag even when no page keeps the board polling"
   assert_equals "Billing：" "$(printf 'retagged' | t summary ship-a report -)" "summary must follow the retag too"
   pass "which and summary read the task's topic afresh"
@@ -422,68 +428,6 @@ test_a_running_board_takes_the_new_rules_without_a_step() {
 }
 
 setup_fleet
-last_topic() {  # <home> <task>: the topic the task is tagged with now
-  tail -n 1 "$1/data/$2/topic" | cut -d' ' -f1
-}
-
-test_split_moves_the_named_tasks_to_a_new_topic() {
-  local out rc
-  t create "Docs" --goal "all the docs" --id docs --queue high >/dev/null
-  t tag sp-1 docs >/dev/null
-  t tag sp-2 docs >/dev/null
-  t --in-home sm1 tag sp-3 docs >/dev/null
-
-  rc=0
-  out=$(t split docs "Docs API" --goal "the API pages" --id docs-api sp-1 ship-b 2>&1) || rc=$?
-  assert_equals 1 "$rc" "a task that is not in the source topic must stop the split"
-  assert_contains "$out" "ship-b" "the refusal must name the task that is elsewhere"
-  rc=0
-  out=$(t split docs "Docs API" --goal "the API pages" --id docs-api far1/sp-9 2>&1) || rc=$?
-  assert_equals 1 "$rc" "a remote secondmate's task must stop the split"
-  assert_contains "$out" "遠端" "the refusal must say the task is in a remote home"
-  rc=0
-  out=$(t split docs "Docs API" --goal "the API pages" --id docs-api never-tagged 2>&1) || rc=$?
-  assert_equals 1 "$rc" "an untagged task must stop the split"
-  assert_equals "" "$(t list --all | grep '^docs-api' || true)" "a refused split must not create the topic"
-  assert_equals docs "$(last_topic "$MAIN" sp-1)" "a refused split must not move any task"
-
-  out=$(t split docs "Docs API" --goal "the API pages" --id docs-api sp-1) || fail "split failed: $out"
-  assert_contains "$out" "ok docs-api 已從 docs 拆出，放進「高」" "split must report the new topic"
-  assert_contains "$out" "ok sp-1 已標記為 docs-api" "split must report each task it moved"
-  assert_equals "Docs API：" "$(t which sp-1)" "a moved task must belong to the new topic"
-  assert_equals docs "$(last_topic "$MAIN" sp-2)" "a task that was not named must stay"
-  assert_equals "login docs docs-api" "$(jq -r '.queues.high | join(" ")' "$MAIN/data/topics.json")" \
-    "the new topic must sit right after its source"
-
-  out=$(t split docs "Docs API" --goal "the API pages" sp-1 sp-2 sm1/sp-3) || fail "the second run failed: $out"
-  assert_contains "$out" "ok docs-api 本來就已從 docs 拆出" "running the split again must reuse the topic"
-  assert_equals "docs-api" "$(last_topic "$MAIN" sp-2)" "the second run must move the tasks the first did not"
-  assert_equals "docs-api" "$(last_topic "$LOCAL_SM" sp-3)" "a local secondmate's task must be moved in its own home"
-  assert_equals 2 "$(wc -l < "$MAIN/data/sp-1/topic" | tr -d ' ')" "a task already moved must not be tagged twice"
-  assert_equals 1 "$(jq '[.history[] | select(.kind == "split")] | length' "$MAIN/data/topics.json")" \
-    "the split must be recorded once"
-  assert_contains "$(t find docs-api)" "從「Docs」（docs）拆出「Docs API」（docs-api）" "find must show where the topic came from"
-
-  t tag sp-4 docs >/dev/null
-  chmod 444 "$MAIN/data/sp-4/topic"
-  rc=0
-  out=$(t split docs "Docs API" --goal "the API pages" sp-4 2>&1) || rc=$?
-  chmod 644 "$MAIN/data/sp-4/topic"
-  assert_equals 1 "$rc" "a task that could not be tagged must fail the split"
-  assert_not_contains "$out" "ok sp-4" "a task that could not be tagged must not be reported as moved"
-  assert_contains "$out" "再跑一次" "the failure must say the command can be run again"
-  assert_equals docs "$(last_topic "$MAIN" sp-4)" "a failed tag must leave the tag file as it was"
-  t split docs "Docs API" --goal "the API pages" sp-4 >/dev/null || fail "the rerun after a failed tag failed"
-  assert_equals docs-api "$(last_topic "$MAIN" sp-4)" "the rerun must move the task"
-  rc=0
-  t split docs >/dev/null 2>&1 || rc=$?
-  assert_equals 2 "$rc" "split without a name is a usage error"
-  rc=0
-  out=$(FM_HOME="$LOCAL_SM" FM_ROOT_OVERRIDE="$CODE_ROOT" "$CODE_ROOT/bin/fm-topic.sh" split docs X --goal g 2>&1) || rc=$?
-  assert_equals 1 "$rc" "split must be refused in a secondmate home"
-  pass "split creates the topic once, moves the named tasks, and can be run again to finish"
-}
-
 # Runs after the tests above: it renames and merges topics they rely on.
 test_find_traces_renames_merges_and_tasks() {
   local out rc refusal
@@ -510,7 +454,7 @@ test_find_traces_renames_merges_and_tasks() {
   t restart >/dev/null
   assert_equals "$out" "$(t find reports)" "the history must survive a restart"
   assert_contains "$(t find ship-a)" "task main/ship-a：Billing（" "find must read the home afresh on a cold board"
-  assert_equals '["merged","renamed","split"]' "$(jq -c '[.history[].kind] | sort' "$MAIN/data/topics.json")" \
+  assert_equals '["merged","renamed"]' "$(jq -c '[.history[].kind] | sort' "$MAIN/data/topics.json")" \
     "the history must be stored in the topic file"
   pass "find traces a topic through renames and merges, and a task through its tags"
 }
@@ -566,5 +510,5 @@ fm_test_run test_agents_lights_and_placement test_holds_are_placed_and_ordered t
   test_polling_follows_viewers test_summary_and_which test_summary_on_a_cold_board_reads_the_main_home_first \
   test_dump_is_test_only test_which_follows_a_retag_nobody_is_watching \
   test_a_wrong_summary_can_be_retracted test_only_work_items_are_agents \
-  test_a_running_board_takes_the_new_rules_without_a_step test_split_moves_the_named_tasks_to_a_new_topic \
+  test_a_running_board_takes_the_new_rules_without_a_step \
   test_find_traces_renames_merges_and_tasks test_find_says_who_and_why
