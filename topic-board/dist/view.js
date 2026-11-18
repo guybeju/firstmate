@@ -187,14 +187,14 @@ function currentRuns(events) {
         if (!LIFECYCLE.has(event.event))
             continue;
         const key = `${event.home}\n${event.task}`;
-        const run = runs.get(key) ?? { kind: "", merged: false };
         if (event.event === "task.dispatched") {
             const kind = event.fields["kind"];
             runs.set(key, { kind: typeof kind === "string" ? kind : "", merged: false });
+            continue;
         }
-        else {
-            runs.set(key, { ...run, merged: run.merged || event.event === "task.merged" });
-        }
+        const run = runs.get(key);
+        const merged = event.event === "task.merged";
+        runs.set(key, run === undefined ? { kind: "", merged } : { ...run, merged: run.merged || merged });
     }
     return runs;
 }
@@ -213,9 +213,9 @@ const DISCARDED = { state: "discarded", detail: "已收掉，帳本裡沒有落�
  * so a ship task cleaned up with no merge in its run is not shown as done.
  */
 function endedTask(event, run) {
-    const base = { id: event.task, kind: run?.kind ?? "", source: "", detail: "", unstarted: false };
+    const base = { id: event.task, kind: run.kind, source: "", detail: "", unstarted: false };
     const cleaned = event.event === "task.cleaned_up";
-    if (cleaned && run?.kind === "ship" && !run.merged)
+    if (cleaned && run.kind === "ship" && !run.merged)
         return { task: { ...base, ...DISCARDED }, light: "unknown" };
     const light = cleaned || event.event === "task.merged" ? "done" : "unknown";
     return { task: { ...base, state: light }, light };

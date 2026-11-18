@@ -368,13 +368,17 @@ function currentRuns(events: LedgerEvent[]): Map<string, Run> {
   for (const event of events) {
     if (!LIFECYCLE.has(event.event)) continue;
     const key = `${event.home}\n${event.task}`;
-    const run = runs.get(key) ?? { kind: "", merged: false };
     if (event.event === "task.dispatched") {
       const kind = event.fields["kind"];
       runs.set(key, { kind: typeof kind === "string" ? kind : "", merged: false });
-    } else {
-      runs.set(key, { ...run, merged: run.merged || event.event === "task.merged" });
+      continue;
     }
+    const run = runs.get(key);
+    const merged = event.event === "task.merged";
+    runs.set(
+      key,
+      run === undefined ? { kind: "", merged } : { ...run, merged: run.merged || merged },
+    );
   }
   return runs;
 }
@@ -384,7 +388,7 @@ function currentRuns(events: LedgerEvent[]): Map<string, Run> {
  * worker's lifecycle and its latest dispatch was not a secondmate's. A retired
  * mate's own record and a reply channel are not; neither is shown as an agent.
  */
-function wasWork(run: Run | undefined): boolean {
+function wasWork(run: Run | undefined): run is Run {
   return run !== undefined && run.kind !== "secondmate";
 }
 
@@ -395,10 +399,10 @@ const DISCARDED = { state: "discarded", detail: "已收掉，帳本裡沒有落�
  * Teardown records the same event whether the work landed or was thrown away,
  * so a ship task cleaned up with no merge in its run is not shown as done.
  */
-function endedTask(event: LedgerEvent, run: Run | undefined): { task: ReportTask; light: Light } {
-  const base = { id: event.task, kind: run?.kind ?? "", source: "", detail: "", unstarted: false };
+function endedTask(event: LedgerEvent, run: Run): { task: ReportTask; light: Light } {
+  const base = { id: event.task, kind: run.kind, source: "", detail: "", unstarted: false };
   const cleaned = event.event === "task.cleaned_up";
-  if (cleaned && run?.kind === "ship" && !run.merged)
+  if (cleaned && run.kind === "ship" && !run.merged)
     return { task: { ...base, ...DISCARDED }, light: "unknown" };
   const light = cleaned || event.event === "task.merged" ? "done" : "unknown";
   return { task: { ...base, state: light }, light };
