@@ -30,8 +30,9 @@ tb_make_secondmate_home() {
   printf '%s\n' "$home"
 }
 
-# tb_write_topics <home>: two confirmed topics, one parked, one proposed, one
-# merged alias, and one archived topic.
+# tb_write_topics <home>: two queued topics, one parked, one merged alias, one
+# archived topic, and one proposal left by board code from before every topic
+# was confirmed at once (the board confirms it the next time it starts).
 tb_write_topics() {
   local home=$1
   cat > "$home/data/topics.json" <<'JSON'

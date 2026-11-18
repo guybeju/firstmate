@@ -7,7 +7,7 @@ export const TODO_STATES = ["claimed", "rejected", "obsolete"];
 export const NAME_MAX = 80;
 export const GOAL_MAX = 200;
 const ID_MAX = 64;
-const QUEUE_LABEL = { high: "高", normal: "一般", later: "待辦" };
+export const QUEUE_LABEL = { high: "高", normal: "一般", later: "待辦" };
 export function emptyState() {
     return {
         doc: {
@@ -114,25 +114,36 @@ function chooseId(state, name, wanted) {
         return refuse(`議題 id ${wanted} 已經用過，不能重用。`);
     return wanted;
 }
-export function propose(state, input, now) {
+/**
+ * Makes a new topic, confirmed and last in its queue: `normal` unless the
+ * caller names another. A live topic with the same name and goal is the same
+ * topic, so a repeat changes nothing and leaves it where it is.
+ */
+export function create(state, input, now) {
     const name = oneLine(input.name, NAME_MAX);
     const goal = oneLine(input.goal, GOAL_MAX);
     if (name === null)
         return refuse(`名稱要是一行、不能是空的、最多 ${NAME_MAX} 個字。`);
     if (goal === null)
         return refuse(`目標要是一行、不能是空的、最多 ${GOAL_MAX} 個字。`);
-    const existing = Object.entries(state.doc.topics).find(([, topic]) => topic.status === "proposed" && topic.name === name && topic.goal === goal);
-    if (existing !== undefined)
-        return unchanged(state, `ok ${existing[0]} 已經提議過，等使用者確認`);
+    const existing = Object.entries(state.doc.topics).find(([, topic]) => topic.name === name && topic.goal === goal);
+    if (existing !== undefined) {
+        const [id] = existing;
+        const queue = queueOf(state.doc, id);
+        const place = queue === undefined ? "沒有排進佇列" : `在「${QUEUE_LABEL[queue]}」`;
+        return unchanged(state, `ok ${id} 本來就有這個議題，${place}`);
+    }
     const next = clone(state);
     const id = chooseId(next, name, input.id);
     if (typeof id !== "string")
         return id;
-    const topic = { name, goal, status: "proposed", created_at: now, proposed_by: input.by };
-    if (input.queue !== undefined)
-        topic.suggested_queue = input.queue;
-    next.doc.topics[id] = topic;
-    return changed(next, `ok ${id} 已提議，等使用者確認`);
+    const queue = input.queue ?? "normal";
+    next.doc.topics[id] = { name, goal, status: "confirmed", created_at: now };
+    next.doc.queues[queue].push(id);
+    const placed = `排在「${QUEUE_LABEL[queue]}」最後`;
+    return changed(next, `ok ${id} 已建立，${placed}`, [
+        { kind: "topic.created", topic: id, text: `議題「${name}」已建立，${placed}` },
+    ]);
 }
 /** Why a topic that is not live cannot be acted on: it is archived, or it does not exist. */
 function unusable(state, id, rawId) {
@@ -142,26 +153,6 @@ function unusable(state, id, rawId) {
 }
 function missing(id) {
     return refuse(`沒有 ${id} 這個議題。用 list --all 看有哪些。`);
-}
-export function confirm(state, rawId, queue) {
-    const id = resolveTopicId(state.doc, rawId);
-    const topic = state.doc.topics[id];
-    if (topic === undefined)
-        return unusable(state, id, rawId);
-    if (topic.status === "confirmed")
-        return unchanged(state, `ok ${id} 本來就已確認`);
-    const next = clone(state);
-    const target = queue ?? topic.suggested_queue ?? "normal";
-    const confirmed = next.doc.topics[id];
-    confirmed.status = "confirmed";
-    next.doc.queues[target].push(id);
-    return changed(next, `ok ${id} 已確認，放進「${QUEUE_LABEL[target]}」`, [
-        {
-            kind: "topic.confirmed",
-            topic: id,
-            text: `議題「${topic.name}」已確認，放進「${QUEUE_LABEL[target]}」`,
-        },
-    ]);
 }
 export function merge(state, rawFrom, rawInto, now, reason) {
     const why = reasonOf(reason);
@@ -177,8 +168,6 @@ export function merge(state, rawFrom, rawInto, now, reason) {
     const target = state.doc.topics[into];
     if (target === undefined)
         return unusable(state, into, rawInto);
-    if (target.status !== "confirmed")
-        return refuse(`${into} 還在提議中，只能併進已確認的議題。`);
     const source = state.doc.topics[from];
     if (source === undefined)
         return unusable(state, from, rawFrom);
@@ -216,7 +205,7 @@ export function split(state, input, now) {
     const why = reasonOf(input.reason);
     if (why === null)
         return refuse(REASON_PROBLEM);
-    const found = confirmedTopic(state, input.from);
+    const found = liveTopic(state, input.from);
     if ("ok" in found)
         return found;
     const name = oneLine(input.name, NAME_MAX);
@@ -238,7 +227,7 @@ export function split(state, input, now) {
     const id = chooseId(next, name, input.id);
     if (typeof id !== "string")
         return id;
-    next.doc.topics[id] = { name, goal, status: "confirmed", created_at: now, proposed_by: "user" };
+    next.doc.topics[id] = { name, goal, status: "confirmed", created_at: now };
     const order = next.doc.queues[queue];
     order.splice(order.indexOf(found.id) + 1, 0, id);
     next.doc.history.push({
@@ -254,17 +243,15 @@ export function split(state, input, now) {
         { kind: "topic.split", topic: id, text: `從議題「${found.topic.name}」拆出「${name}」` },
     ]);
 }
-function confirmedTopic(state, rawId) {
+function liveTopic(state, rawId) {
     const id = resolveTopicId(state.doc, rawId);
     const topic = state.doc.topics[id];
     if (topic === undefined)
         return unusable(state, id, rawId);
-    if (topic.status !== "confirmed")
-        return refuse(`${id} 還在提議中，要先 confirm。`);
     return { id, topic };
 }
 export function closePropose(state, rawId, rawReason, now) {
-    const found = confirmedTopic(state, rawId);
+    const found = liveTopic(state, rawId);
     if ("ok" in found)
         return found;
     const reason = oneLine(rawReason, GOAL_MAX);
@@ -293,7 +280,7 @@ function insertAt(queue, id, position, doc) {
     return [...without.slice(0, at), id, ...without.slice(at)];
 }
 export function move(state, rawId, queue, position) {
-    const found = confirmedTopic(state, rawId);
+    const found = liveTopic(state, rawId);
     if ("ok" in found)
         return found;
     const { id } = found;

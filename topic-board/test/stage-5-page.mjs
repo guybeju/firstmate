@@ -119,13 +119,24 @@ export default async function run(page) {
   await page.evaluate(`(() => { [...${looseCard}.querySelectorAll(".confirm button")].find((el) => el.textContent === "取消").click(); return true; })()`);
   await page.waitFor("the cancelled confirmation", `!${looseCard}.innerText.includes("沒有註明")`);
 
-  // Confirm one proposal, merge the other into a topic.
-  await page.click("button", "確認（放「一般」）");
-  await page.waitFor("the confirmed topic in its queue", queueHas("normal", "Idea"));
+  // New topics are in the normal queue at once, last, in the order they were made; nothing waits.
+  const normal = await page.evaluate(`[...document.querySelectorAll('.queue[data-queue="normal"] .topic .name')].map((el) => el.textContent).join(",")`);
+  if (normal !== "Billing,Idea,Side idea") throw new Error(`new topics must land last in normal, got ${normal}`);
+  if (await page.evaluate(`${has("提議中")} || [...document.querySelectorAll("button")].some((el) => el.textContent.startsWith("確認"))`))
+    throw new Error("the page must not show anything waiting to be confirmed");
+
+  // Merge a topic into another from its page.
+  await page.click(".topic button", "Side idea");
+  await page.waitFor("the side topic's page", `document.querySelector(".titleline h2")?.textContent === "Side idea"`);
+  await page.click(".menu > button");
+  await page.click(".menu .items button", "併入其他議題…");
   if (!(await page.evaluate(choose("Login")))) throw new Error("no merge menu offering Login");
   await page.waitFor("the merge warning", has("併入之後不能拆開"));
   await page.click(".confirm button", "併入「Login」");
-  await page.waitFor("the merged proposal to disappear", `!${has("Side idea")}`);
+  await page.waitFor("the merged topic gone", has("沒有這個議題"));
+  await page.click("button.link", "回首頁");
+  await page.waitFor("the home page after the merge", has("優先順序"));
+  await page.waitFor("the merged topic to disappear", `!${has("Side idea")}`);
 
   // Drag a topic out of "later": the order follows, and the notice is announced.
   await page.evaluate(`(() => { const d = ${drag("Parked", "high", "Login")}; d.fire(d.onto, "drop", 0); d.fire(d.card, "dragend", 0); return true; })()`);
@@ -179,12 +190,12 @@ export default async function run(page) {
   const setHidden = (hidden) =>
     `(() => { Object.defineProperty(document, "hidden", { configurable: true, get: () => ${hidden} }); document.dispatchEvent(new Event("visibilitychange")); return true; })()`;
   await page.evaluate(setHidden(true));
-  topic("propose", "背景分頁提議", "--goal", "分頁在背景時提的");
+  topic("create", "背景分頁新議題", "--goal", "分頁在背景時建的");
   topic("restart");
   await new Promise((resolve) => setTimeout(resolve, 7000));
-  if (await page.evaluate(has("背景分頁提議"))) throw new Error("a hidden tab must not poll");
+  if (await page.evaluate(has("背景分頁新議題"))) throw new Error("a hidden tab must not poll");
   await page.evaluate(setHidden(false));
-  await page.waitFor("the proposal made while the tab was hidden", has("背景分頁提議"), 5000);
+  await page.waitFor("the topic made while the tab was hidden", has("背景分頁新議題"), 5000);
 
   // The board stops answering: the page says so, refuses to send, and recovers by itself.
   topic("stop");

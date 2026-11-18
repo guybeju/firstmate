@@ -13,7 +13,8 @@ TMP_ROOT=$(fm_test_tmproot topic-board-stage-1-order)
 
 # Queued items, in backlog order:
 #   n1 (t2/normal)  h1 (billing/high)  h2 (billing/high)  u1 (untagged)
-#   p1 (idea/proposed, so untagged)    l1 (parked/later, not held)
+#   p1 (idea, a leftover proposal in no queue yet, so ranked as untagged)
+#   l1 (parked/later, not held)
 #   l2 (parked/later, held by the board)  r1 (billing/high, held by the board)
 #   a1 (gone/archived, not held)       o1 (billing/high, held by something else)
 #   b1 (billing/high, blocked by n1)   c1 (billing/high, a captain hold)
@@ -51,7 +52,7 @@ write_tags() {
     mkdir -p "$home/data/${pair%%:*}"
     printf '%s 2026-07-01T00:00:00Z\n' "${pair##*:}" > "$home/data/${pair%%:*}/topic"
   done
-  # A task tagged with a topic that is still only proposed counts as untagged.
+  # A task tagged with a leftover proposal, not yet in any queue, ranks as untagged.
   mkdir -p "$home/data/p1"
   printf 'idea 2026-07-01T00:00:00Z\n' > "$home/data/p1/topic"
 }

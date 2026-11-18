@@ -16,14 +16,12 @@ function topics(): TopicState {
     goal: `goal of ${name}`,
     status: "confirmed" as const,
     created_at: "",
-    proposed_by: "firstmate" as const,
   });
   state.doc.topics = {
     hi: topic("High"),
     n1: { ...topic("Normal one"), close_proposal: { at: "x", reason: "all done" } },
     n2: topic("Normal two"),
     lt: topic("Later"),
-    idea: { ...topic("Idea"), status: "proposed", suggested_queue: "high" },
   };
   state.doc.queues = { high: ["hi"], normal: ["n1", "n2"], later: ["lt"] };
   state.doc.merged = { old: "n1" };
@@ -118,7 +116,6 @@ describe("placement", () => {
         topics: {
           a: tag("hi"),
           b: tag("old"),
-          c: tag("idea"),
           d: tag("nope"),
           e: tag("gone"),
           f: `${tag("hi")}\n${tag("n2", "02")}`,
@@ -130,7 +127,6 @@ describe("placement", () => {
     const place = (task: string) => placeTask(topics(), homes, "main", task);
     expect(place("a")).toEqual({ topic: "hi", reason: null });
     expect(place("b")).toEqual({ topic: "n1", reason: null });
-    expect(place("c")).toEqual({ topic: null, reason: "proposed" });
     expect(place("d")).toEqual({ topic: null, reason: "unknown-topic" });
     expect(place("e")).toEqual({ topic: "gone", reason: null });
     expect(place("f")).toEqual({ topic: "n2", reason: null });
@@ -213,7 +209,6 @@ describe("queued", () => {
                 item("handed", { topic_hint: "hi" }),
                 item("merged-hint", { topic_hint: "old" }),
                 item("tagged", { topic_hint: "hi" }),
-                item("proposed-hint", { topic_hint: "idea" }),
                 item("unknown-hint", { topic_hint: "nope" }),
                 item("bare"),
               ],
@@ -227,7 +222,6 @@ describe("queued", () => {
       handed: "hi",
       "merged-hint": "n1",
       tagged: "n2",
-      "proposed-hint": null,
       "unknown-hint": null,
       bare: null,
     });
@@ -934,27 +928,16 @@ describe("topics", () => {
       goal: "goal of Normal one",
       status: "confirmed",
       queue: "normal",
-      suggested_queue: null,
       close_reason: "all done",
       archived_at: null,
     });
     expect(view.topics["hi"]).toMatchObject({ queue: "high", close_reason: null });
     expect(view.topics["lt"]?.queue).toBe("later");
-    expect(view.topics["idea"]).toEqual({
-      name: "Idea",
-      goal: "goal of Idea",
-      status: "proposed",
-      queue: null,
-      suggested_queue: "high",
-      close_reason: null,
-      archived_at: null,
-    });
     expect(view.topics["gone"]).toEqual({
       name: "Gone",
       goal: "goal of Gone",
       status: "archived",
       queue: null,
-      suggested_queue: null,
       close_reason: null,
       archived_at: "2026-06-01T00:00:00Z",
     });

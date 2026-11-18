@@ -10,8 +10,7 @@
 #   fm-topic.sh --in-home <secondmate-id> tag <task-id> <topic-id>
 #   fm-topic.sh --in-home <secondmate-id> answers        (one answer line on stdin)
 #   fm-topic.sh --in-home <secondmate-id> setup
-#   fm-topic.sh propose <name> --goal <one line> [--id <id>] [--queue high|normal|later]
-#   fm-topic.sh confirm <topic-id> [--queue <queue>]
+#   fm-topic.sh create <name> --goal <one line> [--id <id>] [--queue high|normal|later]
 #   fm-topic.sh merge <old-topic-id> <new-topic-id> [--reason <one line>]
 #   fm-topic.sh close-propose <topic-id> --reason <text>
 #   fm-topic.sh move <topic-id> <queue> [--before <topic-id> | --first]
@@ -37,6 +36,10 @@
 # status and stop, starts the service first when it is not running. Those run
 # only in the main home and need node 22 or newer. Repeating any of them
 # unchanged is safe.
+#
+# create makes a topic that is confirmed at once and last in its queue:
+# normal unless --queue names another. A live topic with the same name and
+# goal is the same topic, so a repeat prints its id and leaves it where it is.
 #
 # open prints the board's URL. status and stop never start the service, but
 # the main home's next session start does (bin/fm-topic-session-start.sh).
@@ -82,9 +85,9 @@
 #
 # tag    Appends "<topic-id> <UTC time>" to this home's data/<task-id>/topic.
 #        The last line is the task's current topic. In the main home the topic
-#        must be confirmed and not archived (merged ids are followed); a
+#        must be on the board and not archived (merged ids are followed); a
 #        secondmate home cannot read the topic file, so only the id format is
-#        checked there. Without jq the confirmed check is skipped with a warning.
+#        checked there. Without jq that check is skipped with a warning.
 # list   Prints id, status, queue, position, and name of every topic. --all adds
 #        archived topics. Main home only.
 # order  Prints which queued backlog items to dispatch, hold, and release, in
@@ -166,9 +169,9 @@ require_jq() {
     tb_die 1 "$1 需要 jq，但找不到。安裝：$(tb_jq_install_hint)"
 }
 
-# The usable (confirmed, unarchived) id that <topic-id> resolves to through the
-# merged table, or nothing when it resolves to no usable topic.
-resolve_confirmed_topic() {
+# The live (unarchived) id that <topic-id> resolves to through the merged
+# table, or nothing when it resolves to no live topic.
+resolve_live_topic() {
   [ -f "$TOPICS_FILE" ] || return 0
   jq -r --arg id "$1" '
     . as $doc
@@ -176,30 +179,29 @@ resolve_confirmed_topic() {
     | until(.hops > 64 or (($doc.merged // {})[.id] == null);
             {id: ($doc.merged[.id]), hops: (.hops + 1)})
     | .id as $final
-    | if ($doc.topics[$final].status // "") == "confirmed" then $final else empty end
+    | if $doc.topics[$final] != null then $final else empty end
   ' "$TOPICS_FILE"
 }
 
-list_confirmed_topics() {
+list_live_topics() {
   [ -f "$TOPICS_FILE" ] || return 0
-  jq -r '.topics | to_entries[] | select(.value.status == "confirmed")
-         | "  \(.key)\t\(.value.name)"' "$TOPICS_FILE"
+  jq -r '.topics | to_entries[] | "  \(.key)\t\(.value.name)"' "$TOPICS_FILE"
 }
 
 # Decide which topic id a main-home tag should record for <topic-id>.
 main_home_topic_for_tag() {
   local wanted=$1 resolved
   if ! command -v jq >/dev/null 2>&1; then
-    printf '%s\n' "警告：找不到 jq，沒有檢查 $wanted 是不是已確認的議題。安裝：$(tb_jq_install_hint)" >&2
+    printf '%s\n' "警告：找不到 jq，沒有檢查 $wanted 是不是看板上的議題。安裝：$(tb_jq_install_hint)" >&2
     printf '%s\n' "$wanted"
     return 0
   fi
-  resolved=$(resolve_confirmed_topic "$wanted") ||
+  resolved=$(resolve_live_topic "$wanted") ||
     tb_die 1 "讀不懂 ${TOPICS_FILE}，沒有寫入標記。"
   if [ -z "$resolved" ]; then
     {
-      printf '%s\n' "$wanted 不是已確認、未封存的議題，沒有寫入標記。可用的議題："
-      list_confirmed_topics || true
+      printf '%s\n' "$wanted 不是看板上還開著的議題，沒有寫入標記。可用的議題："
+      list_live_topics || true
     } >&2
     exit 1
   fi
@@ -270,11 +272,12 @@ cmd_list() {
         | ($doc.queues[$queue] // []) | to_entries[]
         | {id: .value, status: "confirmed", queue: $queue, position: (.key + 1),
            name: ($doc.topics[.value].name // "")} ] as $queued
-    | [ $doc.topics | to_entries[] | select(.value.status == "proposed")
-        | {id: .key, status: "proposed", queue: null, position: null, name: .value.name} ] as $proposed
+    | [ $queued[].id ] as $placed
+    | [ $doc.topics | to_entries[] | .key as $id | select($placed | index([$id]) | not)
+        | {id: .key, status: "confirmed", queue: null, position: null, name: .value.name} ] as $loose
     | [ ($gone[0].topics // {}) | to_entries[]
         | {id: .key, status: "archived", queue: null, position: null, name: .value.name} ] as $archived
-    | ($queued + $proposed + $archived) as $rows
+    | ($queued + $loose + $archived) as $rows
     | if $json == 1 then $rows
       elif ($rows | length) == 0 then "還沒有議題。"
       else $rows[] | "\(.id)\t\(.status)\t\(.queue // "-")\t\(.position // "-")\t\(.name)"
@@ -442,7 +445,7 @@ split_task_problem() {
   current=$(tail -n 1 "$file")
   current=${current%% *}
   [ "$current" = "$new" ] && return 0
-  [ "$(resolve_confirmed_topic "$current")" = "$source" ] ||
+  [ "$(resolve_live_topic "$current")" = "$source" ] ||
     printf '%s\n' "${spec}：現在標的是 ${current}，不在 $source 裡。"
 }
 
@@ -493,7 +496,7 @@ cmd_split() {
   # function behind "||", a step would run with errexit off and could carry on
   # after a failure.
   plan=$("$SELF" split-topic "${request[@]}" --dry) || exit $?
-  source=$(resolve_confirmed_topic "${words[0]}")
+  source=$(resolve_live_topic "${words[0]}")
   for spec in ${tasks[@]+"${tasks[@]}"}; do
     problem=$(split_task_problem "$spec" "$source" "$(split_new_id "$plan")")
     [ -z "$problem" ] || problems+="$problem"$'\n'
@@ -870,7 +873,9 @@ main() {
     order) cmd_order "$@" ;;
     setup) cmd_setup "$@" ;;
     install-rules) cmd_install_rules "$@" ;;
-    propose | confirm | merge | close-propose | move | rename | goal | archive | reopen | \
+    # The board confirms every topic it makes; rules from before that still name these.
+    propose | confirm) usage_error "沒有 ${sub} 了：議題一建立就已確認。新議題用 create <名稱> --goal <一行>" ;;
+    create | merge | close-propose | move | rename | goal | archive | reopen | \
       summary | retract | which | find | open | status | stop | restart | reset-token)
       cmd_service "$sub" "$@"
       ;;

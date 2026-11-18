@@ -138,7 +138,6 @@ const resend: Route = (host, body) => {
 const ROUTES: Record<string, Route> = {
   "GET state": state,
   "POST refresh": refresh,
-  "POST topics/confirm": topicRoute("confirm"),
   "POST topics/move": move,
   "POST topics/rename": topicRoute("rename"),
   "POST topics/goal": topicRoute("goal"),

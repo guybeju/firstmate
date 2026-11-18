@@ -259,8 +259,7 @@ function withFlags(base, parsed) {
     return { ...base, ...Object.fromEntries(parsed.flags) };
 }
 const TOPIC_COMMANDS = {
-    propose: { positional: ["name"], valued: ["goal", "id", "queue"], required: ["goal"] },
-    confirm: { positional: ["id"], valued: ["queue"] },
+    create: { positional: ["name"], valued: ["goal", "id", "queue"], required: ["goal"] },
     merge: { positional: ["from", "into"], valued: ["reason"] },
     "close-propose": { positional: ["id"], valued: ["reason"], required: ["reason"] },
     move: { positional: ["id", "queue"], valued: ["before"], bare: ["first"] },

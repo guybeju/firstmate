@@ -23,6 +23,7 @@ import type {
   ArchiveDoc,
   ArchivedTopic,
   HistoryEntry,
+  Queue,
   TodoMark,
   Topic,
   TopicState,
@@ -37,35 +38,47 @@ function parseCloseProposal(raw: unknown): Topic["close_proposal"] {
   return { at: raw["at"], reason: raw["reason"] };
 }
 
-function parseStatus(id: string, raw: unknown): Topic["status"] {
-  if (raw !== "proposed" && raw !== "confirmed")
-    throw new Error(`topic ${id} has an unknown status`);
-  return raw;
+/**
+ * A topic that board code from before every topic was confirmed at once left
+ * waiting for the captain, and the queue it was proposed for.
+ */
+export interface LeftoverProposal {
+  id: string;
+  name: string;
+  queue: Queue;
 }
 
-function parseTopic(id: string, raw: unknown): Topic {
+interface ParsedTopic {
+  topic: Topic;
+  /** The queue a leftover proposal asked for (normal when it named none); null for a confirmed topic. */
+  proposedFor: Queue | null;
+}
+
+function parseTopic(id: string, raw: unknown): ParsedTopic {
   if (!isRecord(raw)) throw new Error(`topic ${id} is not an object`);
-  const { name, goal } = raw;
+  const { name, goal, status } = raw;
   if (typeof name !== "string" || typeof goal !== "string")
     throw new Error(`topic ${id} lacks name or goal`);
+  if (status !== "proposed" && status !== "confirmed")
+    throw new Error(`topic ${id} has an unknown status`);
   const topic: Topic = {
     name,
     goal,
-    status: parseStatus(id, raw["status"]),
+    status: "confirmed",
     created_at: textField(raw, "created_at"),
-    proposed_by: raw["proposed_by"] === "user" ? "user" : "firstmate",
   };
-  if (isQueue(raw["suggested_queue"])) topic.suggested_queue = raw["suggested_queue"];
   const close = parseCloseProposal(raw["close_proposal"]);
   if (close !== undefined) topic.close_proposal = close;
-  return topic;
+  const suggested = raw["suggested_queue"];
+  const proposedFor = status === "confirmed" ? null : isQueue(suggested) ? suggested : "normal";
+  return { topic, proposedFor };
 }
 
-/** A queue only ever holds confirmed topics, each once. */
-function parseQueue(raw: unknown, topics: Record<string, Topic>): string[] {
+/** A queue holds topics that were already confirmed on disk, each once. */
+function parseQueue(raw: unknown, confirmed: Set<string>): string[] {
   if (!Array.isArray(raw)) return [];
   return [...new Set(raw)].filter(
-    (id): id is string => typeof id === "string" && topics[id]?.status === "confirmed",
+    (id): id is string => typeof id === "string" && confirmed.has(id),
   );
 }
 
@@ -112,35 +125,64 @@ function parseTodos(raw: unknown): Record<string, TodoMark> {
   return todos;
 }
 
-function parseDoc(raw: unknown): TopicsDoc {
+interface ParsedDoc {
+  doc: TopicsDoc;
+  /** Leftover proposals, now confirmed and last in their queues, oldest first. */
+  confirmed: LeftoverProposal[];
+}
+
+/**
+ * Reads the live topics. A leftover proposal is confirmed here, at the end of
+ * the queue it was proposed for, so no topic is ever left waiting.
+ */
+function parseDoc(raw: unknown): ParsedDoc {
   if (!isRecord(raw) || raw["v"] !== 1) throw new Error("expected an object with v: 1");
   const topics = raw["topics"];
   if (!isRecord(topics)) throw new Error("topics is not an object");
   const doc = emptyState().doc;
-  for (const [id, topic] of Object.entries(topics)) doc.topics[id] = parseTopic(id, topic);
+  // Keyed by creation time, then id, so sorting the keys puts the oldest first.
+  const waiting = new Map<string, LeftoverProposal>();
+  const confirmed = new Set<string>();
+  for (const [id, value] of Object.entries(topics)) {
+    const { topic, proposedFor } = parseTopic(id, value);
+    doc.topics[id] = topic;
+    if (proposedFor === null) confirmed.add(id);
+    else
+      waiting.set(`${topic.created_at}\u0000${id}`, { id, name: topic.name, queue: proposedFor });
+  }
   const queues = isRecord(raw["queues"]) ? raw["queues"] : {};
-  for (const queue of QUEUES) doc.queues[queue] = parseQueue(queues[queue], doc.topics);
+  for (const queue of QUEUES) doc.queues[queue] = parseQueue(queues[queue], confirmed);
+  const oldestFirst = [...waiting.keys()].sort().map((key) => waiting.get(key) as LeftoverProposal);
+  for (const proposal of oldestFirst) doc.queues[proposal.queue].push(proposal.id);
   doc.merged = stringRecord(raw["merged"]);
   doc.history = parseHistory(raw["history"]);
   doc.todos = parseTodos(raw["todos"]);
   doc.next_seq = parseNextSeq(raw["next_seq"]);
-  return doc;
+  return { doc, confirmed: oldestFirst };
 }
 
-function parseArchive(raw: unknown): ArchiveDoc {
+interface ParsedArchive {
+  archive: ArchiveDoc;
+  /** True when an archived topic was stored as a proposal, which the file no longer holds. */
+  hadProposals: boolean;
+}
+
+function parseArchive(raw: unknown): ParsedArchive {
   if (!isRecord(raw) || raw["v"] !== 1 || !isRecord(raw["topics"])) {
     throw new Error("expected an object with v: 1 and topics");
   }
   const archive: ArchiveDoc = { v: 1, topics: {} };
-  for (const [id, topic] of Object.entries(raw["topics"])) {
-    const parsed = parseTopic(id, topic);
+  let hadProposals = false;
+  for (const [id, value] of Object.entries(raw["topics"])) {
+    const { topic, proposedFor } = parseTopic(id, value);
+    if (proposedFor !== null) hadProposals = true;
     const archived: ArchivedTopic = {
-      ...parsed,
-      archived_at: textField(topic as Record<string, unknown>, "archived_at"),
+      ...topic,
+      archived_at: textField(value as Record<string, unknown>, "archived_at"),
     };
     archive.topics[id] = archived;
   }
-  return archive;
+  return { archive, hadProposals };
 }
 
 function loadFile<T>(file: string, parse: (raw: unknown) => T, fallback: T): T {
@@ -158,19 +200,36 @@ function loadFile<T>(file: string, parse: (raw: unknown) => T, fallback: T): T {
   }
 }
 
-export function loadTopicState(paths: BoardPaths): TopicState {
+export interface LoadedTopics {
+  state: TopicState;
+  /** Leftover proposals this load confirmed and wrote back; empty on every later load. */
+  confirmed: LeftoverProposal[];
+}
+
+/**
+ * Loads both topic files. Leftover proposals are confirmed at the end of the
+ * queue each was proposed for (normal when it named none), oldest first, and
+ * the files are rewritten at once, so the commands that read the files
+ * directly see the same topics as the board.
+ */
+export function loadTopicState(paths: BoardPaths): LoadedTopics {
   const empty = emptyState();
-  const state: TopicState = {
-    doc: loadFile(paths.topics, parseDoc, empty.doc),
-    archive: loadFile(paths.archive, parseArchive, empty.archive),
-  };
+  const live = loadFile(paths.topics, parseDoc, { doc: empty.doc, confirmed: [] });
+  const gone = loadFile(paths.archive, parseArchive, {
+    archive: empty.archive,
+    hadProposals: false,
+  });
+  const state: TopicState = { doc: live.doc, archive: gone.archive };
   // A crash between the two writes of an archive or reopen can leave a topic in
   // both files. The live copy wins: an interrupted archive is simply redone,
   // and an interrupted reopen is already complete.
   for (const id of Object.keys(state.archive.topics)) {
     if (state.doc.topics[id] !== undefined) delete state.archive.topics[id];
   }
-  return state;
+  // A proposal was read from one of these files, so their directory exists.
+  if (gone.hadProposals) writeFileAtomic(paths.archive, serialize(state.archive), FILE_MODE);
+  if (live.confirmed.length > 0) writeFileAtomic(paths.topics, serialize(state.doc), FILE_MODE);
+  return { state, confirmed: live.confirmed };
 }
 
 function serialize(value: unknown): string {

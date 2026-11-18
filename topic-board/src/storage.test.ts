@@ -7,7 +7,7 @@ import { Journal, Offsets, Summaries } from "./journal.js";
 import { boardPaths, parseConfigArgs } from "./layout.js";
 import type { BoardPaths } from "./layout.js";
 import { loadTopicState, saveTopicState } from "./store.js";
-import { archive, confirm, emptyState, propose } from "./topics.js";
+import { archive, create, emptyState } from "./topics.js";
 import type { TopicResult, TopicState } from "./topics.js";
 
 let dir: string;
@@ -165,32 +165,29 @@ function done(result: TopicResult): TopicState {
 
 describe("store", () => {
   it("loads an empty state when nothing is on disk", () => {
-    expect(loadTopicState(paths)).toEqual(emptyState());
+    expect(loadTopicState(paths)).toEqual({ state: emptyState(), confirmed: [] });
   });
 
   it("round-trips topics, queues, merges, and the archive", () => {
     let state = emptyState();
-    state = done(
-      propose(state, { name: "A", goal: "ga", id: "a", queue: "high", by: "user" }, "T"),
-    );
-    state = done(confirm(state, "a", undefined));
-    state = done(propose(state, { name: "B", goal: "gb", id: "b", by: "firstmate" }, "T"));
+    state = done(create(state, { name: "A", goal: "ga", id: "a", queue: "high" }, "T"));
+    state = done(create(state, { name: "B", goal: "gb", id: "b" }, "T"));
     state.doc.topics["a"]!.close_proposal = { at: "T2", reason: "done" };
     state.doc.merged = { old: "a" };
     state.doc.next_seq = 7;
     saveTopicState(paths, emptyState(), state);
-    expect(loadTopicState(paths)).toEqual(state);
+    expect(loadTopicState(paths).state).toEqual(state);
     expect(fs.readFileSync(paths.topics, "utf8").endsWith("}\n")).toBe(true);
     expect(fs.existsSync(paths.archive)).toBe(false);
 
     const archived = done(archive(state, "a", "T3"));
     saveTopicState(paths, state, archived);
-    expect(loadTopicState(paths)).toEqual(archived);
+    expect(loadTopicState(paths).state).toEqual(archived);
     expect(mode(paths.topics)).toBe(0o644);
   });
 
   it("writes only the file that changed", () => {
-    const state = done(propose(emptyState(), { name: "A", goal: "g", id: "a", by: "user" }, "T"));
+    const state = done(create(emptyState(), { name: "A", goal: "g", id: "a" }, "T"));
     saveTopicState(paths, emptyState(), state);
     const before = fs.statSync(paths.topics).mtimeMs;
     saveTopicState(paths, state, state);
@@ -199,13 +196,7 @@ describe("store", () => {
   });
 
   it("writes the file that gains the topic first, so a crash never loses it", () => {
-    const live = done(
-      confirm(
-        done(propose(emptyState(), { name: "A", goal: "g", id: "a", by: "user" }, "T")),
-        "a",
-        undefined,
-      ),
-    );
+    const live = done(create(emptyState(), { name: "A", goal: "g", id: "a" }, "T"));
     const archived = done(archive(live, "a", "T2"));
     const block = (file: string): void => {
       fs.mkdirSync(file);
@@ -238,7 +229,7 @@ describe("store", () => {
     };
     fs.writeFileSync(paths.topics, JSON.stringify(live));
     fs.writeFileSync(paths.archive, JSON.stringify(gone));
-    const state = loadTopicState(paths);
+    const { state } = loadTopicState(paths);
     expect(Object.keys(state.doc.topics)).toEqual(["a"]);
     expect(state.archive.topics).toEqual({
       z: {
@@ -246,7 +237,6 @@ describe("store", () => {
         goal: "g",
         status: "confirmed",
         created_at: "",
-        proposed_by: "firstmate",
         archived_at: "",
       },
     });
@@ -256,7 +246,7 @@ describe("store", () => {
     fs.mkdirSync(path.dirname(paths.topics), { recursive: true });
     const base = { v: 1, next_seq: 1, queues: {}, topics: {} };
     fs.writeFileSync(paths.topics, JSON.stringify(base));
-    expect(loadTopicState(paths).doc.todos).toEqual({});
+    expect(loadTopicState(paths).state.doc.todos).toEqual({});
     const todos = {
       a: { state: "claimed", at: "2026-11-17T00:00:00Z" },
       b: { state: "rejected", at: "2026-11-17T00:00:00Z", reason: "沒起來" },
@@ -266,16 +256,16 @@ describe("store", () => {
       ["__proto__"]: { state: "claimed", at: "2026-11-17T00:00:00Z" },
     };
     fs.writeFileSync(paths.topics, JSON.stringify({ ...base, todos }));
-    expect(loadTopicState(paths).doc.todos).toEqual({ a: todos.a, b: todos.b });
+    expect(loadTopicState(paths).state.doc.todos).toEqual({ a: todos.a, b: todos.b });
     fs.writeFileSync(paths.topics, JSON.stringify({ ...base, todos: [1] }));
-    expect(loadTopicState(paths).doc.todos).toEqual({});
+    expect(loadTopicState(paths).state.doc.todos).toEqual({});
   });
 
   it("loads a file written before the history existed, and drops history entries it cannot read", () => {
     fs.mkdirSync(path.dirname(paths.topics), { recursive: true });
     const base = { v: 1, next_seq: 1, topics: {}, queues: {}, merged: { old: "a" } };
     fs.writeFileSync(paths.topics, JSON.stringify(base));
-    expect(loadTopicState(paths).doc.history).toEqual([]);
+    expect(loadTopicState(paths).state.doc.history).toEqual([]);
     const good = { at: "T", kind: "merged", topic: "a", name: "A", from: "old", from_name: "Old" };
     const history = [
       good,
@@ -284,7 +274,7 @@ describe("store", () => {
       7,
     ];
     fs.writeFileSync(paths.topics, JSON.stringify({ ...base, history }));
-    expect(loadTopicState(paths).doc.history).toEqual([good]);
+    expect(loadTopicState(paths).state.doc.history).toEqual([good]);
     const told = { ...good, reason: "重複了", by: "page" };
     const odd = [
       { ...good, reason: 7, by: "someone" },
@@ -293,9 +283,9 @@ describe("store", () => {
       { ...good, reason: "x".repeat(201) },
     ];
     fs.writeFileSync(paths.topics, JSON.stringify({ ...base, history: [told, ...odd] }));
-    expect(loadTopicState(paths).doc.history).toEqual([told, good, good, good, good]);
+    expect(loadTopicState(paths).state.doc.history).toEqual([told, good, good, good, good]);
     fs.writeFileSync(paths.topics, JSON.stringify({ ...base, history: "nope" }));
-    expect(loadTopicState(paths).doc.history).toEqual([]);
+    expect(loadTopicState(paths).state.doc.history).toEqual([]);
   });
 
   it("repairs what it can and fills defaults", () => {
@@ -317,36 +307,134 @@ describe("store", () => {
       merged: { old: "a", bad: 3 },
     };
     fs.writeFileSync(paths.topics, JSON.stringify(raw));
-    const { doc } = loadTopicState(paths);
-    expect(doc.queues).toEqual({ high: ["a"], normal: [], later: [] });
+    const { doc } = loadTopicState(paths).state;
+    // A proposal listed in a queue by hand is not in it; it is confirmed like any other.
+    expect(doc.queues).toEqual({ high: ["a"], normal: ["p"], later: [] });
     expect(doc.merged).toEqual({ old: "a" });
     expect(doc.next_seq).toBe(1);
-    expect(doc.topics["a"]).toEqual({
-      name: "A",
-      goal: "g",
-      status: "confirmed",
-      created_at: "",
-      proposed_by: "user",
-      suggested_queue: "high",
-    });
-    expect(doc.topics["p"]).toEqual({
-      name: "P",
-      goal: "g",
-      status: "proposed",
-      created_at: "",
-      proposed_by: "firstmate",
-    });
+    expect(doc.topics["a"]).toEqual({ name: "A", goal: "g", status: "confirmed", created_at: "" });
+    expect(doc.topics["p"]).toEqual({ name: "P", goal: "g", status: "confirmed", created_at: "" });
+    expect(fs.readFileSync(paths.topics, "utf8")).not.toContain("proposed");
+    expect(fs.existsSync(paths.archive)).toBe(false);
     fs.writeFileSync(
       paths.topics,
       JSON.stringify({ ...raw, next_seq: 9, queues: undefined, merged: undefined }),
     );
-    expect(loadTopicState(paths).doc).toMatchObject({
+    expect(loadTopicState(paths).state.doc).toMatchObject({
       next_seq: 9,
-      queues: { high: [], normal: [], later: [] },
+      queues: { high: [], normal: ["p"], later: [] },
       merged: {},
     });
     fs.writeFileSync(paths.topics, JSON.stringify({ ...raw, next_seq: 2.5 }));
-    expect(loadTopicState(paths).doc.next_seq).toBe(1);
+    expect(loadTopicState(paths).state.doc.next_seq).toBe(1);
+  });
+
+  it("confirms leftover proposals at the end of the queue each was proposed for, once", () => {
+    const raw = {
+      v: 1,
+      next_seq: 4,
+      queues: { high: ["h"], normal: ["n1", "n2"], later: ["l"] },
+      topics: {
+        h: { name: "H", goal: "g", status: "confirmed", created_at: "2026-11-01T00:00:00Z" },
+        n1: { name: "N1", goal: "g", status: "confirmed", created_at: "2026-11-01T00:00:00Z" },
+        n2: { name: "N2", goal: "g", status: "confirmed", created_at: "2026-11-01T00:00:00Z" },
+        l: { name: "L", goal: "g", status: "confirmed", created_at: "2026-11-01T00:00:00Z" },
+        late: { name: "Late", goal: "g", status: "proposed", created_at: "2026-11-18T03:00:00Z" },
+        early: { name: "Early", goal: "g", status: "proposed", created_at: "2026-11-18T01:00:00Z" },
+        hot: {
+          name: "Hot",
+          goal: "g",
+          status: "proposed",
+          created_at: "2026-11-18T02:00:00Z",
+          proposed_by: "firstmate",
+          suggested_queue: "high",
+        },
+      },
+      merged: { old: "early" },
+      history: [{ at: "T", kind: "renamed", topic: "early", name: "Early", from_name: "E" }],
+      todos: { x: { state: "claimed", at: "T" } },
+    };
+    const gone = {
+      v: 1,
+      topics: {
+        dropped: { name: "D", goal: "g", status: "proposed", archived_at: "T", created_at: "T0" },
+      },
+    };
+    fs.writeFileSync(paths.topics, JSON.stringify(raw));
+    fs.writeFileSync(paths.archive, JSON.stringify(gone));
+    const first = loadTopicState(paths);
+    expect(first.state.doc.queues).toEqual({
+      high: ["h", "hot"],
+      normal: ["n1", "n2", "early", "late"],
+      later: ["l"],
+    });
+    expect(first.confirmed).toEqual([
+      { id: "early", name: "Early", queue: "normal" },
+      { id: "hot", name: "Hot", queue: "high" },
+      { id: "late", name: "Late", queue: "normal" },
+    ]);
+    expect(first.state.doc.topics["hot"]).toEqual({
+      name: "Hot",
+      goal: "g",
+      status: "confirmed",
+      created_at: "2026-11-18T02:00:00Z",
+    });
+    expect(first.state.doc.merged).toEqual({ old: "early" });
+    expect(first.state.doc.history).toHaveLength(1);
+    expect(first.state.doc.todos).toEqual(raw.todos);
+    expect(first.state.doc.next_seq).toBe(4);
+    expect(first.state.archive.topics["dropped"]).toEqual({
+      name: "D",
+      goal: "g",
+      status: "confirmed",
+      created_at: "T0",
+      archived_at: "T",
+    });
+
+    // Written back at once: the files no longer hold a proposal, so the next load confirms nothing.
+    const onDisk = JSON.parse(fs.readFileSync(paths.topics, "utf8")) as { topics: object };
+    expect(JSON.stringify(onDisk)).not.toContain("proposed");
+    expect(fs.readFileSync(paths.archive, "utf8")).not.toContain("proposed");
+    expect(onDisk).toEqual(first.state.doc);
+    // A rewrite replaces the file, so an unchanged inode means it was left alone.
+    const written = [fs.statSync(paths.topics).ino, fs.statSync(paths.archive).ino];
+    const second = loadTopicState(paths);
+    expect(second).toEqual({ state: first.state, confirmed: [] });
+    expect([fs.statSync(paths.topics).ino, fs.statSync(paths.archive).ino]).toEqual(written);
+  });
+
+  it("orders leftover proposals made at the same moment by id", () => {
+    const proposal = { goal: "g", status: "proposed", created_at: "2026-11-18T01:00:00Z" };
+    const raw = {
+      v: 1,
+      queues: {},
+      topics: {
+        b: { ...proposal, name: "B" },
+        c: { ...proposal, name: "C" },
+        a: { ...proposal, name: "A" },
+      },
+    };
+    fs.writeFileSync(paths.topics, JSON.stringify(raw));
+    expect(loadTopicState(paths).state.doc.queues.normal).toEqual(["a", "b", "c"]);
+  });
+
+  it("rewrites only the archive when only the archive holds a proposal", () => {
+    const live = {
+      v: 1,
+      queues: { normal: ["a"] },
+      topics: { a: { name: "A", goal: "g", status: "confirmed" } },
+    };
+    fs.writeFileSync(paths.topics, JSON.stringify(live));
+    const gone = {
+      v: 1,
+      topics: { d: { name: "D", goal: "g", status: "proposed", archived_at: "T" } },
+    };
+    fs.writeFileSync(paths.archive, JSON.stringify(gone));
+    const loaded = loadTopicState(paths);
+    expect(loaded.confirmed).toEqual([]);
+    expect(fs.readFileSync(paths.topics, "utf8")).toBe(JSON.stringify(live));
+    expect(fs.readFileSync(paths.archive, "utf8")).not.toContain("proposed");
+    expect(loaded.state.archive.topics["d"]?.status).toBe("confirmed");
   });
 
   it("refuses a file it cannot understand, naming it", () => {

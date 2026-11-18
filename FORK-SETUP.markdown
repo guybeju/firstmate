@@ -183,8 +183,8 @@ bin/fm-topic.sh install-rules
 
 它把兩段規則各寫成一個標記區塊，放進 `data/captain.md` 與 `data/captain-shared.md`，區塊外的內容不動，寫之前備份到 `state/topic-board/rules-backup/`。
 
-**確認**：輸出有 `captain.md：新增（v6）` 與 `captain-shared.md：新增（v2）`（已經裝過的是 `已更新` 或 `已是最新`）。
-之後 `bin/fm-topic.sh status` 的最後一行是 `規則：captain.md 和範本相同（v6）；captain-shared.md 和範本相同（v2）`。
+**確認**：輸出有 `captain.md：新增（v7）` 與 `captain-shared.md：新增（v2）`（已經裝過的是 `已更新` 或 `已是最新`）。
+之後 `bin/fm-topic.sh status` 的最後一行是 `規則：captain.md 和範本相同（v7）；captain-shared.md 和範本相同（v2）`。
 裝完重開主 first mate 的 session：規則在下一次 session 開始或下一次壓縮之後才生效（`install-rules` 自己也會印這一句）。
 重開的 session 的啟動摘要裡會有第 5 步說的那一行；服務一直開著時是 `看板服務：在跑`。
 
@@ -244,7 +244,7 @@ second mate 本身怎麼佈建照上游：同機的見 [secondmate-provisioning 
 - `fm-topic.sh` 後面接的每個子命令都列在 `bin/fm-topic.sh` 開頭的用法裡。
 - 提到的每個 `config/<名稱>` 都出現在 `bin/` 的某支腳本裡。
 - 寫成 `/<技能>` 或「`<名稱>` 技能」的，在 `.agents/skills/` 底下都有那個技能。
-- 寫在 `captain.md` 與 `captain-shared.md` 後面的版本（例如 `（v6）`）等於 `topic-board/rules/` 裡範本的版本。
+- 寫在 `captain.md` 與 `captain-shared.md` 後面的版本（例如 `（v7）`）等於 `topic-board/rules/` 裡範本的版本。
 
 只能靠人或 agent 讀過才能確認的：
 

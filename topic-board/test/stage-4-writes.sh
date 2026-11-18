@@ -98,11 +98,10 @@ hold_backlog() {  # <home> <task> [close|release]: the outcome the hold records,
 }
 
 setup_fleet() {
-  t propose "Billing" --goal "rework billing" --id billing >/dev/null
-  t propose "Login" --goal "new login" --id login >/dev/null
-  t propose "Parked" --goal "later" --id parked --queue later >/dev/null
-  t propose "Parked two" --goal "later too" --id parked2 --queue later >/dev/null
-  for id in billing login parked parked2; do t confirm "$id" >/dev/null; done
+  t create "Billing" --goal "rework billing" --id billing >/dev/null
+  t create "Login" --goal "new login" --id login >/dev/null
+  t create "Parked" --goal "later" --id parked --queue later >/dev/null
+  t create "Parked two" --goal "later too" --id parked2 --queue later >/dev/null
   hold_backlog "$MAIN" call-main release
   hold_backlog "$LOCAL_SM" call-sm close
   hold_backlog "$REMOTE_SM" call-far
@@ -361,37 +360,31 @@ wait_calls() {
 test_decisions_made_on_the_page_reach_firstmate() {
   local before code
   before=$(calls fm-inbox.sh)
-  t propose "By hand" --goal "g" --id byhand >/dev/null
-  t confirm byhand >/dev/null
-  t propose "Fresh idea" --goal "g" --id fresh >/dev/null
-  sleep 1
-  assert_equals "$before" "$(calls fm-inbox.sh)" "what firstmate does itself must not come back as a notice"
-  assert_equals 200 "$(page confirm '{"id":"fresh","queue":"high"}')" "confirming on the page failed"
-  wait_calls fm-inbox.sh $((before + 1))
-  assert_contains "$(last_call fm-inbox.sh)" "stdin=使用者在看板上：議題「Fresh idea」已確認，放進「高」（id：fresh）" \
-    "a confirmation made on the page must tell firstmate the topic and its id"
-  assert_equals 200 "$(page confirm '{"id":"fresh"}')" "confirming again failed"
+  t create "By hand" --goal "g" --id byhand >/dev/null
+  t create "Fresh idea" --goal "g" --id fresh >/dev/null
+  assert_equals 404 "$(page confirm '{"id":"fresh","queue":"high"}')" "the page must have nothing left to confirm"
   assert_equals 200 "$(page rename '{"id":"fresh","value":"Fresh name"}')" "renaming on the page failed"
   t close-propose fresh --reason "all done" >/dev/null
   sleep 1
-  assert_equals $((before + 1)) "$(calls fm-inbox.sh)" "a repeated confirmation, a rename, and firstmate's own proposal send nothing"
+  assert_equals "$before" "$(calls fm-inbox.sh)" \
+    "firstmate's own creates and close proposal, and a rename on the page, send nothing"
   assert_equals 200 "$(page keep '{"id":"fresh"}')" "keeping the topic open failed"
-  wait_calls fm-inbox.sh $((before + 2))
+  wait_calls fm-inbox.sh $((before + 1))
   assert_contains "$(last_call fm-inbox.sh)" "stdin=使用者在看板上：議題「Fresh name」先不關（id：fresh）" \
     "turning down a close proposal must reach firstmate"
   code=$(page_body merge '{"from":"byhand","into":"fresh"}' | jq -r '.confirm')
-  assert_equals $((before + 2)) "$(calls fm-inbox.sh)" "asking to merge, before confirming it, sends nothing"
+  assert_equals $((before + 1)) "$(calls fm-inbox.sh)" "asking to merge, before confirming it, sends nothing"
   got=$(page merge "{\"from\":\"byhand\",\"into\":\"fresh\",\"confirm\":\"$code\"}")
   assert_equals 200 "$got" "merging on the page failed"
-  wait_calls fm-inbox.sh $((before + 3))
+  wait_calls fm-inbox.sh $((before + 2))
   assert_contains "$(last_call fm-inbox.sh)" "議題「By hand」已併入「Fresh name」（id：fresh）" "a merge made on the page must reach firstmate"
   assert_equals page "$(jq -r '[.history[] | select(.kind == "merged" and .from == "byhand")][0].by' "$MAIN/data/topics.json")" \
     "a merge made on the page must be recorded as made there"
   assert_equals 200 "$(page archive '{"id":"fresh"}')" "archiving on the page failed"
-  wait_calls fm-inbox.sh $((before + 4))
+  wait_calls fm-inbox.sh $((before + 3))
   assert_contains "$(last_call fm-inbox.sh)" "議題「Fresh name」已封存（id：fresh）" "archiving on the page must reach firstmate"
   assert_contains "$(t find fresh)" "封存（在頁面上）" "find must say the archive was done on the page"
-  pass "confirm, keep, merge, and archive done on the page are sent to firstmate; its own commands are not"
+  pass "keep, merge, and archive done on the page are sent to firstmate; its own commands are not"
 }
 
 # api <path> <json>: a request sent the way the board page sends it; prints the HTTP status.
@@ -559,7 +552,7 @@ test_hands_on_item_with_the_real_hold_tool() {
   command -v tasks-axi >/dev/null 2>&1 || { pass "skip: tasks-axi not found"; return 0; }
   home=$(tb_make_home real-todo)
   printf '## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
-  printf '%s' '{"v":1,"next_seq":1,"queues":{"high":["t"],"normal":[],"later":[]},"topics":{"t":{"name":"T","goal":"g","status":"confirmed","created_at":"","proposed_by":"user"}},"merged":{}}' \
+  printf '%s' '{"v":1,"next_seq":1,"queues":{"high":["t"],"normal":[],"later":[]},"topics":{"t":{"name":"T","goal":"g","status":"confirmed","created_at":""}},"merged":{}}' \
     > "$home/data/topics.json"
   out=$(printf '%s\n' "${TODO_TEXT#動手：}" | tb_run "$home" "$TOPIC" todo add real-1 "Restart x" --topic t -) ||
     fail "todo add failed against the real hold tool: $out"

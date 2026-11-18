@@ -36,9 +36,9 @@
 - `tag <新 id> --from <舊 id>`：讀舊 id 標記的最後一行，寫給新 id。舊 id 沒有標記就 exit 1。
 - 檢查：
   - 兩個 id 的格式（[contracts](contracts.markdown) 第 3.1 節）。
-  - 在主 home：議題 id 先過 `merged` 表，結果必須是 `status: confirmed` 而且不在封存檔；否則 exit 1，並列出可用的議題。
+  - 在主 home：議題 id 先過 `merged` 表，結果必須在 `topics.json` 的 `topics` 裡（也就是不在封存檔）；否則 exit 1，並列出可用的議題。
   - 在 secondmate home：讀不到主 home 的議題檔，只檢查格式。
-  - 沒有 `jq`：跳過「是否已確認」的檢查，照寫，並在 stderr 印警告。
+  - 沒有 `jq`：跳過「議題在不在」的檢查，照寫，並在 stderr 印警告。
 - 最後一行已經是同一個議題 id 就不再追加，回 0。
 - 印 `ok <task-id> 已標記為 <議題 id>`。
 
@@ -61,7 +61,7 @@
 - snapshot 失敗或逾時（上限 30 秒）：印「讀不到 backlog，照平常的方式派工」。
 - 沒有 `jq`：印原因與安裝方式，exit 1（唯一的例外）。
 
-屬於「提議中」議題的項目，主 home 的 `tag` 不會接受，所以它們是沒標記的，排在一般之後。
+標記的議題不在任何佇列（例如舊版留下、看板還沒啟動來確認的提議）的項目，和沒標記的一樣排在一般之後。
 
 另外三件（2026-11-16 用真的 `tasks-axi` 0.2.6 試過之後定的）：
 
@@ -102,7 +102,7 @@
 
 1. `<clone>/topic-board/test/run.sh 1` 回 0。至少涵蓋：
    - `tag`：新增、重複不追加、`--from`、格式錯、未確認的議題被拒、`merged` 的舊 id 轉到新 id、沒有 `jq` 時照寫並警告、在 secondmate home 只檢查格式。
-   - `order`：四段各至少一例；議題檔壞掉時放行；snapshot 失敗時放行；提議中議題的項目排在一般之後。
+   - `order`：四段各至少一例；議題檔壞掉時放行；snapshot 失敗時放行；議題不在任何佇列的項目排在一般之後。
    - `list`：`--all`、`--json`、在 secondmate home 被拒。
    - `setup`：重複執行結果相同。
    - `--in-home`：id 不存在、id 是遠端的，都被拒；`answers` 的輸出與 exit code 原樣傳回（用假的 `fm-captain-hold.sh`）。

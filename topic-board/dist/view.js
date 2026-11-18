@@ -123,12 +123,9 @@ class Placer {
         const id = resolveTopicId(this.topics.doc, tagged);
         if (this.topics.archive.topics[id] !== undefined)
             return { topic: id, reason: null };
-        const topic = this.topics.doc.topics[id];
-        if (topic === undefined)
+        if (this.topics.doc.topics[id] === undefined)
             return { topic: null, reason: "unknown-topic" };
-        return topic.status === "confirmed"
-            ? { topic: id, reason: null }
-            : { topic: null, reason: "proposed" };
+        return { topic: id, reason: null };
     }
     /**
      * The topic of a queued item: its tag when it has one, else the topic its
@@ -356,7 +353,6 @@ function topicViews(topics) {
             goal: topic.goal,
             status: topic.status,
             queue: orNull(QUEUES.find((queue) => topics.doc.queues[queue].includes(id))),
-            suggested_queue: orNull(topic.suggested_queue),
             close_reason: topic.close_proposal === undefined ? null : topic.close_proposal.reason,
             archived_at: null,
         };
@@ -367,7 +363,6 @@ function topicViews(topics) {
             goal: topic.goal,
             status: "archived",
             queue: null,
-            suggested_queue: null,
             close_reason: null,
             archived_at: topic.archived_at,
         };

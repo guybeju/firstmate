@@ -30,11 +30,10 @@ EOF
 chmod +x "$TMP_ROOT/topic"
 export TB_TOPIC="$TMP_ROOT/topic"
 
-"$TB_TOPIC" propose "Billing" --goal "rework billing" --id billing >/dev/null
-"$TB_TOPIC" propose "Login" --goal "new login" --id login --queue high >/dev/null
-"$TB_TOPIC" propose "Parked" --goal "later" --id parked --queue later >/dev/null
-"$TB_TOPIC" propose "Idea" --goal "confirm me" --id idea >/dev/null
-for id in billing login parked; do "$TB_TOPIC" confirm "$id" >/dev/null; done
+"$TB_TOPIC" create "Billing" --goal "rework billing" --id billing >/dev/null
+"$TB_TOPIC" create "Login" --goal "new login" --id login --queue high >/dev/null
+"$TB_TOPIC" create "Parked" --goal "later" --id parked --queue later >/dev/null
+"$TB_TOPIC" create "Idea" --goal "queued at once" --id idea >/dev/null
 # A hands-on item whose commands span lines and carry characters a shell would act on.
 # shellcheck disable=SC2016  # the commands are literal text, never expanded here
 TODO_REASON="fm-hold-v1:$(printf '動手：重啟 x（路由卡住）\nsudo x --now "a b" && echo $HOME `date`\n\tps | grep x' | base64 | tr -d '\n')"
@@ -77,7 +76,7 @@ mkdir -p "$MAIN/data/quiet-b"
 printf 'parked 2026-07-01T00:00:00Z\n' > "$MAIN/data/quiet-b/topic"
 : > "$MAIN/config/fleet-ledger"
 printf 'PR 開好了，等你看。' | "$TB_TOPIC" summary ship-a ready - >/dev/null
-"$TB_TOPIC" propose "Side idea" --goal "merge me" --id side >/dev/null
+"$TB_TOPIC" create "Side idea" --goal "merge me" --id side >/dev/null
 
 test_the_captains_path() {
   local url out

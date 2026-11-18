@@ -32,7 +32,7 @@ export interface ViewInput {
 
 export type Placement =
   | { topic: string; reason: null }
-  | { topic: null; reason: "no-tag" | "unknown-topic" | "proposed" };
+  | { topic: null; reason: "no-tag" | "unknown-topic" };
 
 export interface HomeView {
   id: string;
@@ -132,10 +132,8 @@ export interface SummaryView {
 export interface TopicView {
   name: string;
   goal: string;
-  status: "proposed" | "confirmed" | "archived";
+  status: "confirmed" | "archived";
   queue: Queue | null;
-  /** For a proposal: the queue firstmate suggested, which confirming uses by default. */
-  suggested_queue: Queue | null;
   close_reason: string | null;
   archived_at: string | null;
 }
@@ -287,11 +285,8 @@ class Placer {
     if (tagged === undefined) return { topic: null, reason: "no-tag" };
     const id = resolveTopicId(this.topics.doc, tagged);
     if (this.topics.archive.topics[id] !== undefined) return { topic: id, reason: null };
-    const topic = this.topics.doc.topics[id];
-    if (topic === undefined) return { topic: null, reason: "unknown-topic" };
-    return topic.status === "confirmed"
-      ? { topic: id, reason: null }
-      : { topic: null, reason: "proposed" };
+    if (this.topics.doc.topics[id] === undefined) return { topic: null, reason: "unknown-topic" };
+    return { topic: id, reason: null };
   }
 
   /**
@@ -576,7 +571,6 @@ function topicViews(topics: TopicState): Record<string, TopicView> {
       goal: topic.goal,
       status: topic.status,
       queue: orNull(QUEUES.find((queue) => topics.doc.queues[queue].includes(id))),
-      suggested_queue: orNull(topic.suggested_queue),
       close_reason: topic.close_proposal === undefined ? null : topic.close_proposal.reason,
       archived_at: null,
     };
@@ -587,7 +581,6 @@ function topicViews(topics: TopicState): Record<string, TopicView> {
       goal: topic.goal,
       status: "archived",
       queue: null,
-      suggested_queue: null,
       close_reason: null,
       archived_at: topic.archived_at,
     };
