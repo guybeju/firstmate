@@ -175,10 +175,7 @@ const actions = {
         render();
     },
     topic: (op, body) => {
-        const from = op === "move" ? queueOf(String(body["id"])) : null;
         void post(`topics/${op}`, body).then((data) => {
-            if (data !== null && op === "move")
-                moveFeedback(from, body["queue"]);
             if (data !== null && op === "reopen")
                 moveFeedback("later", "normal");
         });

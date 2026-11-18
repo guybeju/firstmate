@@ -19,8 +19,11 @@ function choose(optionText) {
   })()`;
 }
 
-/** Drags a topic card onto another card (or an empty queue) with synthetic drag events. */
-function drag(name, queue, ontoName) {
+/**
+ * Drags a topic card with synthetic drag events onto another card's upper or lower half, or
+ * onto the queue itself (ontoName null), which is where a drop lands at the end of the queue.
+ */
+function drag(name, queue, ontoName, half = "upper") {
   return `(() => {
     const card = [...document.querySelectorAll(".topic")].find((entry) => entry.innerText.includes(${JSON.stringify(name)}));
     const box = document.querySelector('.queue[data-queue="${queue}"]');
@@ -28,10 +31,14 @@ function drag(name, queue, ontoName) {
     const data = new DataTransfer();
     const fire = (target, type, y) => target.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: data, clientY: y }));
     fire(card, "dragstart", 0);
-    fire(onto, "dragover", onto.getBoundingClientRect().top + 1);
+    const at = onto.getBoundingClientRect();
+    fire(onto, "dragover", ${JSON.stringify(half)} === "upper" ? at.top + 1 : at.bottom - 1);
     return { card, onto, fire };
   })()`;
 }
+
+/** Every queue's topic names, as "high|normal|later" with each queue comma-separated. */
+const queueOrder = `["high", "normal", "later"].map((queue) => [...document.querySelectorAll(\`.queue[data-queue="\${queue}"] .topic .name\`)].map((el) => el.textContent).join(",")).join("|")`;
 
 export default async function run(page) {
   await page.waitFor("the home page", has("等你決定"));
@@ -191,6 +198,31 @@ export default async function run(page) {
   // A drag that ends without a drop puts the card back.
   await page.evaluate(`(() => { const d = ${drag("Parked", "later", null)}; d.fire(d.card, "dragend", 0); return true; })()`);
   await page.waitFor("the cancelled drag to snap back", queueHas("high", "Parked"));
+
+  // A topic card has no menu: every move the page offers is a drag. Each drop below lands
+  // where the old menu's "first" or "last" of a queue did, and is checked against what the
+  // board sent back: the drag's end redraws from the board's view, so only an accepted move
+  // shows the new order. The last move restores the order the rest of the walk expects.
+  if ((await page.evaluate(`document.querySelectorAll(".topic").length`)) === 0)
+    throw new Error("the sidebar must show topic cards");
+  if ((await page.evaluate(`document.querySelectorAll(".topic select, .topic option").length`)) !== 0)
+    throw new Error("a topic card must not carry a menu for moving it");
+  const moves = [
+    ["Login", "later", null, "upper", "Parked|Billing,Idea|Login", "into an empty queue, into later"],
+    ["Billing", "later", "Login", "lower", "Parked|Idea|Login,Billing", "last of later"],
+    ["Idea", "later", "Login", "upper", "Parked||Idea,Login,Billing", "first of later"],
+    ["Billing", "later", "Idea", "upper", "Parked||Billing,Idea,Login", "first, within one queue"],
+    ["Billing", "normal", null, "upper", "Parked|Billing|Idea,Login", "out of later into an empty queue"],
+    ["Login", "high", "Parked", "lower", "Parked,Login|Billing|Idea", "last of high, out of later"],
+    ["Login", "high", "Parked", "upper", "Login,Parked|Billing|Idea", "first of high, within one queue"],
+    ["Login", "high", "Parked", "lower", "Parked,Login|Billing|Idea", "last, within one queue"],
+    ["Idea", "normal", "Billing", "upper", "Parked,Login|Idea,Billing|", "first of normal"],
+    ["Idea", "normal", null, "upper", "Parked,Login|Billing,Idea|", "last of normal, dropped on the queue"],
+  ];
+  for (const [name, queue, onto, half, expected, what] of moves) {
+    await page.evaluate(`(() => { const d = ${drag(name, queue, onto, half)}; d.fire(d.onto, "drop", 0); d.fire(d.card, "dragend", 0); return true; })()`);
+    await page.waitFor(`a drag ${what}: ${expected}`, `${queueOrder} === ${JSON.stringify(expected)}`);
+  }
 
   // The topic page: rename, message firstmate, direct message.
   // Work that is queued but not dispatched yet: counted on the card, listed on the topic page.

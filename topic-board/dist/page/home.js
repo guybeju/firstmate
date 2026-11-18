@@ -8,23 +8,6 @@ function lightCounts(agents) {
         .filter((entry) => entry.count > 0)
         .map((entry) => h("span", {}, h("span", { class: `dot l-${entry.name}` }), String(entry.count)));
 }
-function moveMenu(actions, topic) {
-    const choose = (event) => {
-        const select = event.target;
-        const [queue, where] = select.value.split(":");
-        select.value = "";
-        if (queue !== undefined && queue !== "")
-            actions.topic("move", {
-                id: topic,
-                queue,
-                ...(where === "first" ? { first: true } : { last: true }),
-            });
-    };
-    return h("select", { class: "auto", "aria-label": "移到", onchange: choose }, h("option", { value: "" }, "移到…"), QUEUES.flatMap((queue) => [
-        h("option", { value: `${queue}:first` }, `${QUEUE_LABEL[queue]}：最前`),
-        h("option", { value: `${queue}:last` }, `${QUEUE_LABEL[queue]}：最後`),
-    ]));
-}
 function topicCard(view, actions, id) {
     const topic = view.topics[id];
     if (topic === undefined)
@@ -35,7 +18,7 @@ function topicCard(view, actions, id) {
     const doing = live.filter(needsCaptain).length;
     const waiting = view.queued.filter((item) => item.topic === id).length;
     const unsent = view.writes.filter((write) => write.topic === id && BAD_WRITES.includes(write.state)).length;
-    return h("div", { class: "card topic", draggable: "true", "data-topic": id }, h("button", { class: "link name", onclick: () => actions.open(id) }, topic.name), h("div", { class: "meta" }, h("span", {}, `${agents.length} 個 agent`), lightCounts(agents), waiting > 0 ? h("span", {}, `排隊 ${waiting}`) : null, doing > 0 ? h("span", { class: "pill red" }, `要你動手 ${doing}`) : null, deciding > 0 ? h("span", { class: "pill red" }, `待你決定 ${deciding}`) : null, topic.close_reason === null ? null : h("span", { class: "pill warn" }, "提議關閉"), unsent > 0 ? h("span", { class: "pill red" }, `沒送到 ${unsent}`) : null), moveMenu(actions, id));
+    return h("div", { class: "card topic", draggable: "true", "data-topic": id }, h("button", { class: "link name", onclick: () => actions.open(id) }, topic.name), h("div", { class: "meta" }, h("span", {}, `${agents.length} 個 agent`), lightCounts(agents), waiting > 0 ? h("span", {}, `排隊 ${waiting}`) : null, doing > 0 ? h("span", { class: "pill red" }, `要你動手 ${doing}`) : null, deciding > 0 ? h("span", { class: "pill red" }, `待你決定 ${deciding}`) : null, topic.close_reason === null ? null : h("span", { class: "pill warn" }, "提議關閉"), unsent > 0 ? h("span", { class: "pill red" }, `沒送到 ${unsent}`) : null));
 }
 function queueBox(view, actions, queue) {
     return h("div", { class: "queue", "data-queue": queue }, h("h3", {}, queue === "later" ? "待辦（不自動開工）" : QUEUE_LABEL[queue]), h("div", { class: "list" }, view.queues[queue].map((id) => topicCard(view, actions, id)), h("div", { class: "empty" }, "拖到這裡")));

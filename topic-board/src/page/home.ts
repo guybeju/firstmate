@@ -30,29 +30,6 @@ function lightCounts(agents: AgentView[]): Child {
     );
 }
 
-function moveMenu(actions: Actions, topic: string): Child {
-  const choose = (event: Event): void => {
-    const select = event.target as HTMLSelectElement;
-    const [queue, where] = select.value.split(":");
-    select.value = "";
-    if (queue !== undefined && queue !== "")
-      actions.topic("move", {
-        id: topic,
-        queue,
-        ...(where === "first" ? { first: true } : { last: true }),
-      });
-  };
-  return h(
-    "select",
-    { class: "auto", "aria-label": "移到", onchange: choose },
-    h("option", { value: "" }, "移到…"),
-    QUEUES.flatMap((queue) => [
-      h("option", { value: `${queue}:first` }, `${QUEUE_LABEL[queue]}：最前`),
-      h("option", { value: `${queue}:last` }, `${QUEUE_LABEL[queue]}：最後`),
-    ]),
-  );
-}
-
 function topicCard(view: View, actions: Actions, id: string): Child {
   const topic = view.topics[id];
   if (topic === undefined) return null;
@@ -79,7 +56,6 @@ function topicCard(view: View, actions: Actions, id: string): Child {
       topic.close_reason === null ? null : h("span", { class: "pill warn" }, "提議關閉"),
       unsent > 0 ? h("span", { class: "pill red" }, `沒送到 ${unsent}`) : null,
     ),
-    moveMenu(actions, id),
   );
 }
 
