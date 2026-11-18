@@ -441,7 +441,10 @@ run_extension_section_lane() {
 
 # The coordinator stops any section lane, including the aggregate run's, that
 # outlives this bound, so no wait inside a section can usefully run longer.
-EXTENSION_SECTION_LANE_MAX_SECONDS=34
+# The slowest lane, lifecycle-flow, is mostly CPU-bound process spawning and
+# takes about 45s alone on a slow laptop CPU; this keeps over 2.5x that margin
+# while a hung lane still fails within two minutes.
+EXTENSION_SECTION_LANE_MAX_SECONDS=120
 
 run_extension_section_lanes() {
   local section result_file section_rc timeout_seconds deadline deadline_epoch index remaining launched total maximum_sections
