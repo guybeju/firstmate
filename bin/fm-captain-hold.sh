@@ -904,7 +904,8 @@ write_hold_line() {  # <task-id> <shown-body> <label> <value>
   stamp=$(printf '%s\n' "$body" | sed -n 1p)
   [ -n "$(body_hold_set_timestamp "$body")" ] \
     || fail "task $id lost its hold-set stamp before its $label was recorded"
-  rest=$(printf '%s\n' "$body" | sed 1d | awk -v prefix="Captain hold $label: " 'index($0, prefix) != 1' \
+  rest=$(printf '%s\n' "$body" | sed 1d \
+    | awk -v prefix="Captain hold $label: " 'index($0, prefix) != 1' \
     | awk 'NF || started { started = 1; print }')
   new_body=$stamp
   [ -z "$value" ] || new_body=$(printf '%s\nCaptain hold %s: %s' "$stamp" "$label" "$value")
@@ -1137,7 +1138,7 @@ command_hold() {
       --repo) shift; repo=${1:-} ;;
       --origin) shift; origin=${1:-} ;;
       --until) shift; until=${1:-} ;;
-      --on-answer) shift; on_answer=${1-} ;;
+      --on-answer) shift; on_answer=${1:-} ;;
       *) usage >&2; exit 2 ;;
     esac
     shift

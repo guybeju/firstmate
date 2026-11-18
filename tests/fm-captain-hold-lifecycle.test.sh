@@ -906,35 +906,42 @@ test_hold_records_what_an_answer_does() {
   run_captain "$home" hold sample-merge --reason "May I merge?" --on-answer release >/dev/null \
     || fail "hold --on-answer release failed"
   show=$(tasks_in "$home" show sample-merge --full)
-  assert_contains "$show" "Captain hold on answer: release" "the hold did not record its answer outcome"
-  run_captain "$home" hold sample-merge --reason "May I merge it now?" --origin sample-origin >/dev/null \
+  assert_contains "$show" "Captain hold on answer: release" \
+    "the hold did not record its answer outcome"
+  run_captain "$home" hold sample-merge --reason "May I merge it now?" \
+    --origin sample-origin >/dev/null \
     || fail "repeating the hold with a new reason and an origin failed"
   show=$(tasks_in "$home" show sample-merge --full)
   assert_contains "$show" "Captain hold on answer: release" \
     "a repeated hold or its origin rewrite dropped the recorded outcome"
-  assert_contains "$show" "Captain hold origin: sample-origin" "the origin was not recorded beside it"
-  run_captain "$home" hold sample-merge --reason "May I merge it now?" --on-answer close >/dev/null \
+  assert_contains "$show" "Captain hold origin: sample-origin" \
+    "the origin was not recorded beside it"
+  run_captain "$home" hold sample-merge --reason "May I merge it now?" \
+    --on-answer close >/dev/null \
     || fail "restating the outcome on an active hold failed"
   show=$(tasks_in "$home" show sample-merge --full)
   assert_equals 1 "$(printf '%s\n' "$show" | grep -c 'Captain hold on answer:')" \
     "restating the outcome left more than one record"
   assert_contains "$show" "Captain hold on answer: close" "restating the outcome did not replace it"
 
-  printf 'sample-merge\tgo\tgo\trelease\n' | run_captain "$home" answers --source "on-answer fixture" >/dev/null \
+  printf 'sample-merge\tgo\tgo\trelease\n' \
+    | run_captain "$home" answers --source "on-answer fixture" >/dev/null \
     || fail "could not release the first call"
   run_captain "$home" hold sample-merge --reason "A new question" >/dev/null \
     || fail "could not hold released work again"
   show=$(tasks_in "$home" show sample-merge --full)
   assert_not_contains "$show" "Captain hold on answer:" \
     "a new hold after a release inherited the previous call's outcome"
-  printf 'sample-merge\tgo\tgo\trelease\n' | run_captain "$home" answers --source "on-answer fixture 2" >/dev/null \
+  printf 'sample-merge\tgo\tgo\trelease\n' \
+    | run_captain "$home" answers --source "on-answer fixture 2" >/dev/null \
     || fail "could not release the second call"
   out=$(run_captain "$home" hold sample-merge --reason "A dated question" --until 2099-01-01 \
     --on-answer close) || fail "a dated hold with --on-answer failed"
   assert_equals sample-merge "$out" "hold printed something other than the task id"
   show=$(tasks_in "$home" show sample-merge --full)
-  assert_contains "$show" "Captain hold on answer: close" "a dated new hold did not record its outcome"
-  pass "hold --on-answer records the answer outcome with the hold and keeps it across repeated holds"
+  assert_contains "$show" "Captain hold on answer: close" \
+    "a dated new hold did not record its outcome"
+  pass "hold --on-answer records the answer outcome and keeps it across repeated holds"
 }
 
 # --release lifts the hold instead of closing, preserving the work item's own

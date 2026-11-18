@@ -214,10 +214,11 @@ main() {
                     unresolved_blocker_ids: (.unresolved_blocker_ids // []),
                     hold_age_days,
                     origin: ([ (.body_lines // [])[]
-                               | capture("^Captain hold origin: (?<origin>.*)$") | .origin ][0] // ""),
+                               | capture("^Captain hold origin: (?<origin>.*)$")
+                               | .origin ][0] // ""),
                     on_answer: ([ (.body_lines // [])[]
-                                  | capture("^Captain hold on answer: (?<v>close|release)$") | .v ][0]
-                                // null)} ],
+                                  | capture("^Captain hold on answer: (?<v>close|release)$")
+                                  | .v ][0] // null)} ],
         queued: [ $snap.backlog.records[]
                   | select(.structured == true and .state == "queued")
                   | {id, kind: (.kind // ""), title: (.title // ""), hold: .hold_reason,
