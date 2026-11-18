@@ -9,7 +9,7 @@ fork 的首頁顯示的是 `main`，和上游一樣，但首頁右側 About 的�
 
 ## 0. 先知道的事
 
-- **為什麼用 fork 而不是上游**：看板（`topic-board/` 與 `bin/fm-topic*.sh`）和 first mate 這一側接看板的指令（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、`fm-board/`）只在 fork 的 `carry` 分支上。
+- **為什麼用 fork 而不是上游**：看板（`myshape/` 與 `bin/myshape*.sh`）和 first mate 這一側接看板的指令（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、`fm-board/`）只在 fork 的 `carry` 分支上。
   `carry` 是上游的 `main` 加上看板與 fork 自己的修正，上游沒有這些東西。
   fork 的 `main` 和上游的 `main` 相同，所以只 clone 不切換時，手上是沒有看板的上游版本。
 - **怎麼跟著 `carry`**：home 的 checkout 停在預設分支 `main`，由 `config/self-update-source` 讓更新改從 fork 的 `carry` 前進。
@@ -20,7 +20,7 @@ fork 的首頁顯示的是 `main`，和上游一樣，但首頁右側 About 的�
 - **下面的路徑**：`<clone>` 是 fork clone 下來的目錄，同時也是主 home。
   沒有特別說的指令，工作目錄都是 `<clone>`。
 - **給 agent 的提醒**：不是要當 first mate 的 session，不要把 `<clone>` 當專案目錄打開。
-  上游的 `CLAUDE.md` 會匯入 `AGENTS.md`，`.claude/settings.json` 又掛了 hook，打開的 session 會自認是 first mate（[看板 spec「在哪裡、怎麼實作」](topic-board/spec/README.markdown)）。
+  上游的 `CLAUDE.md` 會匯入 `AGENTS.md`，`.claude/settings.json` 又掛了 hook，打開的 session 會自認是 first mate（[看板 spec「在哪裡、怎麼實作」](myshape/spec/README.markdown)）。
   從別的目錄開，用絕對路徑或 `git -C <clone>` 下指令。
 
 ## 平台：驗過什麼、沒驗過什麼
@@ -28,7 +28,7 @@ fork 的首頁顯示的是 `main`，和上游一樣，但首頁右側 About 的�
 先看這一節，決定這台機器要不要多做驗證。
 
 - **Linux**：上游的 README 列為支援的平台。
-  看板在 Linux 上開發；[handover](topic-board/spec/handover.markdown) 第 1 節要求在那台 Linux 上看板的測試全部通過，第 3 節沒有另外記一筆 Linux 全套測試的結果。
+  看板在 Linux 上開發；[handover](myshape/spec/handover.markdown) 第 1 節要求在那台 Linux 上看板的測試全部通過，第 3 節沒有另外記一筆 Linux 全套測試的結果。
 - **macOS**：上游的 README 列為支援的平台。
   看板的全套測試在 macOS 上跑過，記在 handover 第 3 節：當時的 commit 是 `faa7a8f6`，不設 `TMPDIR`。
   `PATH` 預設（bash 5.3.20）與 `PATH="/bin:$PATH"`（每一層都是 bash 3.2.57）結果相同：第一段 23 項、第二段 13、第三段 14、第四段 14、第五段 8 加上 `skip: firefox not found`、第六段 9，沒有失敗。
@@ -41,7 +41,7 @@ fork 的首頁顯示的是 `main`，和上游一樣，但首頁右側 About 的�
 從零裝起這件事本身沒有完整驗過：handover 第 3 節的結果都來自已經在用的 home。
 這一頁的第 2、3、5、6 步曾在 Linux 上一個暫時的 home 裡照本頁走過一遍，用 curl 代替瀏覽器開看板；第 4 步（開 session、補齊工具到能派工）與第 8 節沒有從零走過。
 
-macOS 上 `bin/fm-topic*.sh` 與 `bin/fm-board.sh` 用的是 `PATH` 上第一個 `bash`（腳本第一行是 `#!/usr/bin/env bash`），細節在 handover 第 1 節。
+macOS 上 `bin/myshape*.sh` 與 `bin/fm-board.sh` 用的是 `PATH` 上第一個 `bash`（腳本第一行是 `#!/usr/bin/env bash`），細節在 handover 第 1 節。
 
 ## 1. 需要的東西
 
@@ -51,11 +51,11 @@ firstmate 本身的需求只在上游的文件寫一次，照那裡準備：
 - [configuration「Toolchain」](docs/configuration.md#toolchain)：每個 home 都要的工具清單（`node`、`git`、`gh`、`no-mistakes`、`gh-axi`、`chrome-devtools-axi`、`tasks-axi`、`quota-axi`），加上依 backend 多出來的工具（tmux 要 `tmux` 與 `treehouse`）。
   第一次開 session 時 first mate 會列出缺的與太舊的工具，經你同意才裝，所以不必事先裝齊。
 
-看板多要的東西（[rollout「前提」](topic-board/spec/rollout.markdown)）：
+看板多要的東西（[rollout「前提」](myshape/spec/rollout.markdown)）：
 
 - 主 home：`node` 22 以上與 `jq`。
   看板只跑編譯好的 `dist/`，不需要 TypeScript 支援。
-- 開看板的瀏覽器要在主 home 這台機器上：服務只綁 `127.0.0.1`（[contracts](topic-board/spec/contracts.markdown) 第 6.2 節）。
+- 開看板的瀏覽器要在主 home 這台機器上：服務只綁 `127.0.0.1`（[contracts](myshape/spec/contracts.markdown) 第 6.2 節）。
 - 遠端 second mate 的機器：只要 `jq`，不需要 `node`（第 8 節）。
 - `pnpm` 與 `firefox` 只有開發與跑看板的測試時才要（handover 第 1 節），裝起來用不需要。
 
@@ -110,7 +110,7 @@ self-update source: origin carry (config/self-update-source)
 firstmate: updated <舊 commit>..<新 commit> (instructions changed: …)
 ```
 
-之後 `git -C <clone> rev-parse HEAD` 要等於 `git ls-remote https://github.com/guybeju/firstmate.git carry` 的第一欄，`<clone>/topic-board/`、`<clone>/bin/fm-topic.sh` 與 `<clone>/bin/fm-board.sh` 要存在。
+之後 `git -C <clone> rev-parse HEAD` 要等於 `git ls-remote https://github.com/guybeju/firstmate.git carry` 的第一欄，`<clone>/myshape/`、`<clone>/bin/myshape.sh` 與 `<clone>/bin/fm-board.sh` 要存在。
 再跑一次會印 `firstmate: already current`。
 
 **不對時**：
@@ -118,7 +118,7 @@ firstmate: updated <舊 commit>..<新 commit> (instructions changed: …)
 - `config/self-update-source` 讀不懂、remote 不存在或分支名稱不合法時，整個更新在動任何東西之前停下並指出那個檔；照訊息改檔，不會退回 `origin`。
 - `firstmate: skipped: …` 表示 checkout 髒了、不在預設分支或分歧了，更新什麼都沒動；照原因處理後再跑。
   原因是 `fetch of origin carry failed` 時是讀不到 fork，照第 2 步的「不對時」處理。
-- 不要為了讓更新過而刪掉 `config/self-update-source`：home 跟到 `carry` 之後，拿掉這個檔會被當成分歧，要手動處理（[configuration](docs/configuration.md#self-update-source-configself-update-source)、[rollout「已知限制」](topic-board/spec/rollout.markdown)）。
+- 不要為了讓更新過而刪掉 `config/self-update-source`：home 跟到 `carry` 之後，拿掉這個檔會被當成分歧，要手動處理（[configuration](docs/configuration.md#self-update-source-configself-update-source)、[rollout「已知限制」](myshape/spec/rollout.markdown)）。
 
 ## 4. 開 session，補到能派工
 
@@ -142,20 +142,20 @@ bin/fm-board.sh setup
 **確認**：印出 `ok setup 帳本已開`，再跑一次印 `ok setup 帳本本來就開著`；`config/fleet-ledger` 存在。
 
 打開看板。
-預設的埠是 47819；要換就在 `config/topic-board-port` 寫一行 1024 到 65535 的埠號。
+預設的埠是 47819；要換就在 `config/myshape-port` 寫一行 1024 到 65535 的埠號。
 
 ```
-bin/fm-topic.sh open
+bin/myshape.sh open
 ```
 
 它在需要時啟動看板服務，印出 `http://127.0.0.1:<埠>/#t=<token>`。
-這個 home 第一次 `open` 之前，看板其他的指令（`create`、`list`、`status` 等）都會回 1，說這裡沒有看板、要先跑 `open`：服務第一次啟動時寫下的 `state/topic-board/token` 是看板認這個 home 的依據。
+這個 home 第一次 `open` 之前，看板其他的指令（`create`、`list`、`status` 等）都會回 1，說這裡沒有看板、要先跑 `open`：服務第一次啟動時寫下的 `state/myshape/token` 是看板認這個 home 的依據。
 在這台機器的瀏覽器打開那個網址，停留一分鐘以上。
-服務只在最近 2 分鐘內有人要過看板狀態時才輪詢各個 home（[stage-3-data](topic-board/spec/stage-3-data.markdown)「輪詢」），頁面在前景時每 5 秒要一次（contracts 第 10 節）。
+服務只在最近 2 分鐘內有人要過看板狀態時才輪詢各個 home（[stage-3-data](myshape/spec/stage-3-data.markdown)「輪詢」），頁面在前景時每 5 秒要一次（contracts 第 10 節）。
 然後：
 
 ```
-bin/fm-topic.sh status
+bin/myshape.sh status
 ```
 
 **確認**：有 `看板服務：在跑`、`輪詢：進行中`，每一行 `home <id>：` 都是 `相同`（只有主 home 時只有 `home main：相同`）。
@@ -166,17 +166,17 @@ bin/fm-topic.sh status
 
 **不對時**：
 
-- 指令以 exit 69 結束，stderr 是一行「看板服務無法啟動：<原因>。<怎麼修>。這次的要求沒有寫入。」（[contracts](topic-board/spec/contracts.markdown) 第 9 節）；照那一行修。
-  沒有 `node` 或低於 22、`topic-board/dist/` 不完整（回第 3 步更新）、`config/topic-board-port` 不合法，都在這一行說明。
+- 指令以 exit 69 結束，stderr 是一行「看板服務無法啟動：<原因>。<怎麼修>。這次的要求沒有寫入。」（[contracts](myshape/spec/contracts.markdown) 第 9 節）；照那一行修。
+  沒有 `node` 或低於 22、`myshape/dist/` 不完整（回第 3 步更新）、`config/myshape-port` 不合法，都在這一行說明。
   開 session 時的 `看板服務：無法啟動：<原因>` 是同一個原因，照著修，下一次開 session 或任何一個看板指令會再試。
-- 上一次啟動失敗的原因在 `state/topic-board/startup-error`，服務的輸出在 `state/topic-board/service.log`（contracts 第 3 節）。
+- 上一次啟動失敗的原因在 `state/myshape/startup-error`，服務的輸出在 `state/myshape/service.log`（contracts 第 3 節）。
 - 某個 home 顯示 `還沒換到 fork`、`版本不相容` 或 `版本不同`，或頁面說帳本未開，表示那個 home 不在同一版或沒開帳本；只有主 home 時不會出現，有 second mate 時見第 8 節。
-- 不用時 `bin/fm-topic.sh stop` 停掉服務；主 first mate 下一次開 session 時會再把它啟動。
+- 不用時 `bin/myshape.sh stop` 停掉服務；主 first mate 下一次開 session 時會再把它啟動。
 
 ## 6. 裝規則，重開 session
 
 規則告訴 first mate 什麼時候該跑看板的指令。
-它是最後一步：要等第 5 步的 `status` 每個 home 都是 `相同` 才裝（[rollout](topic-board/spec/rollout.markdown) 第 7 步）。
+它是最後一步：要等第 5 步的 `status` 每個 home 都是 `相同` 才裝（[rollout](myshape/spec/rollout.markdown) 第 7 步）。
 
 ```
 bin/fm-board.sh install-rules
@@ -185,8 +185,8 @@ bin/fm-board.sh install-rules
 它把兩段規則各寫成一個標記區塊，放進 `data/captain.md` 與 `data/captain-shared.md`，區塊外的內容不動，寫之前備份到 `state/fm-board/rules-backup/`。
 規則是 first mate 的，所以安裝的指令與範本（`fm-board/rules/`）都在 first mate 這一側。
 
-**確認**：輸出有 `captain.md：新增（v9）` 與 `captain-shared.md：新增（v3）`（已經裝過的是 `已更新` 或 `已是最新`）。
-之後 `bin/fm-board.sh rules` 印出 `規則：captain.md 和範本相同（v9）；captain-shared.md 和範本相同（v3）`。
+**確認**：輸出有 `captain.md：新增（v10）` 與 `captain-shared.md：新增（v4）`（已經裝過的是 `已更新` 或 `已是最新`）。
+之後 `bin/fm-board.sh rules` 印出 `規則：captain.md 和範本相同（v10）；captain-shared.md 和範本相同（v4）`。
 裝完重開主 first mate 的 session：規則在下一次 session 開始或下一次壓縮之後才生效（`install-rules` 自己也會印這一句）。
 重開的 session 的啟動摘要裡會有第 5 步說的那一行；服務一直開著時是 `看板服務：在跑`。
 
@@ -199,22 +199,35 @@ bin/fm-board.sh install-rules
 ## 7. 之後怎麼更新
 
 - **fork 有新版**（看板或 fork 的修正進了 `carry`）：在主 home 跑 `/updatefirstmate`。
-  下一個看板指令發現服務的程式版本不同，會自動換掉舊服務（開 session 時的檢查不換，只回報 `看板服務：在跑`）；`status` 出現「目前的程式是 …；下一個指令或 restart 會換成新版」時，也可以直接 `bin/fm-topic.sh restart`。
+  下一個看板指令發現服務的程式版本不同，會自動換掉舊服務（開 session 時的檢查不換，只回報 `看板服務：在跑`）；`status` 出現「目前的程式是 …；下一個指令或 restart 會換成新版」時，也可以直接 `bin/myshape.sh restart`。
   **確認**：`status` 的 `程式版本：` 等於 `git -C <clone> rev-parse HEAD`。
+- **看板改名成 myshape 的那一次更新**（只有一次）：看板的程式、指令與檔案從 `topic-board`、`fm-topic.sh` 改名成 `myshape`、`myshape.sh`。
+  有看板資料的 home 一更新到這一版，看板的每個指令都回 69，說這個 home 還有改名前的檔；還開著的舊服務也不再給頁面，直到那個 home 跑過 `bin/fm-board.sh migrate-myshape`。
+  所以更新和搬家要在同一次做完：使用者明講之後，`/updatefirstmate`，再跑
+  ```
+  bin/fm-board.sh migrate-myshape --check
+  bin/fm-board.sh migrate-myshape
+  ```
+  它停掉舊服務，把 `state/topic-board`、`data/topic-board`、`config/topic-board-port` 搬到新名字，核對搬過去的每個檔，換掉兩個規則檔裡舊標記的區塊（不用另外跑 `install-rules`），把看板自己下的 hold 的原因改成新的開頭 `看板佇列：`，清掉 checkout 裡改名前留下的 `topic-board/`，最後重新打開看板並印出網址；然後重開 session。
+  **確認**：最後一行是 `已搬完`，前面有 `S6：… 個檔的校驗碼和搬之前相同` 與 `… 都和搬之前相同`；`bin/fm-board.sh migrate-myshape --check` 印 `已搬完`；`bin/fm-board.sh rules` 印 `規則：captain.md 和範本相同（v10）；captain-shared.md 和範本相同（v4）`；`bin/myshape.sh status` 是 `看板服務：在跑`，`程式版本：` 等於 `git -C <clone> rev-parse HEAD`。
+  **不對時**：照它印的那一行處理後原樣再跑一次；中途停掉也一樣，再跑一次會接著做完。
+  有 second mate 時，每個 second mate 的 home 也跑一次（遠端的是 `bin/fm-on.sh <id> fm-board.sh migrate-myshape`）：那裡沒有看板的檔，只清那個 code root；共用的規則檔照平常由主 home 傳過去。
+  還沒重開的 session 照舊規則跑 `bin/fm-topic.sh` 時，那支舊名字什麼都不做，只回改用哪個指令與使用者還要跑什麼。
 - **規則範本有變**：更新後 `bin/fm-board.sh rules` 會印 `和範本不同`；由使用者決定之後再跑一次 `bin/fm-board.sh install-rules`，再重開 session。
-  有 second mate 時，先和第 8 節第 4 點一樣確認每個 home 都是 `相同` 再裝：新的規則可能用到只有新版程式才有的指令，例如共用規則 v3 叫 second mate 跑 `bin/fm-board.sh tag`，還沒更新的 home 沒有這支指令。
-- **上游有新版**：只有在 fork 的維護者把上游的 `main` 合併進 `carry` 之後才會到你手上，之後就和「fork 有新版」一樣（[rollout「之後怎麼更新」](topic-board/spec/rollout.markdown)）。
+  有 second mate 時，先和第 8 節第 4 點一樣確認每個 home 都是 `相同` 再裝：新的規則可能用到只有新版程式才有的指令，例如共用規則從 v3 起叫 second mate 跑 `bin/fm-board.sh tag`，還沒更新的 home 沒有這支指令。
+- **上游有新版**：只有在 fork 的維護者把上游的 `main` 合併進 `carry` 之後才會到你手上，之後就和「fork 有新版」一樣（[rollout「之後怎麼更新」](myshape/spec/rollout.markdown)）。
   這台機器不用自己合併上游。
 - `carry` 的推送與 base 是 `carry` 的 PR 會跑 fork 自己的 lint 檢查 [`carry-lint.yml`](.github/workflows/carry-lint.yml)，內容是 `bin/fm-lint.sh` 完整的兩個 partition；它只在 fork 的 Actions 開著時才會跑。
   上游的 CI 只在 `main` 上跑，在 fork 上是停用的，所以 `carry` 沒有測試套件的自動檢查。
 - **退回較舊的版本或退回上游**：沒有定好的步驟。
   退版之前先備份 `data/topics.json`，舊版存檔時會丟掉後來才加的欄位（rollout「之後怎麼更新」）。
+  要退回看板改名成 myshape 之前的程式，先在每個跑過 `migrate-myshape` 的 home 跑 `bin/fm-board.sh migrate-myshape --undo`，再退程式：舊的程式只認舊的名字。
 
 ## 8. 有 second mate 時
 
 只有一台機器、沒有 second mate 的話，這一節可以跳過。
 second mate 本身怎麼佈建照上游：同機的見 [secondmate-provisioning 技能](.agents/skills/secondmate-provisioning/SKILL.md)，遠端的見 [remote-secondmates](docs/remote-secondmates.md)。
-看板要多做的事與順序在 [rollout「步驟」](topic-board/spec/rollout.markdown)，順序不能換：
+看板要多做的事與順序在 [rollout「步驟」](myshape/spec/rollout.markdown)，順序不能換：
 
 1. **每台遠端機器的 code root 先跟到 `carry`**（是 code root，不是 second mate 的 home）。
    code root 要有一個指向 fork 的 remote，並寫自己的 `config/self-update-source`，第一個字是那個 remote 在那台機器上的名稱。
@@ -227,7 +240,7 @@ second mate 本身怎麼佈建照上游：同機的見 [secondmate-provisioning 
    更新後照輸出的 `restart-secondmates:` 重啟 second mate（updatefirstmate 技能第 3 步）。
 3. **每個 home 開帳本**：同機的是 `bin/fm-board.sh --in-home <id> setup`，遠端的是 `bin/fm-on.sh <id> fm-board.sh setup`。
    遠端那一行能跑、回 `ok setup …`，就表示那台已經跟到有 `fm-board.sh` 的 `carry`（rollout R-1）。
-4. **確認每個 home 都在同一版**：打開看板停留一分鐘以上（讓遠端輪到一次），`bin/fm-topic.sh status` 的每一行 `home <id>：` 都要是 `相同`。
+4. **確認每個 home 都在同一版**：打開看板停留一分鐘以上（讓遠端輪到一次），`bin/myshape.sh status` 的每一行 `home <id>：` 都要是 `相同`。
    `還沒換到 fork` 表示那台遠端還沒跟到 `carry`：停在這裡，不要做下一步，也不要拿掉任何一邊的 `config/self-update-source`，記下那台的更新錯誤訊息再處理（rollout R-1）。
 5. **最後才裝規則**（第 6 步）：共用的那段規則會叫每個 second mate 跑 `fm-board.sh`，所以要等上一步全過。
    裝完重開主 first mate 的 session；second mate 在主 home 下一次啟動檢查把共用檔傳過去之後重啟。
@@ -237,16 +250,16 @@ second mate 本身怎麼佈建照上游：同機的見 [secondmate-provisioning 
 ## 這一頁怎麼保持正確
 
 看板每次修改（程式、指令、規則範本、需要的工具）都要在同一個修改裡對照這一頁、改掉不一致的地方，PR 說明裡寫出這一頁查過了、改了什麼。
-這條規則記在 [handover](topic-board/spec/handover.markdown) 第 5 節。
+這條規則記在 [handover](myshape/spec/handover.markdown) 第 5 節。
 
 `fm-board/test/check-guide.sh` 自動檢查這一頁的一部分，由 `fm-board/test/run.sh` 一起跑（`stage-6-guide.sh`）：
 
 - 每個相對連結指到的檔案存在（不檢查 `#` 後面的段落錨點）。
-- 提到的每支 `bin/fm-*.sh` 存在而且可以執行。
-- `fm-topic.sh`、`fm-board.sh`、`fm-dispatch-plan.sh` 後面接的每個子命令都列在那支指令開頭的用法裡。
+- 提到的每支 `bin/fm-*.sh` 與 `bin/myshape.sh` 存在而且可以執行。
+- `myshape.sh`、`fm-board.sh`、`fm-dispatch-plan.sh` 後面接的每個子命令都列在那支指令開頭的用法裡。
 - 提到的每個 `config/<名稱>` 都出現在 `bin/` 的某支腳本裡。
 - 寫成 `/<技能>` 或「`<名稱>` 技能」的，在 `.agents/skills/` 底下都有那個技能。
-- 寫在 `captain.md` 與 `captain-shared.md` 後面的版本（例如 `（v9）`）等於 `fm-board/rules/` 裡範本的版本。
+- 寫在 `captain.md` 與 `captain-shared.md` 後面的版本（例如 `（v10）`）等於 `fm-board/rules/` 裡範本的版本。
 
 只能靠人或 agent 讀過才能確認的：
 

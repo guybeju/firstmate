@@ -1,5 +1,7 @@
 # 驗證紀錄
 
+改名（[open-issues](open-issues.markdown) C57）之前，看板的名字是 `topic-board` 與 `fm-topic`；這一頁照寫下時的名字留著，新舊名字的對照在 C57。
+
 每一項標三種之一：
 
 - **實測**：這次實際跑過，附指令與結果。

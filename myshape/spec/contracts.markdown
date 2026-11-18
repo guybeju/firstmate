@@ -74,7 +74,6 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
 | `state/myshape/start.lock/` | — | 啟動鎖（目錄），裡面記持有它的 client 的 pid | node client |
 | `state/myshape/service.log`、`service.log.1` | 0600 | 服務的 stdio | 服務 |
 | `state/myshape/audit.jsonl` | 0600 | 稽核紀錄，只追加 | 服務 |
-| `state/myshape/rules-backup/` | 0700 | 以前的 `myshape.sh install-rules` 留下的偏好檔備份；新的備份在 `state/fm-board/rules-backup/`（adapter 第 5 節） | 不再寫 |
 | `config/myshape-port` | — | 選用，一行埠號 | 使用者 |
 | `config/fleet-ledger` | — | 上游的帳本旗標，每個 home 各一 | `fm-board.sh setup`（first mate 這一側） |
 

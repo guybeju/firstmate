@@ -234,7 +234,7 @@ function updatesBlock(id) {
     return `<div class="upd ${u.type}"><span class="t">${u.t}</span>${head}${esc(u.text)}${pr} ${who}</div>`;
   }).join('');
   const off = scene === 'noledger' && agentsOf(id).some((a) => S.homes[a.home].remote)
-    ? '<div class="card" style="border-color:#e6c766">sm-tokyo 的帳本未開，看不到它的更新。請跑：<code>bin/fm-on.sh sm-tokyo myshape.sh setup</code></div>' : '';
+    ? '<div class="card" style="border-color:#e6c766">sm-tokyo 的帳本未開，看不到它的更新。請跑：<code>bin/fm-on.sh sm-tokyo fm-board.sh setup</code></div>' : '';
   return `<h2>更新</h2>${off}${rows || '<div class="note">還沒有更新。</div>'}
     <div class="note" style="margin-top:6px">藍底是 first mate 寫的里程碑摘要；斜體是看板自己的系統紀錄；其餘是帳本事件。</div>`;
 }

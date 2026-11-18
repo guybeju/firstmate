@@ -8,14 +8,14 @@
 
 | # | 要驗的事 | 怎麼驗 | 假設不成立時 |
 | --- | --- | --- | --- |
-| 1-1 | 主 home 每輪 snapshot 抓遠端摘要的成本。`FM_SNAPSHOT_SECONDMATES=0` 是「取消數量上限」，不是跳過（已讀原始碼確認，`bin/fm-fleet-snapshot.sh:158,260,1773`）；上游沒有關掉跨 home 收集的開關 | 在有遠端 secondmate 的主 home：`time FM_SNAPSHOT_SECONDMATES=1 FM_SNAPSHOT_BUDGET=1 FM_CREW_STATE_NO_FORGE=1 bin/fm-fleet-snapshot.sh --json >/dev/null`，每 10 秒一次、連跑五分鐘。失敗的條件有兩個：遠端的 reply listener 長輪詢被這個 job 搶佔（遠端 job 的紀錄出現 exit 76），或同一段時間內 `bin/fm-on.sh <id> myshape.sh setup` 的往返時間明顯變長（lane 在排隊） | 彙整腳本先照 `FM_SNAPSHOT_SECONDMATES=1`、`FM_SNAPSHOT_BUDGET=1` 實作（採建議 C1）。兩個失敗條件有任何一個成立，**沒有現成的退路**：拉長輪詢間隔只會降低頻率，解決不了搶佔。那時要回頭開一個決定，見 C1 列的候選 |
+| 1-1 | 主 home 每輪 snapshot 抓遠端摘要的成本。`FM_SNAPSHOT_SECONDMATES=0` 是「取消數量上限」，不是跳過（已讀原始碼確認，`bin/fm-fleet-snapshot.sh:158,260,1773`）；上游沒有關掉跨 home 收集的開關 | 在有遠端 secondmate 的主 home：`time FM_SNAPSHOT_SECONDMATES=1 FM_SNAPSHOT_BUDGET=1 FM_CREW_STATE_NO_FORGE=1 bin/fm-fleet-snapshot.sh --json >/dev/null`，每 10 秒一次、連跑五分鐘。失敗的條件有兩個：遠端的 reply listener 長輪詢被這個 job 搶佔（遠端 job 的紀錄出現 exit 76），或同一段時間內 `bin/fm-on.sh <id> fm-board.sh setup` 的往返時間明顯變長（lane 在排隊） | 彙整腳本先照 `FM_SNAPSHOT_SECONDMATES=1`、`FM_SNAPSHOT_BUDGET=1` 實作（採建議 C1）。兩個失敗條件有任何一個成立，**沒有現成的退路**：拉長輪詢間隔只會降低頻率，解決不了搶佔。那時要回頭開一個決定，見 C1 列的候選 |
 | 1-2 | task 多時一次 snapshot 要跑多久（crew-state 每個 task 逾時 10 秒、並行 8） | 在有十個以上 task 的 home：`time bin/fm-topic-board-read.sh 0 -` | 10 秒的本機頻率改成「上一輪結束後 10 秒」；本來就規定同一 home 不重疊 |
-| 1-3 | `fm-tasks-axi.sh hold <id> --reason …`（不帶 `--kind captain`）之後，snapshot 的 `hold_kind`、`hold_reason` 長什麼樣；解除的指令確切名稱 | 暫時的 `FM_HOME` 加上裝好的 `tasks-axi`：建一個項目、hold、跑 `fm-fleet-snapshot.sh --json \| jq '.backlog.records[]'`、unhold | `order` 認「自己下的 hold」的依據是 `hold_reason` 以 `topic-board：` 開頭；欄位名不同就改讀對的欄位，規則不變 |
+| 1-3 | `fm-tasks-axi.sh hold <id> --reason …`（不帶 `--kind captain`）之後，snapshot 的 `hold_kind`、`hold_reason` 長什麼樣；解除的指令確切名稱 | 暫時的 `FM_HOME` 加上裝好的 `tasks-axi`：建一個項目、hold、跑 `fm-fleet-snapshot.sh --json \| jq '.backlog.records[]'`、unhold | `order` 認「自己下的 hold」的依據是 `hold_reason` 以 `看板佇列：` 開頭；欄位名不同就改讀對的欄位，規則不變 |
 | 1-4 | `backlog.records[]` 的欄位足以判斷「可派」 | 同上，另建有 blocker、有 `hold_until` 的項目 | 已讀原始碼確認欄位存在（`state`、`hold_kind`、`hold_until`、`unresolved_blocker_ids`、`current_role`，`bin/fm-fleet-snapshot.sh:490-580`）；只差實際的值 |
 | 1-5 | hold 內文裡 `Captain hold origin:` 那一行的確切格式 | 用 `fm-captain-hold.sh hold` 開一個帶 origin 的 hold，看 snapshot 的 `hold_reason` | 取不到就當空字串，那個 hold 歸未分類。不影響別的功能 |
 | 1-6 | `fm-on.sh` 經遠端 lane 執行彙整腳本的排隊延遲、job 逾時（預設 360 秒）是否夠 | 在有遠端 secondmate 的主 home：`time bin/fm-on.sh <id> fm-topic-board-read.sh 0 -` | 60 秒的遠端頻率拉長；規定不變 |
 | 1-7 | 遠端 job 的環境裡 snapshot 讀不讀得到 pane | 同上，看 `tasks[].source` | 讀不到時，遠端只靠 pane 判斷的 task 顯示「未知」。這是已接受的退路 |
-| 1-8 | 用主 home 的程式碼加 `FM_HOME=<同機 secondmate home>` 跑 `fm-captain-hold.sh answers`，行為正確，往 parent channel 發的 `resolved` 那一行找得到對的 channel | 有同機 secondmate 時：在它的 home 開一個測試用的 hold，從主 home 跑 `printf '<id>\tx\tx\trelease\n' \| bin/myshape.sh --in-home <sm> answers` | 改成執行該 home 自己的那份 `bin/fm-captain-hold.sh`（路徑由 registry 查到的 home 組出來），白名單的 argv 不變 |
+| 1-8 | 用主 home 的程式碼加 `FM_HOME=<同機 secondmate home>` 跑 `fm-captain-hold.sh answers`，行為正確，往 parent channel 發的 `resolved` 那一行找得到對的 channel | 有同機 secondmate 時：在它的 home 開一個測試用的 hold，從主 home 跑 `printf '<id>\tx\tx\trelease\n' \| bin/fm-board.sh --in-home <sm> answers` | 改成執行該 home 自己的那份 `bin/fm-captain-hold.sh`（路徑由 registry 查到的 home 組出來），白名單的 argv 不變 |
 
 實作第一段時（2026-11-16）用真的 `fm-fleet-snapshot.sh` 加手寫的 `data/backlog.md` 驗到的：不帶 `hold-kind` 的 hold 在 snapshot 裡是 `hold_kind: null`、`hold_reason` 原樣回傳（1-3 的前半）；`state`、`hold_until`、`unresolved_blocker_ids` 的值足以判斷可派（1-4）；origin 在 `body_lines` 裡，格式是 `Captain hold origin: <task-id>`（1-5）。這三項還沒經過真的 `tasks-axi` 寫入，`unhold` 的確切名稱也還沒驗。測試直接跑真的 snapshot，不用假腳本。
 
@@ -53,8 +53,8 @@
 唯讀，不改 backlog，不經服務。讀三樣：議題檔與封存檔、這個 home 的 `data/*/topic`、`fm-fleet-snapshot.sh --json` 的 `backlog.records[]`（設 `FM_CREW_STATE_NO_FORGE=1`，`FM_SNAPSHOT_SECONDMATES` 同彙整腳本）。只看 `state` 是 `queued` 的紀錄。輸出四段，每行 `<task-id> <議題名稱> <佇列>`：
 
 - **可派**：「高」佇列的議題、「一般」佇列的議題、沒有標記的項目，依序。同一佇列照陣列順序，同一議題內照 backlog 的順序。被別的 hold 擋住、有未解的 blocker、`hold_until` 還沒到的，不列。
-- **該 hold**：議題在「待辦」或已封存、還沒被 hold 的項目。每行後面附要跑的指令：`bin/fm-tasks-axi.sh hold <id> --reason "topic-board：議題 <議題 id> 在待辦"`。
-- **該解除**：`hold_reason` 以 `topic-board：` 開頭、但議題已經不在待辦也沒封存的項目。每行附 `bin/fm-tasks-axi.sh unhold <id>`（確切名稱依 1-3）。
+- **該 hold**：議題在「待辦」或已封存、還沒被 hold 的項目。每行後面附要跑的指令：`bin/fm-tasks-axi.sh hold <id> --reason "看板佇列：議題 <議題 id> 在待辦"`。
+- **該解除**：`hold_reason` 以 `看板佇列：` 開頭、但議題已經不在待辦也沒封存的項目。每行附 `bin/fm-tasks-axi.sh unhold <id>`（確切名稱依 1-3）。
 - **停著**：已經照上面 hold 住、議題仍在待辦或封存的項目。
 
 壞掉時放行，一律 exit 0：
@@ -73,7 +73,7 @@
 
 ### `setup`
 
-在自己的 home 建立 `config/fleet-ledger`（空檔），已存在就不動。印 `ok setup 帳本已開` 或 `ok setup 帳本本來就開著`。不需要 `jq`。不寫偏好檔。同機的 secondmate home 由主 home 跑 `bin/myshape.sh --in-home <id> setup`（採建議 C15）；遠端跑 `bin/fm-on.sh <id> myshape.sh setup`。
+在自己的 home 建立 `config/fleet-ledger`（空檔），已存在就不動。印 `ok setup 帳本已開` 或 `ok setup 帳本本來就開著`。不需要 `jq`。不寫偏好檔。同機的 secondmate home 由主 home 跑 `bin/fm-board.sh --in-home <id> setup`（採建議 C15）；遠端跑 `bin/fm-on.sh <id> fm-board.sh setup`。
 
 ### `--in-home <id> answers`
 

@@ -1,5 +1,7 @@
 # 矛盾與漏接
 
+改名（[open-issues](open-issues.markdown) C57）之前，看板的名字是 `topic-board` 與 `fm-topic`；這一頁照寫下時的名字留著，新舊名字的對照在 C57。
+
 彙整時發現各票互相矛盾、和實測或上游原始碼對不上、或沒有任何一張票接住的地方。每一條都附建議；spec 的其他檔先照建議寫，並在該處標「（採建議 Cn）」。使用者不同意哪一條，改那一條引用到的段落即可。
 
 前六條會改變做法，請先看。
@@ -426,6 +428,34 @@ first mate 用 `propose` 開的議題停在提議中，要等使用者在頁面�
   為了留在 1450 token 的上限內（約 1445），拿掉了 `split` 那一句的「中途失敗就原樣再跑一次」（指令失敗時自己會這樣說）、第一行的「fork 裡的」，與兩處 `bin/`。
   真的 home 要由使用者明講之後在主 home 重跑 `bin/fm-board.sh install-rules`。
 - 新的第七段從只有看板自己的檔的副本跑看板：乾淨的環境、只有系統目錄的 `PATH`、每支其他 first mate 腳本的絆線，以及升級時跑著的看板不需要任何手動步驟。
+
+### C57　看板的執行期名稱改成 myshape
+
+使用者對看板的執行期名稱選了 C：看板自己擁有的名字一律改成 `myshape`，之後看板搬到自己的 repository（`guybeju/myshape`）時就是最後的名字。
+這一條在 B1 之後、B2 之前，單獨一個 PR。
+**做法**：
+
+- 改名的規則：看板自己的名字改成 `myshape`；first mate 自己的名字不改（`fm-board.sh`、`fm-board-lib.sh`、`fm-board/`、`fm-dispatch-plan.sh`、`dispatch-plan/`、`state/fm-board/`、讀取腳本 `fm-topic-board-read.sh`、開 session 的 `fm-topic-session-start.sh`）；領域的詞（議題、待辦、`data/topics.json`、`data/<task>/topic`、`topic:` 那一行、`--topic`、`topic.*` 事件、頁面標題「議題看板」）與內部的識別字（`tb_`、`tb-`）不改；已經寫進紀錄的字串照原樣留著，除非程式還會比對它。
+- 對照表（左邊是改名前）：
+
+  | 改名前 | 改名後 |
+  | --- | --- |
+  | `topic-board/` | `myshape/` |
+  | `bin/fm-topic.sh`、`bin/fm-topic-lib.sh` | `bin/myshape.sh`、`bin/myshape-lib.sh` |
+  | 套件 `firstmate-topic-board` | `myshape` |
+  | `state/topic-board/`、`data/topic-board/` | `state/myshape/`、`data/myshape/` |
+  | `config/topic-board-port` | `config/myshape-port` |
+  | `FM_TOPIC_BOARD_TEST`、`FM_TOPIC_BOARD_<X>_MS` | `MYSHAPE_TEST`、`MYSHAPE_<X>_MS` |
+  | 頁面的 sessionStorage `topic-board-token` | `myshape-token` |
+  | `--source topic-board`（「Captain answered this call through topic-board.」） | `--source myshape`；舊紀錄照原樣留著 |
+  | 規則標記 `<!-- topic-board:begin` 與 `<!-- topic-board:end -->`（主 v9、共用 v3） | `<!-- myshape:begin` 與 `<!-- myshape:end -->`（主 v10、共用 v4） |
+  | 看板自己下的 hold 的開頭 `topic-board：` | `看板佇列：`（沒有產品名稱，之後再改名也不用動） |
+  | `state/topic-board/rules-backup/` | `state/fm-board/rules-backup/`（B1 起新的備份已經放這裡） |
+
+- 舊的名字不讀：有看板資料的 home 更新到這一版之後，只要還有改名前的路徑而新名字不在，看板的每個子命令都回 69，指向 `bin/fm-board.sh migrate-myshape`，排在「先跑 open」那一層檢查之前。
+  `migrate-myshape` 是 first mate 這一側的一次性指令，停掉舊服務、搬目錄、核對校驗碼、換規則、改 hold 的開頭、清 checkout、重新打開看板；`--check` 只看不寫，`--undo` 照紀錄還原。
+- 搬家期間的過渡：開 session 的那一行、留在 `bin/fm-topic.sh` 的提示（舊的六種寫法指向 `fm-board.sh` 或 `fm-dispatch-plan.sh`，其他指向 `bin/myshape.sh`）、`order` 對舊開頭的警告、安裝規則與 `rules` 認得舊標記、根目錄 `.gitignore` 的 `/topic-board/`。
+  每個 home 都搬完之後，這些過渡的東西在拆分 repository 前的準備 PR 裡一起拿掉。
 
 ### C28　使用者的 ub-mode 與全域規範裡沒有做到的
 

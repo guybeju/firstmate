@@ -1,12 +1,14 @@
 # 交接
 
+第 2、3 節是當時的紀錄，用的是改名（[open-issues](open-issues.markdown) C57）之前的名字 `topic-board` 與 `fm-topic`；新舊名字的對照在 C57。
+
 看板由一個獨立的 session 做到這裡，之後的維護移交給 fleet。這一頁給接手的人：怎麼跑測試、每個問題的狀態、哪些事還沒驗、已知的限制。看板依賴框架的哪些指令與輸出，在 [contracts](contracts.markdown) 第 11 節。
 
 狀態以 `carry` 上這個檔所在的 commit 為準。標「回報」的結果是主 first mate 在真的 home 或 Mac 上跑完告訴這個 session 的，這個 session 沒有自己重跑。
 
 ## 1. 怎麼跑測試
 
-全部在 fork 的 checkout 裡跑，不需要真的 home。測試只寫自己建的暫存目錄，服務開在當下空著的埠，不會碰 `config/topic-board-port` 設的埠（預設 47819）。
+全部在 fork 的 checkout 裡跑，不需要真的 home。測試只寫自己建的暫存目錄，服務開在當下空著的埠，不會碰 `config/myshape-port` 設的埠（預設 47819）。
 
 需要的工具：
 
@@ -22,26 +24,26 @@
 指令（工作目錄是 checkout 的根目錄）：
 
 ```
-topic-board/test/run.sh            # 第一到五段與第七段，十二個腳本，這台 Linux 約九分鐘
-topic-board/test/run.sh 1          # 只跑第一段；可以列多個數字（第六段搬到 fm-board/test）
+myshape/test/run.sh            # 第一到五段與第七段，十二個腳本，這台 Linux 約九分鐘
+myshape/test/run.sh 1          # 只跑第一段；可以列多個數字（第六段搬到 fm-board/test）
 fm-board/test/run.sh               # first mate 這一側：tag、setup、--in-home、帶 task 的 split、規則、安裝說明
 dispatch-plan/test/run.sh          # first mate 這一側：order
-bash topic-board/test/stage-4-writes.sh   # 單跑一個腳本
-bash topic-board/test/check-dist.sh       # dist/ 是不是 src/ 編出來的
+bash myshape/test/stage-4-writes.sh   # 單跑一個腳本
+bash myshape/test/check-dist.sh       # dist/ 是不是 src/ 編出來的
 bin/fm-doc-audience-check.sh              # 上游的檢查；新增的檔不能違反
-(cd topic-board && pnpm install --frozen-lockfile)   # 只有第一次
-(cd topic-board && pnpm test)             # vitest 單元測試
-(cd topic-board && pnpm run typecheck && pnpm run lint && pnpm run format:check)
-(cd topic-board && pnpm run build)        # 改了 src/ 之後重編 dist/，結果要一起提交
-shellcheck -x bin/fm-topic.sh bin/fm-topic-lib.sh bin/fm-topic-board-read.sh bin/fm-topic-session-start.sh topic-board/test/*.sh
-shellcheck -x bin/fm-board.sh bin/fm-board-lib.sh bin/fm-dispatch-plan.sh fm-board/test/*.sh dispatch-plan/test/*.sh
+(cd myshape && pnpm install --frozen-lockfile)   # 只有第一次
+(cd myshape && pnpm test)             # vitest 單元測試
+(cd myshape && pnpm run typecheck && pnpm run lint && pnpm run format:check)
+(cd myshape && pnpm run build)        # 改了 src/ 之後重編 dist/，結果要一起提交
+shellcheck -x bin/myshape.sh bin/myshape-lib.sh bin/fm-topic-board-read.sh bin/fm-topic-session-start.sh myshape/test/*.sh
+shellcheck -x bin/fm-board.sh bin/fm-board-lib.sh bin/fm-board-migrate-lib.sh bin/fm-topic.sh bin/fm-dispatch-plan.sh fm-board/test/*.sh dispatch-plan/test/*.sh
 ```
 
-- 每個腳本在第一個失敗的檢查印 `not ok - …` 並以非 0 結束；全過時 `run.sh` 的最後一行是 `# topic-board tests passed (<n> scripts)`。
-- `run.sh` 用啟動它的那個 bash 跑每個腳本，但腳本裡呼叫的 `bin/fm-topic*.sh` 是照自己第一行的 `#!/usr/bin/env bash` 找 bash。要在 macOS 上驗 bash 3.2，兩邊都要是 3.2：`PATH="/bin:$PATH" /bin/bash topic-board/test/run.sh`。正式環境裡遠端的 home 用哪個 bash，同樣取決於當時 `PATH` 上第一個是哪一個。
-- 測試用的環境變數由各腳本自己設：`FM_TOPIC_BOARD_TEST=1` 打開只給測試用的 socket 操作，`FM_TOPIC_BOARD_LOCAL_MS` 等縮短輪詢與重試的間隔。不用事先設任何變數。
+- 每個腳本在第一個失敗的檢查印 `not ok - …` 並以非 0 結束；全過時 `run.sh` 的最後一行是 `# myshape tests passed (<n> scripts)`。
+- `run.sh` 用啟動它的那個 bash 跑每個腳本，但腳本裡呼叫的 `bin/myshape*.sh` 是照自己第一行的 `#!/usr/bin/env bash` 找 bash。要在 macOS 上驗 bash 3.2，兩邊都要是 3.2：`PATH="/bin:$PATH" /bin/bash myshape/test/run.sh`。正式環境裡遠端的 home 用哪個 bash，同樣取決於當時 `PATH` 上第一個是哪一個。
+- 測試用的環境變數由各腳本自己設：`MYSHAPE_TEST=1` 打開只給測試用的 socket 操作，`MYSHAPE_LOCAL_MS` 等縮短輪詢與重試的間隔。不用事先設任何變數。
 - 暫存目錄：macOS 預設的暫存目錄很深，會讓 socket 路徑超過 103 位元組的上限。`helpers.sh` 在預設暫存目錄的路徑超過 40 個字元時改用 `/tmp`。
-- 範圍：這台 Linux 要十二個腳本與 `fm-board/test`、`dispatch-plan/test` 全過。遠端的 home 只跑 `bin/fm-topic-board-read.sh` 與 `bin/fm-board.sh`（`tag`、`setup`），不跑服務也不開頁面，所以在 Mac 上要過的是第一段與 `fm-board/test/stage-1-tag.sh`。頁面程式在使用者開看板的那台機器的瀏覽器裡執行。
+- 範圍：這台 Linux 要十二個腳本與 `fm-board/test`、`dispatch-plan/test` 全過。遠端的 home 只跑 `bin/fm-topic-board-read.sh` 與 `bin/fm-board.sh`（`tag`、`setup`，與一次性的 `migrate-myshape`），不跑服務也不開頁面，所以在 Mac 上要過的是第一段與 `fm-board/test/stage-1-tag.sh`。頁面程式在使用者開看板的那台機器的瀏覽器裡執行。
 - ShellCheck 會對 `tests/lib.sh` 的 source 報 SC1091，可以忽略；其他的要是零。
 
 ### 在暫時的 home 手動試
@@ -50,8 +52,8 @@ shellcheck -x bin/fm-board.sh bin/fm-board-lib.sh bin/fm-dispatch-plan.sh fm-boa
 H=$(mktemp -d /tmp/tb-try.XXXXXX)
 mkdir -p "$H/state" "$H/data" "$H/config" "$H/projects"
 printf '## In flight\n\n## Queued\n\n## Done\n' > "$H/data/backlog.md"
-echo 47931 > "$H/config/topic-board-port"          # 任何空著的埠，不要用 47819
-t() { FM_HOME="$H" FM_ROOT_OVERRIDE="$PWD" bin/fm-topic.sh "$@"; }
+echo 47931 > "$H/config/myshape-port"          # 任何空著的埠，不要用 47819
+t() { FM_HOME="$H" FM_ROOT_OVERRIDE="$PWD" bin/myshape.sh "$@"; }
 t open                                            # 第一次 open 才有看板；印出帶 token 的網址
 t create "試試看" --goal "一行目標" --id try         # 一建立就排在「一般」最後
 t stop                                            # 用完要停，再把 $H 丟進垃圾桶
@@ -162,8 +164,8 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
 
 行為上的：
 
-- 頁面上只能用拖的改順序：沒有鍵盤可用的移法，原生拖放在 Chrome 上也還沒驗（第 3 節）；這兩種情況改用 `bin/fm-topic.sh move`（C55）。
-- 看板認一個 home 的依據是 `state/topic-board/token`：全新的 home 要先 `open` 才能 `create`；`open` 在 secondmate 的 home 也不會被拒絕，那裡會開出另一個看板（沒有規則叫 second mate 跑它）。
+- 頁面上只能用拖的改順序：沒有鍵盤可用的移法，原生拖放在 Chrome 上也還沒驗（第 3 節）；這兩種情況改用 `bin/myshape.sh move`（C55）。
+- 看板認一個 home 的依據是 `state/myshape/token`：全新的 home 要先 `open` 才能 `create`；`open` 在 secondmate 的 home 也不會被拒絕，那裡會開出另一個看板（沒有規則叫 second mate 跑它）。
 - 「要你動手」只支援主 home 的項目；按了「做完了」之後使用者不能自己收回；first mate 不能自己關掉項目，要使用者按「好，撤下」（C46）。
 - `find` 平常每個議題只印最近八筆來歷（`--all` 印全部）；來歷不記拖曳排序、改目標、建立議題；`split` 不帶 task 會建一個空議題，新名稱可以和來源相同。
 - `install-rules` 會換掉結束標記之後同一行的文字（有備份）；別處有一行以標記開頭時拒絕安裝（C37）。
@@ -193,8 +195,8 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
 - 第 3 節「還開著」的項目與第 4 節「延後、之後要補的」由 fleet 接手。
 
 - 上游的新版合併進 `carry`：fleet 負責，見 [rollout](rollout.markdown)「之後怎麼更新」。
-- 看板的檔案是 `topic-board/**` 與 `bin/fm-topic*.sh`，另外在上游的 `bin/fm-session-start.sh` 裡有一個呼叫點（contracts 第 11.3 節）。改到 [contracts](contracts.markdown) 第 11 節列的任何一支框架指令時，跑那一列寫的測試。
-- first mate 這一側接看板的檔是 `bin/fm-board.sh`、`bin/fm-board-lib.sh`、`bin/fm-dispatch-plan.sh`、`fm-board/**` 與 `dispatch-plan/**`（[adapter](../../fm-board/spec/adapter.markdown)）；改它們走同樣的流程，這一節的規則也適用。
+- 看板的檔案是 `myshape/**` 與 `bin/myshape*.sh`，另外在上游的 `bin/fm-session-start.sh` 裡有一個呼叫點（contracts 第 11.3 節）。改到 [contracts](contracts.markdown) 第 11 節列的任何一支框架指令時，跑那一列寫的測試。
+- first mate 這一側接看板的檔是 `bin/fm-board.sh`、`bin/fm-board-lib.sh`、`bin/fm-board-migrate-lib.sh`、改名前的名字留下的提示 `bin/fm-topic.sh`（C57）、`bin/fm-dispatch-plan.sh`、`fm-board/**` 與 `dispatch-plan/**`（[adapter](../../fm-board/spec/adapter.markdown)）；改它們走同樣的流程，這一節的規則也適用。
 - 規則範本改了要升版本號（`fm-board/rules/captain.block.md.tmpl` 第一行），`fm-board/test/stage-6-rules.sh` 裡的版本與 token 上限跟著改，真的 home 由使用者明講之後重跑 `bin/fm-board.sh install-rules`。
 - `dist/` 要和 `src/` 一起提交；`dist/` 有變，執行中的看板要重啟才生效，`public/` 的 CSS 不用。
 - 看板每次修改（程式、指令、規則範本、需要的工具）都要在同一個修改裡對照新機器的安裝說明 [FORK-SETUP](../../FORK-SETUP.markdown)，改掉不一致的地方。

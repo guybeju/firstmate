@@ -1,5 +1,7 @@
 # 上線
 
+上線的結果與 R 表是照當時的名字記的；改名（[open-issues](open-issues.markdown) C57）之前，看板的名字是 `topic-board` 與 `fm-topic`，對照在 C57。
+
 這不是一個 PR，是六段都合併進 fork 的 `carry` 之後，把看板開始用起來的步驟。全部由使用者執行或明講之後才執行。
 
 ## 前提
@@ -26,7 +28,7 @@
    - 主 home：`bin/fm-board.sh setup`
    - 同機的 secondmate：`bin/fm-board.sh --in-home <id> setup`
    - 遠端：`bin/fm-on.sh <id> fm-board.sh setup`
-6. **確認每個 home 都在同一版**：`bin/fm-topic.sh open`，打開看板停留一分鐘以上（讓遠端輪到一次），再跑 `bin/fm-topic.sh status`。每個 home 都要是「相同」，沒有「還沒換到 fork」「版本不相容」「版本不同」「帳本未開」。
+6. **確認每個 home 都在同一版**：`bin/myshape.sh open`，打開看板停留一分鐘以上（讓遠端輪到一次），再跑 `bin/myshape.sh status`。每個 home 都要是「相同」，沒有「還沒換到 fork」「版本不相容」「版本不同」「帳本未開」。
 7. **最後才裝規則**：`bin/fm-board.sh install-rules`。共用段會叫每個 secondmate 跑 `fm-board.sh`，所以要等第 6 步全過。裝完重啟主 first mate 的 session；secondmate 在主 home 下一次 bootstrap 之後重啟。
 
 ## 上線時要驗的事
@@ -57,7 +59,8 @@
 ## 之後怎麼更新
 
 - **看板有新版**：合併進 `carry` 並推上 fork，然後在主 home 跑 `/updatefirstmate`。下一個議題指令會發現服務的程式版本不同，自動換掉舊服務。
-- **上游有新版**：由 fleet 把上游的 `main` 合併進 `carry`（2026-11-17 起；原本寫的是看板開發用的 clone）。一定是真的 merge，不 squash、不 rebase：`carry` 分歧的話主 home 的更新會被跳過。開發用的 clone 沒有上游的 remote，合併時用網址直接 fetch：`git fetch https://github.com/kunchenguid/firstmate.git main && git merge FETCH_HEAD`。合併後跑一次看板與 first mate 這一側的全部驗收（`topic-board/test/run.sh`、`fm-board/test/run.sh`、`dispatch-plan/test/run.sh`；特別是 `bin/fm-doc-audience-check.sh` 與 `bin/fm-test-run.sh --check-coverage`，上游可能改了它們的範圍），再推上 fork、跑 `/updatefirstmate`。
+- **上游有新版**：由 fleet 把上游的 `main` 合併進 `carry`（2026-11-17 起；原本寫的是看板開發用的 clone）。一定是真的 merge，不 squash、不 rebase：`carry` 分歧的話主 home 的更新會被跳過。開發用的 clone 沒有上游的 remote，合併時用網址直接 fetch：`git fetch https://github.com/kunchenguid/firstmate.git main && git merge FETCH_HEAD`。合併後跑一次看板與 first mate 這一側的全部驗收（`myshape/test/run.sh`、`fm-board/test/run.sh`、`dispatch-plan/test/run.sh`；特別是 `bin/fm-doc-audience-check.sh` 與 `bin/fm-test-run.sh --check-coverage`，上游可能改了它們的範圍），再推上 fork、跑 `/updatefirstmate`。
+- **看板改名成 myshape 的那一次**（C57）：更新到改名的那一版之後，在同一次接著跑 `bin/fm-board.sh migrate-myshape`；退回改名前的程式之前先跑 `bin/fm-board.sh migrate-myshape --undo`。步驟與確認在 [FORK-SETUP](../../FORK-SETUP.markdown) 第 7 節。
 - **退回較舊的版本**：`data/topics.json` 的 `history`、`todos`，以及 `history` 每一筆裡的 `reason` 與 `by`，都是後來才加的欄位，舊版存檔時不會寫回。以 `history` 為例：沒有這個欄位的舊版程式讀得懂這個檔，但它下一次存檔時不會寫回 `history`，來歷紀錄就沒了（議題本身與 `merged` 表不受影響）。要退版又想留著紀錄，先備份這個檔。
   退回 C52 之前的版本時，檔案照樣讀得懂（`status` 一律是 `confirmed`），議題都還在佇列裡；那一版又會有 `propose` 與提議中的狀態，規則也要跟著退回 v6。
 - **規則範本有變**：更新後 `bin/fm-board.sh rules` 會顯示「和範本不同」，由使用者再跑一次 `bin/fm-board.sh install-rules`。
