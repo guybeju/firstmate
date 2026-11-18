@@ -9,10 +9,13 @@
 - **議題**：看板上的一張卡。有名稱、一行目標、所在佇列與順序。一建立就排在佇列最後，不等誰確認（C52）。可以沒有任何 agent。
 - **議題 id**：議題成立時給的穩定識別碼，改名不變。所有指向議題的地方都用它。
 - **task**：firstmate 原意，一個 worker 跑的一件事。**agent** 是執行某個 task 的 worker，一個 agent 只屬於一個議題。
+  home 還有紀錄的 task 照它的 `kind` 判斷（secondmate 自己不是 agent）；home 已經沒有的 task，只有帳本記過它的 worker 生命週期（`task.dispatched`、`task.pr_ready`、`task.merged`、`task.cleaned_up` 任一筆），而且最近一次派工不是 secondmate 時，才算已經結束的 agent。
+  所以退役 secondmate 自己的事件、遠端 secondmate 的回報通道（`parent-replies`，只有狀態行）都不是 agent；它們的事件仍在更新裡，有標記就歸那個議題（C53）。
 - **home**：一個 firstmate home。主 home 記作 `main`；secondmate home 用它的 secondmate id。task id 只在單一 home 內唯一，所以指 task 一律用 (home, task id)。
 - **議題標記**：某個 home 裡一個 task 屬於哪個議題的紀錄，建立 backlog 項目時寫下，最晚在派工前；每個 home 只對自己的 task 持有正本。
 - **歸併**：把一個 agent 歸到一個議題，或把一個議題併進另一個議題。對 agent 而言就是在它所在的 home 補寫一筆議題標記。
-- **未分類區**：沒有有效標記的 agent、沒有歸屬的待決事項與摘要。
+- **未分類區**：還需要一個議題的東西：沒有有效標記、還在跑的 agent，沒有歸屬的待決事項、worker 提問與這些 agent 的摘要，沒標議題的排隊項目。
+  已經結束、沒有有效標記的 agent 與它們的摘要摺在最後的「已結束、沒標議題 N」，仍可歸併（C53）。
 - **要你動手的項目**：要使用者親手做的事（sudo 指令、登入）。底層是主 home 的一個 captain hold，原因以 `動手：` 開頭：那一行其餘的字是要做什麼，之後幾行是要跑的指令，原樣保存。只有主 home 的 hold 算；secondmate home 裡同樣開頭的 hold 仍是一般的待決事項。
 - **待決事項**：等使用者回答的 captain hold。**worker 提問**是狀態行裡的 `needs-decision`，對象是 first mate，看板只列出、不能作答。
 - **燈號**：待你決定、卡住、進行中、完成、未知，共五種。
