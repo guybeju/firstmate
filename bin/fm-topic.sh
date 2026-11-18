@@ -85,9 +85,12 @@
 #
 # tag    Appends "<topic-id> <UTC time>" to this home's data/<task-id>/topic.
 #        The last line is the task's current topic. In the main home the topic
-#        must be on the board and not archived (merged ids are followed); a
-#        secondmate home cannot read the topic file, so only the id format is
-#        checked there. Without jq that check is skipped with a warning.
+#        must be on the board and not archived (merged ids are followed), and
+#        --in-home tag runs the same check in the main home before it writes
+#        in the secondmate's. A secondmate home cannot read the topic file, so
+#        its own tag (and one run through fm-on.sh) checks only the id format;
+#        the board lists a task tagged with an id it does not know as 標記的議題不存在.
+#        Without jq the check is skipped with a warning.
 # list   Prints id, status, queue, position, and name of every topic. --all adds
 #        archived topics. Main home only.
 # order  Prints which queued backlog items to dispatch, hold, and release, in
@@ -617,7 +620,7 @@ cmd_todo() {
 }
 
 cmd_in_home() {
-  local id home
+  local id home topic
   [ "$#" -ge 2 ] || usage_error "--in-home 的用法是 --in-home <secondmate-id> <tag|answers|setup> …"
   id=$1
   shift
@@ -626,6 +629,12 @@ cmd_in_home() {
     *) usage_error "--in-home 只支援 tag、answers、setup，不支援 $1" ;;
   esac
   home=$(tb_local_secondmate_home "$DATA/secondmates.md" "$id") || exit 1
+  if [ "$1" = tag ] && [ "$#" -eq 3 ]; then
+    tb_valid_id "$2" || usage_error "task id 格式不對：$2"
+    tb_valid_id "$3" || usage_error "議題 id 格式不對：$3"
+    topic=$(main_home_topic_for_tag "$3")
+    set -- tag "$2" "$topic"
+  fi
   if [ "$1" = answers ]; then
     [ "$#" -eq 1 ] || usage_error "answers 不收參數，答案一行走 stdin"
     tb_exec_in_home "$home" "$SCRIPT_DIR/fm-captain-hold.sh" answers --source topic-board

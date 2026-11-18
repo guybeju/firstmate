@@ -1,7 +1,7 @@
 // The home page: the priority sidebar and the four Bearings-style sections,
 // followed by everything not yet filed under a topic.
 import type { Queue } from "#board/topics.js";
-import type { AgentView } from "#board/view.js";
+import type { AgentView, SummaryView } from "#board/view.js";
 import { h } from "./dom.js";
 import type { Child } from "./dom.js";
 import {
@@ -219,29 +219,49 @@ export function mergeConfirm(page: Page, view: View, actions: Actions, key: stri
   );
 }
 
+function unsortedRow(view: View, actions: Actions, agent: AgentView): Child {
+  return h(
+    "div",
+    { class: "row" },
+    h(
+      "span",
+      { class: "grow" },
+      h("b", {}, agent.task),
+      " ",
+      h("span", { class: "note" }, UNSORTED_REASON[agent.unsorted_reason ?? ""] ?? ""),
+    ),
+    h("span", { class: "pill" }, agent.home),
+    tagMenu(view, actions, agent),
+  );
+}
+
+/** The agents with no valid topic, split into running and finished. */
+function untaggedAgents(view: View): { open: AgentView[]; finished: AgentView[] } {
+  const untagged = view.agents.filter((agent) => agent.topic === null);
+  return {
+    open: untagged.filter((agent) => !agent.finished),
+    finished: untagged.filter((agent) => agent.finished),
+  };
+}
+
+/** The summaries with no topic that belong to one of `agents`. */
+function summariesOf(view: View, agents: AgentView[]): SummaryView[] {
+  const tasks = new Set(agents.map((agent) => `${agent.home}/${agent.task}`));
+  return view.summaries.filter(
+    (summary) => summary.topic === null && tasks.has(`${summary.home}/${summary.task}`),
+  );
+}
+
+/**
+ * Work, decisions, and questions that still need a topic, and below them,
+ * folded, finished work that never got one: it waits for nothing.
+ */
 function unsorted(page: Page, view: View, actions: Actions): Child {
+  const { open, finished } = untaggedAgents(view);
   return section(
     "未分類",
-    view.agents
-      .filter((agent) => agent.topic === null)
-      .map((agent) =>
-        h(
-          "div",
-          { class: "row" },
-          h(
-            "span",
-            { class: "grow" },
-            h("b", {}, agent.task),
-            " ",
-            h("span", { class: "note" }, UNSORTED_REASON[agent.unsorted_reason ?? ""] ?? ""),
-          ),
-          h("span", { class: "pill" }, agent.home),
-          tagMenu(view, actions, agent),
-        ),
-      ),
-    view.summaries
-      .filter((summary) => summary.topic === null)
-      .map((summary) => summaryRow(view, actions, summary, false)),
+    open.map((agent) => unsortedRow(view, actions, agent)),
+    summariesOf(view, open).map((summary) => summaryRow(view, actions, summary, false)),
     view.holds
       .filter((hold) => hold.topic === null && !hold.live)
       .map((hold) => holdCard(page, view, actions, hold, false)),
@@ -249,6 +269,19 @@ function unsorted(page: Page, view: View, actions: Actions): Child {
       .filter((question) => question.topic === null)
       .map((question) => questionRow(view, actions, question, false)),
     untaggedList(view),
+    finishedList(view, actions, finished),
+  );
+}
+
+/** Finished work with no topic, folded: kept so its history can still be filed under a topic. */
+function finishedList(view: View, actions: Actions, agents: AgentView[]): Child {
+  if (agents.length === 0) return null;
+  return h(
+    "details",
+    { "data-key": "finished:untagged" },
+    h("summary", {}, `已結束、沒標議題 ${agents.length}`),
+    agents.map((agent) => unsortedRow(view, actions, agent)),
+    summariesOf(view, agents).map((summary) => summaryRow(view, actions, summary, false)),
   );
 }
 

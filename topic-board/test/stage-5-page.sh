@@ -75,6 +75,21 @@ done
 mkdir -p "$MAIN/data/quiet-b"
 printf 'parked 2026-07-01T00:00:00Z\n' > "$MAIN/data/quiet-b/topic"
 : > "$MAIN/config/fleet-ledger"
+# Under 未分類: open-1 is running with no topic; done-1 finished with no tag and
+# done-2 with a topic that does not exist; old-mate is a retired mate, not work.
+mkdir -p "$MAIN/projects/open-1" "$MAIN/data/done-2"
+fm_write_meta "$MAIN/state/open-1.meta" "window=firstmate:fm-open-1" "worktree=$MAIN/projects/open-1" \
+  "project=sample" "harness=claude" "kind=ship" "mode=ship" "yolo=off"
+printf 'working: nobody tagged me\n' > "$MAIN/state/open-1.status"
+printf 'done-2 2026-07-01T00:00:00Z\n' > "$MAIN/data/done-2/topic"
+for finished in done-1:ship done-2:scout old-mate:secondmate; do
+  printf '{"v":1,"ts":1782864000,"event":"task.dispatched","task":"%s","kind":"%s","project":"sample","harness":"claude","model":null}\n' \
+    "${finished%%:*}" "${finished#*:}"
+  printf '{"v":1,"ts":1782864100,"event":"task.cleaned_up","task":"%s"}\n' "${finished%%:*}"
+done >> "$MAIN/state/fleet-ledger.jsonl"
+printf '已落地，沒人標議題。' | "$TB_TOPIC" summary done-1 landed - >/dev/null
+# A summary filed under a record that is not work must not bring it back.
+printf '一個 mate 的回報。' | "$TB_TOPIC" summary old-mate report - >/dev/null
 printf 'PR 開好了，等你看。' | "$TB_TOPIC" summary ship-a ready - >/dev/null
 "$TB_TOPIC" create "Side idea" --goal "merge me" --id side >/dev/null
 

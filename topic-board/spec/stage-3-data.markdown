@@ -61,10 +61,12 @@
 - **議題與 agent 的關聯**：對每個 (home, task)，取議題標記最後一行的議題 id，過 `merged`。結果是沒封存的議題就歸給它；封存的歸給那個封存議題；其他情況（沒有標記、id 對不上）進未分類區，並帶原因。
 - **每個議題的更新**：帳本事件依「事件時間之前最近的一行標記」歸議題；系統紀錄用自己的 `topic`；里程碑摘要依 (home, task) 目前的議題歸。依時間排，新的在上。
 - **PR 連結**：`task.pr_ready`、`task.merged` 事件自己帶的網址。`ready` 與 `landed` 的摘要接上同一個 (home, task) 在摘要時間之前最近一筆 `task.pr_ready` 或 `task.merged` 的連結；`report` 與 `failed` 不接。
-- **燈號**：照 [contracts](contracts.markdown) 第 5 節。secondmate 自己（`kind` 是 secondmate 的 task）不列為 agent；只列它派出的 worker，並標明所在的 home。
+- **燈號**：照 [contracts](contracts.markdown) 第 5 節。
+  什麼算 agent 照 contracts 第 1 節：secondmate 自己不列為 agent，只列它派出的 worker，並標明所在的 home；home 已經沒有的 task 標成已結束（`finished`）。
 - **待決事項**：每個 hold 屬於哪個議題：先看被 hold 的 task 自己的標記，沒有就看 `origin` 那個 task 的標記，都沒有就是未分類。排序：`live` 在前，`aged`、`dated`、`blocked`（合稱暫緩）在後；同一組裡依議題的佇列順序（高、一般、待辦，同佇列照陣列順序），同一議題內最舊的在前，未分類排最後。暫緩的寫出原因：「已放超過 14 天」「延到 YYYY-MM-DD」「等 <id> 完成」。
 - **選項**：問題最後一行裡最後一個 `選項：`（全形冒號）之後的文字，以 ` | ` 分隔，至少兩個、每個都不是空的，才解析成按鈕；否則沒有按鈕。文字框一律有。不要求 `選項：` 在行首：上游把 hold reason 存在 backlog 項目的標題行，寫成多行的 reason 到看板時可能已經是一行。
 - **worker 提問**：`status_decisions[]`（彙整腳本只收 `needs-decision`，不收 `blocked`）依 task 的議題歸位，標「first mate 處理中」，不能作答。
+  `kind` 是 secondmate 的 task 的那一行是 secondmate 給 first mate 的回報，不算 worker 提問（C53）。
 - **提議關閉**：有 `close_proposal` 的議題。
 
 ### `summary` 與 `which`

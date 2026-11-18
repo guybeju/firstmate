@@ -89,16 +89,39 @@ export function mergeConfirm(page, view, actions, key) {
     const into = topicName(view, String(pending.body["into"]));
     return h("div", { class: "confirm" }, `併入之後不能拆開，「${from}」的 agent 與更新都會顯示在「${into}」底下。`, h("div", { class: "btns" }, h("button", { class: "danger", onclick: () => actions.confirm(key) }, `併入「${into}」`), h("button", { onclick: () => actions.cancel(key) }, "取消")));
 }
+function unsortedRow(view, actions, agent) {
+    return h("div", { class: "row" }, h("span", { class: "grow" }, h("b", {}, agent.task), " ", h("span", { class: "note" }, UNSORTED_REASON[agent.unsorted_reason ?? ""] ?? "")), h("span", { class: "pill" }, agent.home), tagMenu(view, actions, agent));
+}
+/** The agents with no valid topic, split into running and finished. */
+function untaggedAgents(view) {
+    const untagged = view.agents.filter((agent) => agent.topic === null);
+    return {
+        open: untagged.filter((agent) => !agent.finished),
+        finished: untagged.filter((agent) => agent.finished),
+    };
+}
+/** The summaries with no topic that belong to one of `agents`. */
+function summariesOf(view, agents) {
+    const tasks = new Set(agents.map((agent) => `${agent.home}/${agent.task}`));
+    return view.summaries.filter((summary) => summary.topic === null && tasks.has(`${summary.home}/${summary.task}`));
+}
+/**
+ * Work, decisions, and questions that still need a topic, and below them,
+ * folded, finished work that never got one: it waits for nothing.
+ */
 function unsorted(page, view, actions) {
-    return section("未分類", view.agents
-        .filter((agent) => agent.topic === null)
-        .map((agent) => h("div", { class: "row" }, h("span", { class: "grow" }, h("b", {}, agent.task), " ", h("span", { class: "note" }, UNSORTED_REASON[agent.unsorted_reason ?? ""] ?? "")), h("span", { class: "pill" }, agent.home), tagMenu(view, actions, agent))), view.summaries
-        .filter((summary) => summary.topic === null)
-        .map((summary) => summaryRow(view, actions, summary, false)), view.holds
+    const { open, finished } = untaggedAgents(view);
+    return section("未分類", open.map((agent) => unsortedRow(view, actions, agent)), summariesOf(view, open).map((summary) => summaryRow(view, actions, summary, false)), view.holds
         .filter((hold) => hold.topic === null && !hold.live)
         .map((hold) => holdCard(page, view, actions, hold, false)), view.questions
         .filter((question) => question.topic === null)
-        .map((question) => questionRow(view, actions, question, false)), untaggedList(view));
+        .map((question) => questionRow(view, actions, question, false)), untaggedList(view), finishedList(view, actions, finished));
+}
+/** Finished work with no topic, folded: kept so its history can still be filed under a topic. */
+function finishedList(view, actions, agents) {
+    if (agents.length === 0)
+        return null;
+    return h("details", { "data-key": "finished:untagged" }, h("summary", {}, `已結束、沒標議題 ${agents.length}`), agents.map((agent) => unsortedRow(view, actions, agent)), summariesOf(view, agents).map((summary) => summaryRow(view, actions, summary, false)));
 }
 /** Queued work nobody gave a topic, folded: it is there to be noticed, not to crowd the page. */
 function untaggedList(view) {

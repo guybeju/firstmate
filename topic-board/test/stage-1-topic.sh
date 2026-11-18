@@ -143,7 +143,13 @@ test_in_home_routes_to_a_local_secondmate() {
   assert_contains "$out" "far1 是遠端的 secondmate" "remote refusal did not say the secondmate is remote"
   expect_code 1 "$(tb_code "$home" "$TOPIC" --in-home nobody tag task-9 billing)" "--in-home with an unknown id"
   expect_code 2 "$(tb_code "$home" "$TOPIC" --in-home sm1 list)" "--in-home with an unsupported subcommand"
-  pass "--in-home runs tag and setup inside a local secondmate home only"
+  # The main home holds the topic file, so it checks the topic before it writes in the mate's home.
+  out=$(tb_run "$home" "$TOPIC" --in-home sm1 tag task-8 task-8 2>&1) && fail "--in-home tag accepted an unknown topic"
+  assert_contains "$out" "billing" "the refusal must list the usable topics"
+  assert_absent "$sm/data/task-8/topic" "a refused --in-home tag still wrote in the secondmate home"
+  tb_run "$home" "$TOPIC" --in-home sm1 tag task-8 old-billing >/dev/null || fail "--in-home tag of a merged id failed"
+  assert_equals billing "$(cut -d' ' -f1 "$sm/data/task-8/topic")" "--in-home tag must record the id a merge points to"
+  pass "--in-home runs tag and setup inside a local secondmate home only, with the main home's topic check"
 }
 
 test_in_home_answers_passes_through() {

@@ -388,6 +388,7 @@ describe("agents", () => {
       updated_at: T0 + 9,
       stale: false,
       unstarted: false,
+      finished: false,
     });
     expect(view.agents.find((agent) => agent.task === "t-done")).toMatchObject({
       topic: null,
@@ -443,9 +444,67 @@ describe("agents", () => {
       "main/alive=working:working:ship",
       "main/merged=done:done:",
       "main/cleaned=done:done:",
-      "main/lost=unknown:unknown:",
       "sm/theirs=done:done:",
     ]);
+    expect(view.agents.map((agent) => `${agent.task}:${agent.finished}`)).toEqual([
+      "alive:false",
+      "merged:true",
+      "cleaned:true",
+      "theirs:true",
+    ]);
+  });
+
+  it("lists only work items, never a mate's own record or a remote mate's reply channel", () => {
+    const dispatched = (taskId: string, kind: string, ts: number, homeId = "main") => ({
+      ...ledger(taskId, "task.dispatched", ts, homeId),
+      fields: { kind },
+    });
+    const view = buildView(
+      input({
+        homes: [
+          home("main", {
+            report: report({
+              tasks: [task("open", "working"), task("live-mate", "working", "secondmate")],
+              status_decisions: [
+                { id: "live-mate", key: "relay", summary: "a child's call" },
+                { id: "open", key: "k", summary: "which API?" },
+              ],
+              topics: { "retired-mate": tag("hi"), "old-work": tag("n2") },
+            }),
+          }),
+          home("far", { remote: true, report: report() }),
+        ],
+        events: [
+          dispatched("retired-mate", "secondmate", T0),
+          ledger("retired-mate", "task.status", T0 + 1),
+          ledger("retired-mate", "task.cleaned_up", T0 + 2),
+          ledger("live-mate", "task.status", T0 + 3),
+          ledger("parent-replies", "task.status", T0 + 4, "far"),
+          ledger("parent-replies", "task.status", T0 + 5, "far"),
+          dispatched("far-work", "scout", T0 + 6, "far"),
+          ledger("far-work", "task.cleaned_up", T0 + 7, "far"),
+          ledger("old-work", "task.status", T0 + 8),
+          ledger("old-work", "task.cleaned_up", T0 + 9),
+          ledger("old-pr", "task.pr_ready", T0 + 10),
+          dispatched("reused", "secondmate", T0 + 11),
+          ledger("reused", "task.cleaned_up", T0 + 12),
+          dispatched("reused", "ship", T0 + 13),
+          ledger("reused", "task.merged", T0 + 14),
+        ],
+      }),
+    );
+    expect(view.agents.map((agent) => `${agent.home}/${agent.task}:${agent.finished}`)).toEqual([
+      "main/open:false",
+      "main/old-work:true",
+      "main/old-pr:true",
+      "main/reused:true",
+      "far/far-work:true",
+    ]);
+    expect(view.agents.find((agent) => agent.task === "old-work")?.topic).toBe("n2");
+    expect(view.questions.map((question) => question.task)).toEqual(["open"]);
+    const updates = view.updates.map((update) => `${update.home}/${update.task}:${update.topic}`);
+    expect(updates).toContain("main/retired-mate:hi");
+    expect(updates).toContain("far/parent-replies:null");
   });
 
   it("tells a ship task that was cleaned up without landing from one that landed", () => {
