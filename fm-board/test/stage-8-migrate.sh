@@ -27,15 +27,24 @@ LIVE_BOARD_PORT=47819
 # one line per call to FM_TEST_SIGNAL_LOG (an absolute path), so the targets
 # can be read before a real run; the assertions that need a killed run are
 # skipped, and every shim and migration ends by itself.
+# FM_TEST_SIGNAL_DRY_RUN=unfixed: the same, and the run cut inside S7 also
+# logs the target the shim chose before the fix (the parent of its parent),
+# with the migration orphaned the way it was when that shim's first target
+# died. Nothing is signalled in either mode.
+case "${FM_TEST_SIGNAL_DRY_RUN:-}" in
+  '' | 1 | unfixed) ;;
+  *) echo "not ok - FM_TEST_SIGNAL_DRY_RUN must be 1, unfixed, or unset" >&2; exit 1 ;;
+esac
 signal_dry_run() {
-  [ "${FM_TEST_SIGNAL_DRY_RUN:-}" = 1 ]
+  [ -n "${FM_TEST_SIGNAL_DRY_RUN:-}" ]
 }
 if signal_dry_run; then
   case "${FM_TEST_SIGNAL_LOG:-}" in
     /*) ;;
-    *) echo "not ok - FM_TEST_SIGNAL_DRY_RUN=1 needs FM_TEST_SIGNAL_LOG, an absolute path for its log" >&2; exit 1 ;;
+    *) echo "not ok - FM_TEST_SIGNAL_DRY_RUN needs FM_TEST_SIGNAL_LOG, an absolute path for its log" >&2; exit 1 ;;
   esac
-  printf '# signal dry run: nothing is signalled; each target is logged to %s\n' "$FM_TEST_SIGNAL_LOG"
+  printf '# signal dry run (%s): nothing is signalled; each target is logged to %s\n' \
+    "$FM_TEST_SIGNAL_DRY_RUN" "$FM_TEST_SIGNAL_LOG"
 fi
 for tool in jq node git tasks-axi; do
   command -v "$tool" >/dev/null 2>&1 || { echo "skip: $tool not found"; exit 0; }
@@ -49,6 +58,78 @@ OLD_ROOT=$TMP_ROOT/old-board
 tb_make_board_root "$OLD_ROOT" "$BASE" "$BASE_BOARD_FILES" >/dev/null
 SHIMS=$TMP_ROOT/shims
 mkdir -p "$SHIMS"
+
+# signal-check <test-pid> <log-file or ""> <source> [arguments...]: the guard's
+# verdict on the arguments of one signal call, "accepted <pid>" or "refused:
+# <why>". Only one positive pid that is a direct child of the test script, and
+# not the user's service manager, is accepted. With a log file it appends one
+# line: the raw arguments as received, then the parsed target, its command,
+# the verdict and the target's ancestry up to pid 1. It never signals.
+SIGNAL_CHECK=$TMP_ROOT/signal-check
+cat > "$SIGNAL_CHECK" <<'SH'
+#!/bin/sh
+test_pid=$1 log=$2 source=$3
+shift 3
+raw="argc=$#"
+for arg in "$@"; do raw="$raw [$arg]"; done
+target=- command=-
+if [ "$#" -ne 1 ]; then
+  verdict="refused: takes exactly one pid, got $# arguments"
+else
+  case "$1" in
+    '') verdict="refused: the pid is empty" ;;
+    *[!0-9]*) verdict="refused: '$1' is not a positive pid (a flag, a negative pid or a process group)" ;;
+    0*) verdict="refused: '$1' is 0 or starts with 0" ;;
+    *)
+      target=$1
+      parent=$(ps -o ppid= -p "$target" 2>/dev/null | tr -d ' ')
+      command=$(ps -o args= -p "$target" 2>/dev/null || true)
+      if [ "$target" -le 1 ]; then
+        verdict="refused: pid $target is 1 or less"
+      elif [ "$target" = "$test_pid" ]; then
+        verdict="refused: pid $target is the test script itself"
+      elif [ "$parent" != "$test_pid" ]; then
+        verdict="refused: pid $target is not a child of the test script $test_pid (its parent: ${parent:-none})"
+      else
+        case "$command" in
+          *systemd*) verdict="refused: pid $target is $command" ;;
+          *) verdict="accepted $target" ;;
+        esac
+      fi
+      ;;
+  esac
+fi
+if [ -n "$log" ]; then
+  chain="" pid=$target levels=0
+  while [ "$pid" != - ] && [ -n "$pid" ] && [ "$levels" -lt 64 ]; do
+    chain="$chain < $pid $(ps -o args= -p "$pid" 2>/dev/null || printf '(gone)')"
+    [ "$pid" -gt 1 ] 2>/dev/null || break
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    levels=$((levels + 1))
+  done
+  printf 'source=%s | raw: %s | target=%s command=%s | %s | ancestry: %s\n' \
+    "$source" "$raw" "$target" "${command:--}" "$verdict" "${chain# < }" >> "$log"
+fi
+printf '%s\n' "$verdict"
+SH
+chmod +x "$SIGNAL_CHECK"
+
+# unfixed-launcher <marker> <pid-file> <command...>: used only by the unfixed
+# dry run. It starts the command in the background, records its pid, and exits
+# by itself once <marker> exists (or after a minute), so the command is
+# orphaned as the migration was when the test script died.
+UNFIXED_LAUNCHER=$TMP_ROOT/unfixed-launcher
+cat > "$UNFIXED_LAUNCHER" <<'SH'
+#!/bin/sh
+marker=$1 pidfile=$2
+shift 2
+"$@" </dev/null >/dev/null 2>&1 &
+printf '%s\n' "$!" > "$pidfile"
+i=0
+while [ ! -e "$marker" ] && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
+exit 0
+SH
+chmod +x "$UNFIXED_LAUNCHER"
 
 # make_code_root <name>: a scratch code root the migration may tidy: the
 # board's build and the rules templates of this checkout, a real myshape/
@@ -189,12 +270,14 @@ home_sums() {
   }
 }
 
-# A shim never signals anything. At its cut point it writes cut.reached and
-# waits, doing nothing, until cut_run has ended the migration and writes
-# cut.release, or a minute has passed; then it writes cut.left and exits.
+# A shim never signals anything. At its cut point it writes its parent's pid
+# to cut.reached and waits, doing nothing, until cut_run has ended the
+# migration and writes cut.release, or a minute has passed; then it writes
+# cut.left and exits.
 cut_point() {
   cat <<SH
-: > "$SHIMS/cut.reached"
+printf '%s\n' "\$PPID" > "$SHIMS/cut.reached.tmp"
+/bin/mv "$SHIMS/cut.reached.tmp" "$SHIMS/cut.reached"
 i=0
 while [ ! -e "$SHIMS/cut.release" ] && [ "\$i" -lt 600 ]; do sleep 0.1; i=\$((i + 1)); done
 : > "$SHIMS/cut.left"
@@ -223,75 +306,68 @@ SH
   chmod +x "$SHIMS/mv"
 }
 
-# tasks_axi_shim: the first hold the migration runs is made, and is its cut point.
+# tasks_axi_shim: the first hold the migration runs is made, and is its cut
+# point. In the unfixed dry run every hold instead logs, without signalling,
+# the target the shim chose before the fix; after the first one it waits
+# until its migration has a new parent, so the second shows where an orphan goes.
 tasks_axi_shim() {
   local real
   real=$(command -v tasks-axi)
-  cat > "$SHIMS/tasks-axi" <<SH
+  if [ "${FM_TEST_SIGNAL_DRY_RUN:-}" = unfixed ]; then
+    cat > "$SHIMS/tasks-axi" <<SH
+#!/bin/sh
+"$real" "\$@" || exit \$?
+[ "\$1" = hold ] || exit 0
+target=\$(ps -o ppid= -p "\$PPID" | tr -d ' ')
+"$SIGNAL_CHECK" "$$" "$FM_TEST_SIGNAL_LOG" "tasks-axi shim, target chosen as before the fix" "\$target" >/dev/null
+[ ! -e "$SHIMS/unfixed.logged" ] || exit 0
+: > "$SHIMS/unfixed.logged"
+i=0
+while [ "\$(ps -o ppid= -p "\$PPID" | tr -d ' ')" = "\$target" ] && [ "\$i" -lt 600 ]; do sleep 0.1; i=\$((i + 1)); done
+exit 0
+SH
+  else
+    cat > "$SHIMS/tasks-axi" <<SH
 #!/bin/sh
 "$real" "\$@" || exit \$?
 [ "\$1" = hold ] || exit 0
 $(cut_point)
 SH
+  fi
   chmod +x "$SHIMS/tasks-axi"
 }
 
 no_shims() {
-  rm -f "$SHIMS/mv" "$SHIMS/mv.count" "$SHIMS/tasks-axi" "$SHIMS/cut.reached" "$SHIMS/cut.release" "$SHIMS/cut.left"
+  rm -f "$SHIMS/mv" "$SHIMS/mv.count" "$SHIMS/tasks-axi" "$SHIMS/cut.reached" "$SHIMS/cut.release" "$SHIMS/cut.left" \
+    "$SHIMS/unfixed.logged" "$SHIMS/unfixed.pid"
 }
 
-# signal_refusal <pid>: why the guard refuses <pid>, or nothing when it is a
-# direct child of this test script. $$ is the script's own pid even inside a
-# command substitution, and every child the test signals is started by the
-# script's own shell.
-signal_refusal() {
-  local pid=$1 parent command
-  case "$pid" in '' | *[!0-9]*) printf "'%s' is not a pid" "$pid"; return 0 ;; esac
-  if [ "$pid" -le 1 ]; then printf 'pid %s is 1 or less' "$pid"; return 0; fi
-  if [ "$pid" = "$$" ]; then printf "pid %s is this test script's own" "$pid"; return 0; fi
-  parent=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
-  if [ "$parent" != "$$" ]; then
-    printf 'pid %s is not a child of this test script %s (its parent: %s)' "$pid" "$$" "${parent:-none}"
-    return 0
-  fi
-  command=$(ps -o args= -p "$pid" 2>/dev/null || true)
-  case "$command" in *systemd*) printf 'pid %s is %s' "$pid" "$command" ;; esac
-}
-
-# signal_ancestry <pid>: "<pid> <command>" for each level from <pid> up to pid 1.
-signal_ancestry() {
-  local pid=$1 levels=0 line=""
-  while [ -n "$pid" ] && [ "$levels" -lt 64 ]; do
-    line="$line < $pid $(ps -o args= -p "$pid" 2>/dev/null || printf '(gone)')"
-    [ "$pid" -gt 1 ] 2>/dev/null || break
-    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
-    levels=$((levels + 1))
-  done
-  printf '%s' "${line# < }"
-}
-
-# kill_own_child <pid>: the only place this test sends a signal, and only to
-# a pid signal_refusal accepts; anything else fails the test unsent. In a dry
-# run it sends nothing and logs what it would have done.
+# kill_own_child <pid>: the only place this test sends a signal. signal-check
+# judges the raw arguments, and only an accepted pid is signalled; anything
+# else fails the test unsent. In a dry run nothing is sent and signal-check
+# logs the call. The pid is a child this shell has not waited for, so it
+# cannot have been reused.
 kill_own_child() {
-  local pid=$1 refusal verdict
-  refusal=$(signal_refusal "$pid")
+  local verdict log=""
+  ! signal_dry_run || log=$FM_TEST_SIGNAL_LOG
+  verdict=$("$SIGNAL_CHECK" "$$" "$log" kill_own_child "$@")
   if signal_dry_run; then
-    verdict=accepted
-    [ -z "$refusal" ] || verdict="refused: $refusal"
-    printf 'would send KILL to pid %s (%s); checks: %s; ancestry: %s\n' "$pid" \
-      "$(ps -o args= -p "$pid" 2>/dev/null || printf '(gone)')" "$verdict" "$(signal_ancestry "$pid")" >> "$FM_TEST_SIGNAL_LOG"
     return 0
   fi
-  [ -z "$refusal" ] || fail "signal guard: $refusal"
-  kill -KILL "$pid"
+  case "$verdict" in "accepted "*) ;; *) fail "signal guard: $verdict" ;; esac
+  kill -KILL "${verdict#accepted }"
+}
+
+# dry_log <line>: one line in the dry run's log.
+dry_log() {
+  ! signal_dry_run || printf '%s\n' "$1" >> "$FM_TEST_SIGNAL_LOG"
 }
 
 # cut_run <home> <code-root>: run the migration with the shims in place, end it
 # while a shim waits at its cut point, and leave its exit code in CUT_RC. The
 # migration is started here in the background, so its pid comes from $!.
 cut_run() {
-  local home=$1 root=$2 pid i=0
+  local home=$1 root=$2 pid shim_parent i=0
   assert_scratch "$home"
   rm -f "$SHIMS/cut.reached" "$SHIMS/cut.release" "$SHIMS/cut.left"
   FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$SHIMS:$PATH" "$BOARD" migrate-myshape >/dev/null 2>&1 &
@@ -306,6 +382,14 @@ cut_run() {
     signal_dry_run || wait "$pid" 2>/dev/null || true
     fail "the migration did not reach the shim's cut point"
   fi
+  shim_parent=$(cat "$SHIMS/cut.reached")
+  if [ "$shim_parent" != "$pid" ]; then
+    dry_log "cut point: the shim's parent $shim_parent is not the migration $pid"
+    : > "$SHIMS/cut.release"
+    wait "$pid" 2>/dev/null || true
+    fail "the shim's parent $shim_parent is not the migration $pid: ending $pid would leave a copy of it running"
+  fi
+  dry_log "cut point: the shim's parent is the migration $pid"
   kill_own_child "$pid"
   if signal_dry_run; then
     : > "$SHIMS/cut.release"
@@ -324,13 +408,35 @@ cut_run() {
   [ -e "$SHIMS/cut.left" ] || fail "the shim did not leave after it was released"
 }
 
+# unfixed_run <home> <code-root>: the unfixed dry run of the cut inside S7. The
+# migration starts under unfixed-launcher, which exits once the shim has
+# logged its first target; the orphaned migration then makes its second hold.
+unfixed_run() {
+  local home=$1 root=$2 launcher mig_pid i=0
+  assert_scratch "$home"
+  "$UNFIXED_LAUNCHER" "$SHIMS/unfixed.logged" "$SHIMS/unfixed.pid" \
+    env FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$SHIMS:$PATH" "$BOARD" migrate-myshape &
+  launcher=$!
+  dry_log "unfixed: test script $$, launcher $launcher"
+  wait "$launcher" 2>/dev/null || true
+  mig_pid=$(cat "$SHIMS/unfixed.pid" 2>/dev/null || true)
+  dry_log "unfixed: the launcher has exited; the migration $mig_pid now has parent $(ps -o ppid= -p "$mig_pid" 2>/dev/null | tr -d ' ')"
+  while [ -n "$mig_pid" ] && ps -p "$mig_pid" >/dev/null 2>&1 && [ "$i" -lt 1200 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if [ -n "$mig_pid" ] && ps -p "$mig_pid" >/dev/null 2>&1; then
+    fail "the orphaned migration $mig_pid did not end by itself within two minutes"
+  fi
+}
+
 assert_moved() {  # <home> <code-root> <old-pid>
   local home=$1 root=$2
   assert_absent "$home/state/topic-board" "the old state directory must be gone"
   assert_absent "$home/data/topic-board" "the old data directory must be gone"
   assert_absent "$home/config/topic-board-port" "the old port file must be gone"
   assert_present "$home/state/myshape/token" "the token must have moved"
-  kill -0 "$3" 2>/dev/null && fail "the old service must be stopped"
+  ps -p "$3" >/dev/null 2>&1 && fail "the old service must be stopped"
   assert_equals 1 "$(tb_board_count "$home")" "exactly one board must serve the home"
   assert_contains "$(new "$home" "$root" status)" "看板服務：在跑" "the new board must run"
   assert_contains "$(new "$home" "$root" status)" "程式版本：$(git -C "$root" rev-parse HEAD)" "the board must run the code root's commit"
@@ -357,7 +463,7 @@ test_moves_a_home_end_to_end() {
   assert_contains "$out" "要換：captain.md 裡舊標記的規則區塊" "--check must list the rules"
   assert_contains "$out" "要清：$root/topic-board 裡的" "--check must list the leftovers"
   assert_contains "$out" "要換：hold 的開頭 topic-board： → 看板佇列：：q1 q4" "--check must list the holds"
-  kill -0 "$pid" 2>/dev/null || fail "--check must not stop the service"
+  ps -p "$pid" >/dev/null 2>&1 || fail "--check must not stop the service"
   assert_equals "$before" "$(tree_sums "$home/data"; tree_sums "$home/config")" "--check must write nothing"
   assert_absent "$home/state/fm-board" "--check must write nothing"
   out=$(mig "$home" "$root") || fail "the migration failed: $out"
@@ -490,7 +596,11 @@ test_a_rerun_finishes_after_each_interruption() {
   old "$home" stop >/dev/null
   ready_to_migrate "$home"
   tasks_axi_shim
-  cut_run "$home" "$root"
+  if [ "${FM_TEST_SIGNAL_DRY_RUN:-}" = unfixed ]; then
+    unfixed_run "$home" "$root"
+  else
+    cut_run "$home" "$root"
+  fi
   no_shims
   if ! signal_dry_run; then
     assert_equals 1 "$(grep -c '(hold: 看板佇列：' "$home/data/backlog.md")" "the run must have stopped inside S7"
@@ -587,7 +697,7 @@ test_refusals_change_nothing() {
   assert_equals "$before" "$(tree_sums "$home")" "a refused run must change nothing"
   rmdir "$home/state/myshape"
   ready_to_migrate "$home"
-  sleep 300 &
+  sleep 300 >/dev/null 2>&1 &
   sleeper=$!
   printf '%s\n' "$sleeper" > "$home/state/topic-board/pid"
   rc=0
@@ -599,7 +709,7 @@ test_refusals_change_nothing() {
   assert_present "$home/state/topic-board/token" "nothing may move after that refusal"
   rm "$home/state/topic-board/pid"
   mkdir -p "$home/state/fm-board/migrate-myshape.lock"
-  sleep 300 &
+  sleep 300 >/dev/null 2>&1 &
   sleeper=$!
   printf '%s\n' "$sleeper" > "$home/state/fm-board/migrate-myshape.lock/pid"
   rc=0

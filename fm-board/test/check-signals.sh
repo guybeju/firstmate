@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# No line under fm-board/test may send a signal to a pid found by walking up
-# the process tree ($PPID or ps -o ppid). A wrapper that execs, or a parent
-# that dies first, moves that pid one level up, and on a desktop the parent
-# of an orphan is the user's service manager: signalling it ends the login.
-# Tests send signals only through stage-8-migrate.sh's guarded helper, to a
-# pid taken from $!.
+# Static check of every file under fm-board/test, the shims the tests write
+# included, since their text lives in these files:
+#   - no line may combine a signal with a pid found by walking up the process
+#     tree ($PPID or ps -o ppid): a wrapper that execs, or a parent that dies
+#     first, moves that pid one level up, and on a desktop the parent of an
+#     orphan is the user's service manager, so signalling it ends the login;
+#   - no line may use the pattern-based signal commands (p-, -all);
+#   - the only signal command is the one line in stage-8-migrate.sh's guarded
+#     helper, which signals only a pid its signal-check accepted.
+# Comment lines are not checked.
 #
 # Usage: fm-board/test/check-signals.sh
 set -euo pipefail
@@ -12,9 +16,39 @@ set -euo pipefail
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 signal='kill'
 ancestor='PPID|ps -o ppid'
-hits=$(grep -rnE "${signal}.*(${ancestor})|(${ancestor}).*${signal}" "$TEST_DIR" || true)
-if [ -n "$hits" ]; then
-  printf 'not ok - a line under fm-board/test signals a pid found through its ancestry:\n%s\n' "$hits" >&2
+banned="p${signal}|${signal}all"
+helper_file="$TEST_DIR/stage-8-migrate.sh"
+helper_line="  ${signal} -KILL \"\${verdict#accepted }\""
+problems=""
+
+code_lines() {  # <extended regex>: "file:line:text" of matching lines that are not comments.
+  grep -rnE "$1" "$TEST_DIR" | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true
+}
+
+hits=$(code_lines "${signal}.*(${ancestor})|(${ancestor}).*${signal}")
+[ -z "$hits" ] || problems="${problems}a signal sent to a pid found through its ancestry:
+$hits
+"
+hits=$(code_lines "(^|[^[:alnum:]_-])(${banned})([^[:alnum:]_-]|\$)")
+[ -z "$hits" ] || problems="${problems}a pattern-based signal command:
+$hits
+"
+hits=$(code_lines "(^|[^[:alnum:]_-])${signal}([[:space:]]|\$)")
+allowed=$(printf '%s\n' "$hits" | awk -v file="$helper_file" -v line="$helper_line" '
+  { split($0, part, ":"); text = substr($0, length(part[1]) + length(part[2]) + 3) }
+  part[1] == file && text == line { n++ }
+  END { print n + 0 }')
+others=$(printf '%s\n' "$hits" | awk -v file="$helper_file" -v line="$helper_line" '
+  $0 == "" { next }
+  { split($0, part, ":"); text = substr($0, length(part[1]) + length(part[2]) + 3) }
+  !(part[1] == file && text == line)')
+[ -z "$others" ] || problems="${problems}a signal command outside the guarded helper:
+$others
+"
+[ "$allowed" -eq 1 ] || problems="${problems}the guarded helper's one signal line was found $allowed times in $helper_file, not once
+"
+if [ -n "$problems" ]; then
+  printf 'not ok - fm-board/test signal check:\n%s' "$problems" >&2
   exit 1
 fi
-printf 'ok - no line under fm-board/test signals a pid found through its ancestry\n'
+printf 'ok - fm-board/test sends signals only through the guarded helper, never by ancestry\n'
