@@ -202,8 +202,8 @@ test_secondmate_home_gets_nothing() {
 test_main_home_without_the_board_gets_nothing() {
   local home out
   home=$(tb_make_service_home unused)
-  tb_run "$home" "$TOPIC" setup >/dev/null
-  tb_run "$home" "$TOPIC" install-rules >/dev/null 2>&1 || fail "install-rules failed"
+  tb_run "$home" "$BOARD" setup >/dev/null
+  tb_run "$home" "$BOARD" install-rules >/dev/null 2>&1 || fail "install-rules failed"
   out=$(session_start "$home")
   assert_contains "$out" "NEXT STEP" "the digest must complete"
   assert_equals "" "$(board_lines "$out")" "a main home whose board never ran must get no board line"

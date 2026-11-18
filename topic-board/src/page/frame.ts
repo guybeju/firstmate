@@ -36,10 +36,10 @@ function versionBanner(view: View): Child {
 }
 
 function ledgerCommand(entry: View["homes"][number]): string {
-  if (entry.id === "main") return "bin/fm-topic.sh setup";
+  if (entry.id === "main") return "bin/fm-board.sh setup";
   return entry.remote
-    ? `bin/fm-on.sh ${entry.id} fm-topic.sh setup`
-    : `bin/fm-topic.sh --in-home ${entry.id} setup`;
+    ? `bin/fm-on.sh ${entry.id} fm-board.sh setup`
+    : `bin/fm-board.sh --in-home ${entry.id} setup`;
 }
 
 function ledgerBanner(view: View): Child {

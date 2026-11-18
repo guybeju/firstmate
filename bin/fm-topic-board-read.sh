@@ -45,6 +45,8 @@ LEDGER_MAX_BYTES=262144
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 # shellcheck source=bin/fm-topic-lib.sh
 . "$SCRIPT_DIR/fm-topic-lib.sh"
+# shellcheck source=bin/fm-board-lib.sh
+. "$SCRIPT_DIR/fm-board-lib.sh"
 
 usage_error() {
   printf '%s\n' "fm-topic-board-read.sh: $*" >&2

@@ -9,7 +9,7 @@ fork 的首頁顯示的是 `main`，和上游一樣，但首頁右側 About 的�
 
 ## 0. 先知道的事
 
-- **為什麼用 fork 而不是上游**：看板（`topic-board/` 與 `bin/fm-topic*.sh`）只在 fork 的 `carry` 分支上。
+- **為什麼用 fork 而不是上游**：看板（`topic-board/` 與 `bin/fm-topic*.sh`）和 first mate 這一側接看板的指令（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、`fm-board/`）只在 fork 的 `carry` 分支上。
   `carry` 是上游的 `main` 加上看板與 fork 自己的修正，上游沒有這些東西。
   fork 的 `main` 和上游的 `main` 相同，所以只 clone 不切換時，手上是沒有看板的上游版本。
 - **怎麼跟著 `carry`**：home 的 checkout 停在預設分支 `main`，由 `config/self-update-source` 讓更新改從 fork 的 `carry` 前進。
@@ -41,7 +41,7 @@ fork 的首頁顯示的是 `main`，和上游一樣，但首頁右側 About 的�
 從零裝起這件事本身沒有完整驗過：handover 第 3 節的結果都來自已經在用的 home。
 這一頁的第 2、3、5、6 步曾在 Linux 上一個暫時的 home 裡照本頁走過一遍，用 curl 代替瀏覽器開看板；第 4 步（開 session、補齊工具到能派工）與第 8 節沒有從零走過。
 
-macOS 上 `bin/fm-topic*.sh` 用的是 `PATH` 上第一個 `bash`（腳本第一行是 `#!/usr/bin/env bash`），細節在 handover 第 1 節。
+macOS 上 `bin/fm-topic*.sh` 與 `bin/fm-board.sh` 用的是 `PATH` 上第一個 `bash`（腳本第一行是 `#!/usr/bin/env bash`），細節在 handover 第 1 節。
 
 ## 1. 需要的東西
 
@@ -110,7 +110,7 @@ self-update source: origin carry (config/self-update-source)
 firstmate: updated <舊 commit>..<新 commit> (instructions changed: …)
 ```
 
-之後 `git -C <clone> rev-parse HEAD` 要等於 `git ls-remote https://github.com/guybeju/firstmate.git carry` 的第一欄，`<clone>/topic-board/` 與 `<clone>/bin/fm-topic.sh` 要存在。
+之後 `git -C <clone> rev-parse HEAD` 要等於 `git ls-remote https://github.com/guybeju/firstmate.git carry` 的第一欄，`<clone>/topic-board/`、`<clone>/bin/fm-topic.sh` 與 `<clone>/bin/fm-board.sh` 要存在。
 再跑一次會印 `firstmate: already current`。
 
 **不對時**：
@@ -133,10 +133,10 @@ session 一開始會跑啟動檢查，列出缺的或太舊的工具與安裝指
 
 ## 5. 開帳本，打開看板
 
-開帳本（看板讀的是 firstmate 的 fleet ledger，[fleet-ledger](docs/fleet-ledger.md)）：
+開帳本（看板讀的是 firstmate 的 fleet ledger，[fleet-ledger](docs/fleet-ledger.md)；開帳本是 first mate 這一側的指令 `bin/fm-board.sh`，不是看板的）：
 
 ```
-bin/fm-topic.sh setup
+bin/fm-board.sh setup
 ```
 
 **確認**：印出 `ok setup 帳本已開`，再跑一次印 `ok setup 帳本本來就開著`；`config/fleet-ledger` 存在。
@@ -149,6 +149,7 @@ bin/fm-topic.sh open
 ```
 
 它在需要時啟動看板服務，印出 `http://127.0.0.1:<埠>/#t=<token>`。
+這個 home 第一次 `open` 之前，看板其他的指令（`create`、`list`、`status` 等）都會回 1，說這裡沒有看板、要先跑 `open`：服務第一次啟動時寫下的 `state/topic-board/token` 是看板認這個 home 的依據。
 在這台機器的瀏覽器打開那個網址，停留一分鐘以上。
 服務只在最近 2 分鐘內有人要過看板狀態時才輪詢各個 home（[stage-3-data](topic-board/spec/stage-3-data.markdown)「輪詢」），頁面在前景時每 5 秒要一次（contracts 第 10 節）。
 然後：
@@ -178,13 +179,14 @@ bin/fm-topic.sh status
 它是最後一步：要等第 5 步的 `status` 每個 home 都是 `相同` 才裝（[rollout](topic-board/spec/rollout.markdown) 第 7 步）。
 
 ```
-bin/fm-topic.sh install-rules
+bin/fm-board.sh install-rules
 ```
 
-它把兩段規則各寫成一個標記區塊，放進 `data/captain.md` 與 `data/captain-shared.md`，區塊外的內容不動，寫之前備份到 `state/topic-board/rules-backup/`。
+它把兩段規則各寫成一個標記區塊，放進 `data/captain.md` 與 `data/captain-shared.md`，區塊外的內容不動，寫之前備份到 `state/fm-board/rules-backup/`。
+規則是 first mate 的，所以安裝的指令與範本（`fm-board/rules/`）都在 first mate 這一側。
 
-**確認**：輸出有 `captain.md：新增（v8）` 與 `captain-shared.md：新增（v2）`（已經裝過的是 `已更新` 或 `已是最新`）。
-之後 `bin/fm-topic.sh status` 的最後一行是 `規則：captain.md 和範本相同（v8）；captain-shared.md 和範本相同（v2）`。
+**確認**：輸出有 `captain.md：新增（v9）` 與 `captain-shared.md：新增（v3）`（已經裝過的是 `已更新` 或 `已是最新`）。
+之後 `bin/fm-board.sh rules` 印出 `規則：captain.md 和範本相同（v9）；captain-shared.md 和範本相同（v3）`。
 裝完重開主 first mate 的 session：規則在下一次 session 開始或下一次壓縮之後才生效（`install-rules` 自己也會印這一句）。
 重開的 session 的啟動摘要裡會有第 5 步說的那一行；服務一直開著時是 `看板服務：在跑`。
 
@@ -199,8 +201,8 @@ bin/fm-topic.sh install-rules
 - **fork 有新版**（看板或 fork 的修正進了 `carry`）：在主 home 跑 `/updatefirstmate`。
   下一個看板指令發現服務的程式版本不同，會自動換掉舊服務（開 session 時的檢查不換，只回報 `看板服務：在跑`）；`status` 出現「目前的程式是 …；下一個指令或 restart 會換成新版」時，也可以直接 `bin/fm-topic.sh restart`。
   **確認**：`status` 的 `程式版本：` 等於 `git -C <clone> rev-parse HEAD`。
-- **規則範本有變**：更新後 `status` 的規則那一行會是 `和範本不同`；由使用者決定之後再跑一次 `install-rules`，再重開 session。
-  有 second mate 時，先和第 8 節第 4 點一樣確認每個 home 都是 `相同` 再裝：新的規則可能用到只有新版程式才有的選項，例如共用規則 v2 要 `fm-captain-hold.sh hold --on-answer`，還沒更新的 home 會拒絕它。
+- **規則範本有變**：更新後 `bin/fm-board.sh rules` 會印 `和範本不同`；由使用者決定之後再跑一次 `bin/fm-board.sh install-rules`，再重開 session。
+  有 second mate 時，先和第 8 節第 4 點一樣確認每個 home 都是 `相同` 再裝：新的規則可能用到只有新版程式才有的指令，例如共用規則 v3 叫 second mate 跑 `bin/fm-board.sh tag`，還沒更新的 home 沒有這支指令。
 - **上游有新版**：只有在 fork 的維護者把上游的 `main` 合併進 `carry` 之後才會到你手上，之後就和「fork 有新版」一樣（[rollout「之後怎麼更新」](topic-board/spec/rollout.markdown)）。
   這台機器不用自己合併上游。
 - `carry` 的推送與 base 是 `carry` 的 PR 會跑 fork 自己的 lint 檢查 [`carry-lint.yml`](.github/workflows/carry-lint.yml)，內容是 `bin/fm-lint.sh` 完整的兩個 partition；它只在 fork 的 Actions 開著時才會跑。
@@ -223,11 +225,11 @@ second mate 本身怎麼佈建照上游：同機的見 [secondmate-provisioning 
    這一步一定在上一步之後：主 home 一旦跟到 `carry`，每次 session 開始都要求遠端 home 對齊到主 home 的 commit，遠端 code root 拿不到那個 commit 時，那個 home 的同步會一直被跳過。
    同機的 second mate 會自動跟到主 home 的 commit；遠端的 code root 依自己的 `self-update-source` 前進，home 再對齊到 code root。
    更新後照輸出的 `restart-secondmates:` 重啟 second mate（updatefirstmate 技能第 3 步）。
-3. **每個 home 開帳本**：同機的是 `bin/fm-topic.sh --in-home <id> setup`，遠端的是 `bin/fm-on.sh <id> fm-topic.sh setup`。
-   遠端那一行能跑、回 `ok setup …`，就表示那台已經跟到 `carry`（rollout R-1）。
+3. **每個 home 開帳本**：同機的是 `bin/fm-board.sh --in-home <id> setup`，遠端的是 `bin/fm-on.sh <id> fm-board.sh setup`。
+   遠端那一行能跑、回 `ok setup …`，就表示那台已經跟到有 `fm-board.sh` 的 `carry`（rollout R-1）。
 4. **確認每個 home 都在同一版**：打開看板停留一分鐘以上（讓遠端輪到一次），`bin/fm-topic.sh status` 的每一行 `home <id>：` 都要是 `相同`。
    `還沒換到 fork` 表示那台遠端還沒跟到 `carry`：停在這裡，不要做下一步，也不要拿掉任何一邊的 `config/self-update-source`，記下那台的更新錯誤訊息再處理（rollout R-1）。
-5. **最後才裝規則**（第 6 步）：共用的那段規則會叫每個 second mate 跑 `fm-topic.sh`，所以要等上一步全過。
+5. **最後才裝規則**（第 6 步）：共用的那段規則會叫每個 second mate 跑 `fm-board.sh`，所以要等上一步全過。
    裝完重開主 first mate 的 session；second mate 在主 home 下一次啟動檢查把共用檔傳過去之後重啟。
 
 之後新增的遠端 second mate：在那台機器手動 clone code root 之後先做上面的第 1 點，再照上游的流程佈建 home；不把已經存在的 `origin` 改成指向 fork（rollout「之後怎麼更新」）。
@@ -237,14 +239,14 @@ second mate 本身怎麼佈建照上游：同機的見 [secondmate-provisioning 
 看板每次修改（程式、指令、規則範本、需要的工具）都要在同一個修改裡對照這一頁、改掉不一致的地方，PR 說明裡寫出這一頁查過了、改了什麼。
 這條規則記在 [handover](topic-board/spec/handover.markdown) 第 5 節。
 
-`topic-board/test/check-guide.sh` 自動檢查這一頁的一部分，由 `topic-board/test/run.sh 6` 一起跑（`stage-6-guide.sh`）：
+`fm-board/test/check-guide.sh` 自動檢查這一頁的一部分，由 `fm-board/test/run.sh` 一起跑（`stage-6-guide.sh`）：
 
 - 每個相對連結指到的檔案存在（不檢查 `#` 後面的段落錨點）。
 - 提到的每支 `bin/fm-*.sh` 存在而且可以執行。
-- `fm-topic.sh` 後面接的每個子命令都列在 `bin/fm-topic.sh` 開頭的用法裡。
+- `fm-topic.sh`、`fm-board.sh`、`fm-dispatch-plan.sh` 後面接的每個子命令都列在那支指令開頭的用法裡。
 - 提到的每個 `config/<名稱>` 都出現在 `bin/` 的某支腳本裡。
 - 寫成 `/<技能>` 或「`<名稱>` 技能」的，在 `.agents/skills/` 底下都有那個技能。
-- 寫在 `captain.md` 與 `captain-shared.md` 後面的版本（例如 `（v8）`）等於 `topic-board/rules/` 裡範本的版本。
+- 寫在 `captain.md` 與 `captain-shared.md` 後面的版本（例如 `（v9）`）等於 `fm-board/rules/` 裡範本的版本。
 
 只能靠人或 agent 讀過才能確認的：
 

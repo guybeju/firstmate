@@ -16,8 +16,9 @@
 # It prints nothing and starts nothing when this home does not use the board:
 # in a secondmate home, and in a main home without state/topic-board/token.
 # The service writes that token the first time it starts successfully and
-# never deletes it (stop keeps it), while setup, install-rules, and a start
-# that failed leave none, so the token marks a main home whose board has run.
+# never deletes it (stop keeps it), while fm-board.sh setup and install-rules
+# and a start that failed leave none, so the token marks a main home whose
+# board has run.
 #
 # A running board is left alone, even one running older code: the next board
 # command replaces that one (fm-topic.sh open). A board that is not running,

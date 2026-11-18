@@ -47,7 +47,7 @@
 | 還沒換到 fork | R3 失敗，stderr 符合 3-3 的字串 | 不顯示這個 home 的 agent；附上要做的設定（[rollout](rollout.markdown) 的第 2 步）與 `/updatefirstmate` |
 | 版本不相容 | `schema` 和服務認得的不同 | 不使用這份輸出；附「在主 home 跑 `/updatefirstmate`」 |
 | 版本不同 | `schema` 相同，`code_commit` 和主 home 的不同 | 資料照常使用，在 home 的標籤旁標出 |
-| 帳本未開 | `ledger_enabled` 是 false | 附上要跑的指令：主 home `bin/fm-topic.sh setup`、同機 `bin/fm-topic.sh --in-home <id> setup`、遠端 `bin/fm-on.sh <id> fm-topic.sh setup` |
+| 帳本未開 | `ledger_enabled` 是 false | 附上要跑的指令：主 home `bin/fm-board.sh setup`、同機 `bin/fm-board.sh --in-home <id> setup`、遠端 `bin/fm-on.sh <id> fm-board.sh setup` |
 | 過期 | 最後一次成功超過 3 分鐘 | 該 home 的燈全部轉成「未知」，保留最後已知的狀態文字與「最後更新 N 分鐘前」；待決事項標「可能已過時」；更新區塊照常 |
 
 `code_commit` 取的是那個 home 自己的 checkout（home 本身是 git checkout 時用它的 `HEAD`，否則用 code root 的）。同機的 secondmate home 是由主 home 的腳本切過去讀的，不這樣取就永遠回主 home 的 commit、永遠顯示「相同」。

@@ -408,6 +408,25 @@ first mate 用 `propose` 開的議題停在提議中，要等使用者在頁面�
 - 拿掉之後頁面上沒有鍵盤可用的移法，原生拖放不能用的瀏覽器也沒有後備（Chrome 還沒驗，[handover](handover.markdown) 第 3 節）。
   這兩種情況改用 `bin/fm-topic.sh move <id> <佇列> [--before <id> | --first]`。
 
+### C56　看板的指令不再用 first mate 的函式庫（B1）
+
+使用者對看板與 first mate 要分開到什麼程度選了 B：看板是使用者派工的方式和 agent 之間的轉接層，另一頭可以是任何 agent，看板的後端也不能依賴 first mate。
+這是分成四個 PR 做的第一個：指令分開、轉接指令、規則搬家；餵資料與頁面動作的契約、看板自己存「要你動手」的項目、以 aggregator 自己的名字接上，是之後的三個。
+**做法**：
+
+- `bin/fm-topic.sh` 只留看板自己的子命令，只 source `fm-topic-lib.sh`；它不 source 任何 first mate 的函式庫。
+- 讀寫 first mate 檔的子命令搬到 first mate 這一側：`tag`、`setup`、帶 task 的 `split`、`--in-home`、`install-rules` 與 `status` 的規則那一行到 `bin/fm-board.sh`（`rules`），`order` 原樣搬到 `bin/fm-dispatch-plan.sh`；規則範本與它們的測試到 `fm-board/`（[adapter](../../fm-board/spec/adapter.markdown)）。
+- 舊的寫法回 2，一行指出新的指令；不轉送，也沒有第二條路。
+- 原本擋 secondmate home 的檢查讀的是 first mate 的標記檔，換成看板自己的：除了 `open`，沒有 `state/topic-board/token` 的 home 一律拒絕。
+  全新的 home 要先 `open` 才能 `create`；`open` 在 secondmate 的 home 不再被拒絕，這一點留作已知限制（handover 第 4 節）。
+- 看板服務的白名單 W5、W7、W8、W9 改跑 `fm-board.sh`；帳本未開的提示也改成 `fm-board.sh setup`。
+  缺編譯結果時的錯誤不再叫人跑 `/updatefirstmate`。
+- `todo add` 與 `todo done` 在看板自己存這些項目之前（B3）仍執行四個 first mate 的指令，只執行、不 source。
+- 主 home 規則範本升到 v9、共用的升到 v3：指令名稱換成新的，`order` 那一句多一句「看板通知議題可派時也重新評估」。
+  為了留在 1450 token 的上限內（約 1445），拿掉了 `split` 那一句的「中途失敗就原樣再跑一次」（指令失敗時自己會這樣說）、第一行的「fork 裡的」，與兩處 `bin/`。
+  真的 home 要由使用者明講之後在主 home 重跑 `bin/fm-board.sh install-rules`。
+- 新的第七段從只有看板自己的檔的副本跑看板：乾淨的環境、只有系統目錄的 `PATH`、每支其他 first mate 腳本的絆線，以及升級時跑著的看板不需要任何手動步驟。
+
 ### C28　使用者的 ub-mode 與全域規範裡沒有做到的
 
 - 測試不是每一步都先寫：第一段與之後的修正是測試先行；第二段起多半是程式與測試一起寫，再用測試把問題找出來（找到的都記在上面）。單元測試是全部寫完之後才補的。

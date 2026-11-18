@@ -1,5 +1,7 @@
 # 第一段：只讀寫檔的指令
 
+這一段的 `tag`、`setup`、`--in-home` 與 `order` 後來搬到 first mate 這一側（`bin/fm-board.sh`、`bin/fm-dispatch-plan.sh`），現在的用法與檔案見 [adapter](../../fm-board/spec/adapter.markdown)；下面照當時的樣子保留。
+
 全是 Bash，不需要看板服務，不需要 `node`。做完之後 first mate 就能標記 task、看派工順序，遠端 home 也已經有它需要的全部程式碼。
 
 ## 先驗再做

@@ -7,8 +7,8 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tests/lib.sh"
 
-TMP_ROOT=$(fm_test_tmproot tb-guide)
-CHECK="$ROOT/topic-board/test/check-guide.sh"
+TMP_ROOT=$(fm_test_tmproot fm-board-guide)
+CHECK="$ROOT/fm-board/test/check-guide.sh"
 GUIDE="$ROOT/FORK-SETUP.markdown"
 
 # check_copy <name> <line>: run the check on a copy of the guide with <line>
@@ -38,8 +38,11 @@ test_real_guide_passes() {
 test_catches_wrong_names() {
   expect_caught link '[壞](docs/no-such-file.md#x)' "link target does not exist: docs/no-such-file.md"
   expect_caught script '`bin/fm-no-such-script.sh`' "bin/fm-no-such-script.sh"
-  expect_caught subcommand '`bin/fm-topic.sh frobnicate`' "no subcommand 'frobnicate'"
-  expect_caught in-home '`bin/fm-topic.sh --in-home <id> frob`' "no subcommand 'frob'"
+  expect_caught subcommand '`bin/fm-topic.sh frobnicate`' "fm-topic.sh has no subcommand 'frobnicate'"
+  expect_caught moved-subcommand '`bin/fm-topic.sh setup`' "fm-topic.sh has no subcommand 'setup'"
+  expect_caught board-subcommand '`bin/fm-board.sh frobnicate`' "fm-board.sh has no subcommand 'frobnicate'"
+  expect_caught in-home '`bin/fm-board.sh --in-home <id> frob`' "fm-board.sh has no subcommand 'frob'"
+  expect_caught plan-subcommand '`bin/fm-dispatch-plan.sh frobnicate`' "fm-dispatch-plan.sh has no subcommand 'frobnicate'"
   expect_caught config '`config/no-such-flag`' "no script under bin/ mentions config/no-such-flag"
   expect_caught slash-skill '`/no-such-skill`' "no skill named no-such-skill"
   expect_caught named-skill '`no-such-skill` 技能' "no skill named no-such-skill"
@@ -50,7 +53,7 @@ test_catches_wrong_template_versions() {
   expect_caught main-version '`captain.md：新增（v99）`' "captain.md is cited at v99"
   expect_caught shared-version '`規則：captain.md 和範本相同（v6）；captain-shared.md 和範本相同（v98）`' \
     "captain-shared.md is cited at v98"
-  pass "a template version that differs from topic-board/rules fails the check"
+  pass "a template version that differs from fm-board/rules fails the check"
 }
 
 test_missing_guide() {

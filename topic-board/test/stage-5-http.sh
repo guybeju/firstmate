@@ -28,6 +28,7 @@ t() {
   FM_HOME="$MAIN" FM_ROOT_OVERRIDE="$CODE_ROOT" "$CODE_ROOT/bin/fm-topic.sh" "$@"
 }
 
+t open >/dev/null || fail "the board did not start"
 t create "Billing" --goal "rework billing" --id billing >/dev/null
 t create "Login" --goal "new login" --id login >/dev/null
 t create "Idea" --goal "to merge" --id idea --queue later >/dev/null

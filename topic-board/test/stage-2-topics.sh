@@ -14,6 +14,7 @@ TMP_ROOT=$(fm_test_tmproot tb-s2t)
 trap 'tb_stop_boards; fm_test_cleanup' EXIT
 
 HOME_DIR=$(tb_make_service_home topics)
+tb_run "$HOME_DIR" "$TOPIC" open >/dev/null || fail "the board did not start"
 
 t() {
   tb_run "$HOME_DIR" "$TOPIC" "$@"
@@ -158,7 +159,7 @@ test_merge() {
   t merge my.id-1 billing-rework >/dev/null
   assert_equals "billing-rework" "$(queue high)" "a merged topic must leave its queue"
   assert_contains "$(t rename side "Billing")" "ok billing-rework " "an old id must act on the topic it was merged into"
-  tb_run "$HOME_DIR" "$TOPIC" tag task-1 side >/dev/null
+  tb_run "$HOME_DIR" "$BOARD" tag task-1 side >/dev/null
   assert_equals billing-rework "$(cut -d' ' -f1 "$HOME_DIR/data/task-1/topic")" "tag must follow the merged id"
   expect_code 1 "$(code create "Reuse" --goal "g" --id side)" "reusing a merged id"
   expect_code 1 "$(code merge billing-rework billing-rework)" "merging a topic into itself"
@@ -182,7 +183,9 @@ test_reset_token() {
 # (normal when it named none), oldest first, the moment it starts.
 test_confirms_leftover_proposals() {
   local home out
+  # A home whose older board left proposals behind.
   home=$(tb_make_service_home leftover)
+  tb_board_has_run "$home"
   cat > "$home/data/topics.json" <<'JSON'
 {
   "v": 1, "next_seq": 1,
@@ -222,7 +225,7 @@ JSON
     fail "firstmate, which may still be waiting to hear, must be told what was confirmed"
   assert_contains "$(tb_run "$home" "$TOPIC" list)" "$(printf 'first\tconfirmed\tnormal\t2\tFirst')" \
     "list must show the confirmed proposal in its queue"
-  tb_run "$home" "$TOPIC" tag task-10 urgent >/dev/null || fail "a confirmed proposal must take tags"
+  tb_run "$home" "$BOARD" tag task-10 urgent >/dev/null || fail "a confirmed proposal must take tags"
   tb_run "$home" "$TOPIC" restart >/dev/null
   tb_run "$home" "$TOPIC" find First >/dev/null
   assert_equals 3 "$(grep -c '"kind":"topic.confirmed"' "$home/data/topic-board/events.jsonl")" \
@@ -231,14 +234,15 @@ JSON
   pass "a board that starts with leftover proposals confirms them at the end of their queues"
 }
 
-# A secondmate home keeps no topic file, so a topic can only be made in the main home.
+# A secondmate home keeps no topic file and session start never opens a board
+# there, so it has no token and a topic can only be made in the main home.
 test_secondmate_home_cannot_create() {
   local home out rc=0
   home=$(tb_make_secondmate_home sm-create sm1)
   tb_free_port > "$home/config/topic-board-port"
   out=$(tb_run "$home" "$TOPIC" create "Elsewhere" --goal "g" 2>&1) || rc=$?
   expect_code 1 "$rc" "create in a secondmate home"
-  assert_contains "$out" "只在主 home" "the refusal must say topics live in the main home"
+  assert_contains "$out" "這裡沒有看板" "the refusal must say this home has no board"
   assert_absent "$home/data/topics.json" "a secondmate home must not get a topic file"
   assert_absent "$home/state/topic-board" "a secondmate home must not start a board"
   pass "create runs only in the main home"

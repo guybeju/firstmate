@@ -83,7 +83,7 @@ function answerInvocation(command, known) {
         case "main":
             return { script: answers[0], args: answers.slice(1), stdin };
         case "local":
-            return { script: "fm-topic.sh", args: ["--in-home", secondmate, "answers"], stdin };
+            return { script: "fm-board.sh", args: ["--in-home", secondmate, "answers"], stdin };
         case "remote":
             return { script: "fm-on.sh", args: ["--stdin", secondmate, ...answers], stdin };
     }
@@ -93,11 +93,11 @@ function tagInvocation(command, known) {
     const secondmate = placed(command, known);
     switch (command.placement) {
         case "main":
-            return { script: "fm-topic.sh", args: tag };
+            return { script: "fm-board.sh", args: tag };
         case "local":
-            return { script: "fm-topic.sh", args: ["--in-home", secondmate, ...tag] };
+            return { script: "fm-board.sh", args: ["--in-home", secondmate, ...tag] };
         case "remote":
-            return { script: "fm-on.sh", args: [secondmate, "fm-topic.sh", ...tag] };
+            return { script: "fm-on.sh", args: [secondmate, "fm-board.sh", ...tag] };
     }
 }
 function relayInvocation(command, known) {

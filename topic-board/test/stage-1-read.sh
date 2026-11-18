@@ -202,8 +202,8 @@ test_usage_and_failure() {
   expect_code 2 "$(tb_code "$home" "$BOARD_READ" 0 - extra)" "an extra argument"
   root="$TMP_ROOT/read-root"
   mkdir -p "$root/bin"
-  cp "$ROOT"/bin/fm-topic-board-read.sh "$ROOT"/bin/fm-topic-lib.sh "$ROOT"/bin/fm-primary-scope-lib.sh \
-    "$ROOT"/bin/fm-secondmate-registry-lib.sh "$root/bin/"
+  cp "$ROOT"/bin/fm-topic-board-read.sh "$ROOT"/bin/fm-topic-lib.sh "$ROOT"/bin/fm-board-lib.sh \
+    "$ROOT"/bin/fm-primary-scope-lib.sh "$ROOT"/bin/fm-secondmate-registry-lib.sh "$root/bin/"
   printf '#!/usr/bin/env bash\necho partial\nexit 1\n' > "$root/bin/fm-fleet-snapshot.sh"
   chmod +x "$root/bin/fm-fleet-snapshot.sh"
   out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-topic-board-read.sh" 0 - 2>/dev/null) &&
@@ -218,8 +218,8 @@ test_a_spawn_seeded_worker_is_unstarted() {
   write_fleet "$home"
   root="$TMP_ROOT/read-unstarted-root"
   mkdir -p "$root/bin"
-  cp "$ROOT"/bin/fm-topic-board-read.sh "$ROOT"/bin/fm-topic-lib.sh "$ROOT"/bin/fm-primary-scope-lib.sh \
-    "$ROOT"/bin/fm-secondmate-registry-lib.sh "$root/bin/"
+  cp "$ROOT"/bin/fm-topic-board-read.sh "$ROOT"/bin/fm-topic-lib.sh "$ROOT"/bin/fm-board-lib.sh \
+    "$ROOT"/bin/fm-primary-scope-lib.sh "$ROOT"/bin/fm-secondmate-registry-lib.sh "$root/bin/"
   tb_seed_unstarted "$root" run-a
   assert_equals 'run-a|working|true' \
     "$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-topic-board-read.sh" 0 - |

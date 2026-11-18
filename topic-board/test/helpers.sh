@@ -13,12 +13,21 @@ unset tmpdir_default
 
 TOPIC="$ROOT/bin/fm-topic.sh"
 BOARD_READ="$ROOT/bin/fm-topic-board-read.sh"
+BOARD="$ROOT/bin/fm-board.sh"
 
 # tb_make_home <name>: create an empty main home under TMP_ROOT and print it.
 tb_make_home() {
   local home=$TMP_ROOT/$1
   mkdir -p "$home/state" "$home/data" "$home/config" "$home/projects"
   printf '%s\n' "$home"
+}
+
+# tb_board_has_run <home>: give <home> the token the board service writes the
+# first time it starts, so fm-topic.sh treats it as a home whose board has run.
+tb_board_has_run() {
+  mkdir -p "$1/state/topic-board"
+  printf '%064d\n' 0 > "$1/state/topic-board/token"
+  chmod 600 "$1/state/topic-board/token"
 }
 
 # tb_make_secondmate_home <name> <id>: like tb_make_home plus the marker file
@@ -237,9 +246,45 @@ esac
 input=$(cat)
 tb_fake "fm-on.sh.$script" "$input" "$id" "$@"
 case "$script" in
-  fm-topic.sh) FM_HOME="$TB_REMOTES/$id" exec "$(dirname "$0")/$script" "$@" ;;
+  fm-board.sh) FM_HOME="$TB_REMOTES/$id" exec "$(dirname "$0")/$script" "$@" ;;
   fm-captain-hold.sh) printf 'closed: %s\n' "${input%%$'\t'*}" ;;
 esac
 SH
   chmod +x "$fake"/bin/fm-on.sh "$fake"/bin/fm-inbox.sh "$fake"/bin/fm-send.sh "$fake"/bin/fm-captain-hold.sh
+}
+
+# --- board-only root ------------------------------------------------------------
+
+# The files a board-only root holds: the board's command and library, its
+# build, its page, and package.json (an install has it, and an older node 22
+# needs it to load dist/ as modules).
+TB_BOARD_FILES="bin/fm-topic.sh bin/fm-topic-lib.sh topic-board/dist topic-board/public topic-board/package.json"
+
+# tb_make_board_root <dir> [<rev>]: a copy, not symlinks, of exactly the
+# board's files, from this working tree or, with <rev>, from that commit of
+# this checkout; then a git repository holding them as its one commit. The
+# service finds its page next to its own running file, so a symlinked root
+# would serve this checkout's page.
+tb_make_board_root() {
+  local dir=$1 rev=${2:-} path
+  mkdir -p "$dir"
+  if [ -n "$rev" ]; then
+    # shellcheck disable=SC2086 # the file list is a list of words.
+    git -C "$ROOT" archive "$rev" $TB_BOARD_FILES | tar -x -C "$dir"
+  else
+    for path in $TB_BOARD_FILES; do
+      mkdir -p "$dir/$(dirname "$path")"
+      cp -R "$ROOT/$path" "$dir/$path"
+    done
+  fi
+  tb_commit_root "$dir" "board-only root"
+}
+
+# tb_commit_root <dir> <message>: commit everything in <dir> (making it a git
+# repository first when it is not one) and print the new commit.
+tb_commit_root() {
+  [ -d "$1/.git" ] || git -C "$1" init -q -b main
+  git -C "$1" add -A
+  git -C "$1" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm "$2"
+  git -C "$1" rev-parse HEAD
 }

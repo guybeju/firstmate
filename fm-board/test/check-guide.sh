@@ -5,16 +5,17 @@
 #   - every relative Markdown link points at an existing file (anchors after
 #     '#' are not checked);
 #   - every bin/fm-*.sh it names exists and is executable;
-#   - every "fm-topic.sh <sub>" (also after "--in-home <id>") names a
-#     subcommand listed in bin/fm-topic.sh's usage header;
+#   - every "fm-topic.sh <sub>", "fm-board.sh <sub>" (also after
+#     "--in-home <id>") and "fm-dispatch-plan.sh <sub>" names a subcommand
+#     listed in that script's usage header;
 #   - every config/<name> it names appears in some script under bin/;
 #   - every `/<skill>` and every `<skill>` 技能 has .agents/skills/<skill>/SKILL.md;
 #   - every version written after captain.md or captain-shared.md, such as
-#     "（v8）", equals the version on the first line of its template in
-#     topic-board/rules/.
+#     "（v9）", equals the version on the first line of its template in
+#     fm-board/rules/.
 # Prints one "not ok" line per problem and exits 1, or one "ok" line and 0.
 #
-# Usage: topic-board/test/check-guide.sh [<guide> [<link-base-dir>]]
+# Usage: fm-board/test/check-guide.sh [<guide> [<link-base-dir>]]
 #   <guide> defaults to FORK-SETUP.markdown at the checkout root; relative
 #   links resolve against <link-base-dir>, which defaults to the guide's
 #   directory.
@@ -62,20 +63,23 @@ check_scripts() {
   done <<< "$(cited 'bin/fm-[A-Za-z0-9_-]+\.sh')"
 }
 
-# The subcommands bin/fm-topic.sh's usage header lists, one per line.
-topic_subcommands() {
-  sed -n 's/^#   fm-topic\.sh //p' "$ROOT/bin/fm-topic.sh" | tr '|' '\n' |
+# usage_subcommands <script>: the subcommands bin/<script>'s usage header
+# lists, one per line.
+usage_subcommands() {
+  sed -n "s/^#   ${1//./\\.} //p" "$ROOT/bin/$1" | tr '|' '\n' |
     awk '{ if ($1 == "--in-home") print $3; else print $1 }' | sort -u
 }
 
-check_topic_subcommands() {
-  local known use sub
-  known=$(topic_subcommands)
+# check_subcommands <script>: every "<script> [--in-home <id>] <sub>" the
+# guide cites names a subcommand of that script.
+check_subcommands() {
+  local script=$1 known use sub
+  known=$(usage_subcommands "$script")
   while IFS= read -r use; do
     [ -n "$use" ] || continue
     sub=${use##* }
-    printf '%s\n' "$known" | grep -qxF "$sub" || problem "fm-topic.sh has no subcommand '$sub' (cited as: $use)"
-  done <<< "$(cited 'fm-topic\.sh( --in-home <[^>]*>)? [a-z][a-z-]*')"
+    printf '%s\n' "$known" | grep -qxF "$sub" || problem "$script has no subcommand '$sub' (cited as: $use)"
+  done <<< "$(cited "${script//./\\.}( --in-home <[^>]*>)? [a-z][a-z-]*")"
 }
 
 check_config_files() {
@@ -101,22 +105,24 @@ check_skills() {
 # check_version <preference-file> <its regex> <template>
 check_version() {
   local file=$1 pattern=$2 template=$3 expected use found
-  expected=$(sed -n '1s/^.*topic-board:begin \(v[0-9]*\).*$/\1/p' "$ROOT/topic-board/rules/$template")
+  expected=$(sed -n '1s/^.*topic-board:begin \(v[0-9]*\).*$/\1/p' "$ROOT/fm-board/rules/$template")
   [ -n "$expected" ] || {
-    problem "cannot read the version of topic-board/rules/$template"
+    problem "cannot read the version of fm-board/rules/$template"
     return 0
   }
   while IFS= read -r use; do
     [ -n "$use" ] || continue
     found=${use##*（}
     found=${found%）}
-    [ "$found" = "$expected" ] || problem "$file is cited at $found but topic-board/rules/$template is $expected"
+    [ "$found" = "$expected" ] || problem "$file is cited at $found but fm-board/rules/$template is $expected"
   done <<< "$(cited "${pattern}[^v\`]*（v[0-9]+）")"
 }
 
 check_links
 check_scripts
-check_topic_subcommands
+check_subcommands fm-topic.sh
+check_subcommands fm-board.sh
+check_subcommands fm-dispatch-plan.sh
 check_config_files
 check_skills
 check_version captain.md 'captain\.md' captain.block.md.tmpl
