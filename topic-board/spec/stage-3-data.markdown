@@ -58,7 +58,7 @@
 
 每次有新資料，重算一份完整的看板狀態，版本號加一：
 
-- **議題與 agent 的關聯**：對每個 (home, task)，取議題標記最後一行的議題 id，過 `merged`。結果是已確認、未封存的議題就歸給它；封存的歸給那個封存議題；其他情況（沒有標記、id 對不上、議題還在提議中）進未分類區，並帶原因。
+- **議題與 agent 的關聯**：對每個 (home, task)，取議題標記最後一行的議題 id，過 `merged`。結果是沒封存的議題就歸給它；封存的歸給那個封存議題；其他情況（沒有標記、id 對不上）進未分類區，並帶原因。
 - **每個議題的更新**：帳本事件依「事件時間之前最近的一行標記」歸議題；系統紀錄用自己的 `topic`；里程碑摘要依 (home, task) 目前的議題歸。依時間排，新的在上。
 - **PR 連結**：`task.pr_ready`、`task.merged` 事件自己帶的網址。`ready` 與 `landed` 的摘要接上同一個 (home, task) 在摘要時間之前最近一筆 `task.pr_ready` 或 `task.merged` 的連結；`report` 與 `failed` 不接。
 - **燈號**：照 [contracts](contracts.markdown) 第 5 節。secondmate 自己（`kind` 是 secondmate 的 task）不列為 agent；只列它派出的 worker，並標明所在的 home。

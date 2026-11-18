@@ -51,9 +51,7 @@ function editable(
   ];
 }
 
-function menu(page: Page, view: View, actions: Actions, id: string): Child {
-  const proposed = view.topics[id]?.status === "proposed";
-  const archiveLabel = proposed ? "不採用" : "封存";
+function menu(page: Page, actions: Actions): Child {
   return h(
     "span",
     { class: "menu" },
@@ -69,7 +67,7 @@ function menu(page: Page, view: View, actions: Actions, id: string): Child {
       ? h(
           "div",
           { class: "items" },
-          h("button", { onclick: () => actions.setPanel("archive") }, archiveLabel),
+          h("button", { onclick: () => actions.setPanel("archive") }, "封存"),
           h("button", { onclick: () => actions.setPanel("merge") }, "併入其他議題…"),
         )
       : null,
@@ -124,7 +122,7 @@ function header(page: Page, view: View, actions: Actions, id: string): Child {
     topic.status === "archived"
       ? "已封存"
       : topic.queue === null
-        ? "提議中"
+        ? "沒有排進佇列"
         : `佇列：${QUEUE_LABEL[topic.queue]}`;
   return [
     h(
@@ -132,7 +130,7 @@ function header(page: Page, view: View, actions: Actions, id: string): Child {
       { class: "titleline" },
       editable(page, actions, id, "name", topic.name),
       h("span", { class: "pill" }, place),
-      menu(page, view, actions, id),
+      menu(page, actions),
     ),
     h("div", { class: "titleline" }, editable(page, actions, id, "goal", topic.goal)),
     panels(page, view, actions, id),

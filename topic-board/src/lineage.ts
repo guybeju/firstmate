@@ -3,7 +3,7 @@
 // read by firstmate without filling its context. Asked for everything, it
 // drops the bounds and prints exact times, for working out what went wrong.
 import { QUEUES, resolveTopicId } from "./topics.js";
-import type { HistoryEntry, Topic, TopicState } from "./topics.js";
+import type { HistoryEntry, TopicState } from "./topics.js";
 
 const MAX_TOPICS = 5;
 const MAX_HISTORY = 8;
@@ -21,8 +21,7 @@ function nameOf(state: TopicState, id: string): string | null {
 }
 
 /** Where a live topic sits now. */
-function placeOf(state: TopicState, id: string, topic: Topic): string {
-  if (topic.status === "proposed") return "提議中";
+function placeOf(state: TopicState, id: string): string {
   const queue = QUEUES.find((name) => state.doc.queues[name].includes(id));
   return queue === undefined ? "沒有排進佇列" : QUEUE_LABEL[queue];
 }
@@ -32,7 +31,7 @@ function header(state: TopicState, id: string): string {
   if (archived !== undefined) return `${id}　${archived.name}（已封存）`;
   const topic = state.doc.topics[id];
   if (topic === undefined) return `${id}　（已不存在）`;
-  return `${id}　${topic.name}（${placeOf(state, id, topic)}）`;
+  return `${id}　${topic.name}（${placeOf(state, id)}）`;
 }
 
 /** The line for a merge, rename, or split, which name the topic the change started from. */

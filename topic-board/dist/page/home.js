@@ -69,17 +69,7 @@ function tagMenu(view, actions, agent) {
 const UNSORTED_REASON = {
     "no-tag": "沒有標記",
     "unknown-topic": "標記的議題不存在",
-    proposed: "標記的議題還在提議中",
 };
-function proposals(page, view, actions) {
-    return Object.entries(view.topics)
-        .filter(([, topic]) => topic.status === "proposed")
-        .map(([id, topic]) => {
-        const queue = topic.suggested_queue ?? "normal";
-        const key = `merge:${id}`;
-        return h("div", { class: "card" }, h("button", { class: "link", onclick: () => actions.open(id) }, topic.name), h("span", { class: "pill" }, "提議中"), h("div", { class: "goal" }, topic.goal), h("div", { class: "btns" }, h("button", { class: "primary", onclick: () => actions.topic("confirm", { id, queue }) }, `確認（放「${QUEUE_LABEL[queue]}」）`), QUEUES.filter((other) => other !== queue).map((other) => h("button", { onclick: () => actions.topic("confirm", { id, queue: other }) }, `放「${QUEUE_LABEL[other]}」`)), mergeMenu(view, actions, id, key), h("button", { onclick: () => actions.topic("archive", { id }) }, "不採用")), mergeConfirm(page, view, actions, key));
-    });
-}
 /** A menu that starts merging `from` into the chosen topic. */
 export function mergeMenu(view, actions, from, key) {
     const choose = (event) => {
@@ -100,7 +90,7 @@ export function mergeConfirm(page, view, actions, key) {
     return h("div", { class: "confirm" }, `併入之後不能拆開，「${from}」的 agent 與更新都會顯示在「${into}」底下。`, h("div", { class: "btns" }, h("button", { class: "danger", onclick: () => actions.confirm(key) }, `併入「${into}」`), h("button", { onclick: () => actions.cancel(key) }, "取消")));
 }
 function unsorted(page, view, actions) {
-    return section("未分類", proposals(page, view, actions), view.agents
+    return section("未分類", view.agents
         .filter((agent) => agent.topic === null)
         .map((agent) => h("div", { class: "row" }, h("span", { class: "grow" }, h("b", {}, agent.task), " ", h("span", { class: "note" }, UNSORTED_REASON[agent.unsorted_reason ?? ""] ?? "")), h("span", { class: "pill" }, agent.home), tagMenu(view, actions, agent))), view.summaries
         .filter((summary) => summary.topic === null)

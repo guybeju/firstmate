@@ -10,9 +10,7 @@ function nameOf(state, id) {
     return state.doc.topics[id]?.name ?? state.archive.topics[id]?.name ?? null;
 }
 /** Where a live topic sits now. */
-function placeOf(state, id, topic) {
-    if (topic.status === "proposed")
-        return "提議中";
+function placeOf(state, id) {
     const queue = QUEUES.find((name) => state.doc.queues[name].includes(id));
     return queue === undefined ? "沒有排進佇列" : QUEUE_LABEL[queue];
 }
@@ -23,7 +21,7 @@ function header(state, id) {
     const topic = state.doc.topics[id];
     if (topic === undefined)
         return `${id}　（已不存在）`;
-    return `${id}　${topic.name}（${placeOf(state, id, topic)}）`;
+    return `${id}　${topic.name}（${placeOf(state, id)}）`;
 }
 /** The line for a merge, rename, or split, which name the topic the change started from. */
 function describeMove(entry, kind) {

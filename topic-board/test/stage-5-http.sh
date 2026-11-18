@@ -28,11 +28,9 @@ t() {
   FM_HOME="$MAIN" FM_ROOT_OVERRIDE="$CODE_ROOT" "$CODE_ROOT/bin/fm-topic.sh" "$@"
 }
 
-t propose "Billing" --goal "rework billing" --id billing >/dev/null
-t propose "Login" --goal "new login" --id login >/dev/null
-t propose "Idea" --goal "to merge" --id idea >/dev/null
-t confirm billing >/dev/null
-t confirm login >/dev/null
+t create "Billing" --goal "rework billing" --id billing >/dev/null
+t create "Login" --goal "new login" --id login >/dev/null
+t create "Idea" --goal "to merge" --id idea --queue later >/dev/null
 cat > "$MAIN/data/backlog.md" <<'EOF'
 ## In flight
 
@@ -152,8 +150,10 @@ test_topic_routes() {
   assert_equals "refused" "$(api topics/rename '{"id":"nope","value":"x"}' | jq -r '.error')" "a refused operation reports why"
   assert_equals 409 "$(status -H "$AUTH" -H "$ORIGIN" -H "$JSON" -d '{"id":"nope","value":"x"}' "$BASE/api/topics/rename")" "a refused operation is 409"
   assert_equals 400 "$(status -H "$AUTH" -H "$ORIGIN" -H "$JSON" -d '{}' "$BASE/api/topics/move")" "a malformed operation is 400"
-  assert_equals 404 "$(status -H "$AUTH" -H "$ORIGIN" -H "$JSON" -d '{"name":"x","goal":"y"}' "$BASE/api/topics/propose")" \
-    "proposing is not offered to the browser"
+  assert_equals 404 "$(status -H "$AUTH" -H "$ORIGIN" -H "$JSON" -d '{"name":"x","goal":"y"}' "$BASE/api/topics/create")" \
+    "creating topics is not offered to the browser"
+  assert_equals 404 "$(status -H "$AUTH" -H "$ORIGIN" -H "$JSON" -d '{"id":"billing"}' "$BASE/api/topics/confirm")" \
+    "the browser has nothing to confirm: every topic is confirmed when it is made"
   pass "the topic routes do what the same fm-topic.sh subcommands do"
 }
 
@@ -161,7 +161,7 @@ test_merge_takes_two_steps() {
   local code
   code=$(api topics/merge '{"from":"idea","into":"billing"}' | jq -r '.confirm')
   [ "${#code}" -eq 32 ] || fail "the first merge request must return a confirmation code"
-  assert_equals "proposed" "$(state '.topics.idea.status')" "the first request must not merge"
+  assert_equals "confirmed" "$(state '.topics.idea.status')" "the first request must not merge"
   got=$(api topics/merge "{\"from\":\"idea\",\"into\":\"login\",\"confirm\":\"$code\"}" | jq -r '.error')
   assert_equals "confirm" "$got" \
     "a code must not work for another target"

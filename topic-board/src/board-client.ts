@@ -288,8 +288,7 @@ interface CommandShape {
 }
 
 const TOPIC_COMMANDS: Record<string, CommandShape> = {
-  propose: { positional: ["name"], valued: ["goal", "id", "queue"], required: ["goal"] },
-  confirm: { positional: ["id"], valued: ["queue"] },
+  create: { positional: ["name"], valued: ["goal", "id", "queue"], required: ["goal"] },
   merge: { positional: ["from", "into"], valued: ["reason"] },
   "close-propose": { positional: ["id"], valued: ["reason"], required: ["reason"] },
   move: { positional: ["id", "queue"], valued: ["before"], bare: ["first"] },

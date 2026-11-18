@@ -48,7 +48,7 @@ mkdir -p "$H/state" "$H/data" "$H/config" "$H/projects"
 printf '## In flight\n\n## Queued\n\n## Done\n' > "$H/data/backlog.md"
 echo 47931 > "$H/config/topic-board-port"          # 任何空著的埠，不要用 47819
 t() { FM_HOME="$H" FM_ROOT_OVERRIDE="$PWD" bin/fm-topic.sh "$@"; }
-t propose "試試看" --goal "一行目標" --id try && t confirm try
+t create "試試看" --goal "一行目標" --id try         # 一建立就排在「一般」最後
 t open                                            # 印出帶 token 的網址
 t stop                                            # 用完要停，再把 $H 丟進垃圾桶
 ```
@@ -85,6 +85,7 @@ t stop                                            # 用完要停，再把 $H 丟
 | C49 | 完成 | #32 |
 | C50 | 完成 | #33 |
 | C51 | 完成 | #34 |
+| C52 | 完成 | 這一條進 `carry` 的 PR（commit 訊息寫明 C52） |
 
 C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold 時記下的處理方式，卡片只剩一個送出鈕（見 C19）。
 
@@ -155,7 +156,7 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
 行為上的：
 
 - 「要你動手」只支援主 home 的項目；按了「做完了」之後使用者不能自己收回；first mate 不能自己關掉項目，要使用者按「好，撤下」（C46）。
-- `find` 平常每個議題只印最近八筆來歷（`--all` 印全部）；來歷不記拖曳排序、改目標、確認提議；`split` 不帶 task 會建一個空議題，新名稱可以和來源相同。
+- `find` 平常每個議題只印最近八筆來歷（`--all` 印全部）；來歷不記拖曳排序、改目標、建立議題；`split` 不帶 task 會建一個空議題，新名稱可以和來源相同。
 - `install-rules` 會換掉結束標記之後同一行的文字（有備份）；別處有一行以標記開頭時拒絕安裝（C37）。
 - 程式退回沒有 `history` 或 `todos` 欄位的舊版時，下一次存檔會丟掉這兩個欄位（見 [rollout](rollout.markdown)）。
 - first mate 自己直接做、沒有派 worker 的項目，在關掉之前會被 `order` 列在「可派」。

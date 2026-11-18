@@ -94,13 +94,9 @@ tag_at() {  # <home> <task> <topic> <iso time>
 }
 
 setup_fleet() {
-  t propose "Billing" --goal "rework billing" --id billing >/dev/null
-  t propose "Login" --goal "new login page" --id login --queue high >/dev/null
-  t propose "Later" --goal "someday" --id later --queue later >/dev/null
-  t propose "Idea" --goal "not confirmed yet" --id idea >/dev/null
-  t confirm billing >/dev/null
-  t confirm login >/dev/null
-  t confirm later >/dev/null
+  t create "Billing" --goal "rework billing" --id billing >/dev/null
+  t create "Login" --goal "new login page" --id login --queue high >/dev/null
+  t create "Later" --goal "someday" --id later --queue later >/dev/null
   cat > "$MAIN/data/backlog.md" <<'EOF'
 ## In flight
 - [ ] ship-a - Ship A (repo: sample) (kind: ship) (hold: merge it?) (hold-kind: captain)
@@ -150,7 +146,7 @@ test_agents_lights_and_placement() {
   out=$(view '.agents | map("\(.home)/\(.task)=\(.light):\(.topic // .unsorted_reason)") | sort | join(" ")')
   assert_contains "$out" "main/ship-a=decide:billing" "a task with a live captain hold must show the decide light"
   assert_contains "$out" "main/ship-b=unknown:later" "a tagged task must be placed in its topic"
-  assert_contains "$out" "main/ship-idea=unknown:proposed" "a task tagged with a proposed topic must be unsorted"
+  assert_contains "$out" "main/ship-idea=unknown:unknown-topic" "a task tagged with an unknown topic must be unsorted"
   assert_contains "$out" "main/ship-loose=unknown:no-tag" "an untagged task must be unsorted"
   assert_contains "$out" "main/gone-task=done:billing" "a cleaned-up task must be done, from its last ledger event"
   assert_contains "$out" "sm1/sm-work=unknown:login" "a local secondmate's worker must be listed with its home"
@@ -182,11 +178,11 @@ test_updates_and_topics() {
   assert_equals "https://example.invalid/pull/7|working：halfway" \
     "$(view '[.updates[] | select(.task == "ship-a")] | "\(.[0].pr)|\(.[1].text)"')" \
     "updates must carry the PR link and the status text"
-  assert_equals 3 "$(view '[.updates[] | select(.source == "board" and .event == "topic.confirmed")] | length')" \
+  assert_equals 3 "$(view '[.updates[] | select(.source == "board" and .event == "topic.created")] | length')" \
     "system records must appear among the updates"
   assert_equals "login|billing|later" "$(view '[.queues.high, .queues.normal, .queues.later] | map(join(",")) | join("|")')" \
     "the view must carry the queues"
-  assert_equals "proposed" "$(view '.topics.idea.status')" "the view must carry proposed topics"
+  assert_equals "confirmed" "$(view '.topics.billing.status')" "the view must carry each topic's status"
   pass "updates gather ledger events and system records under each topic"
 }
 
@@ -290,7 +286,7 @@ test_summary_and_which() {
   assert_equals "Billing：" "$out" "summary --home must resolve a secondmate's task"
   assert_equals "null" "$(view '.summaries[] | select(.task == "far-work") | .pr')" "a report summary carries no PR link"
   assert_equals "未分類：" "$(printf 'x' | t summary ship-loose failed -)" "an untagged task must be reported as unsorted"
-  assert_equals "未分類：" "$(t which ship-idea)" "a task of a proposed topic is unsorted"
+  assert_equals "未分類：" "$(t which ship-idea)" "a task of an unknown topic is unsorted"
   assert_equals "Login：" "$(t which ship-a)" "which must print the same prefix without storing"
   assert_equals "Login：" "$(t which --home sm1 sm-work)" "which --home must resolve a local secondmate's task"
   : > "$REMOTE_SM/unreachable"
@@ -359,8 +355,7 @@ last_topic() {  # <home> <task>: the topic the task is tagged with now
 
 test_split_moves_the_named_tasks_to_a_new_topic() {
   local out rc
-  t propose "Docs" --goal "all the docs" --id docs --queue high >/dev/null
-  t confirm docs >/dev/null
+  t create "Docs" --goal "all the docs" --id docs --queue high >/dev/null
   t tag sp-1 docs >/dev/null
   t tag sp-2 docs >/dev/null
   t --in-home sm1 tag sp-3 docs >/dev/null
@@ -419,7 +414,7 @@ test_split_moves_the_named_tasks_to_a_new_topic() {
 # Runs after the tests above: it renames and merges topics they rely on.
 test_find_traces_renames_merges_and_tasks() {
   local out rc refusal
-  t propose "Reports" --goal "monthly numbers" --id reports >/dev/null
+  t create "Reports" --goal "monthly numbers" --id reports >/dev/null
   t rename reports "Money reports" >/dev/null
   t merge reports billing >/dev/null
   out=$(t find reports) || fail "find failed: $out"
@@ -450,7 +445,7 @@ test_find_traces_renames_merges_and_tasks() {
 # Runs last. It counts lines, so nothing after it may add history to login.
 test_find_says_who_and_why() {
   local out rc all
-  t propose "Duplicate" --goal "same thing twice" --id dup >/dev/null
+  t create "Duplicate" --goal "same thing twice" --id dup >/dev/null
   out=$(t merge dup login --reason "和登入是同一件事") || fail "merge with a reason failed: $out"
   out=$(t split login "Sign-up" --goal "new accounts" --id signup --reason "登入太寬") ||
     fail "split with a reason failed: $out"
@@ -467,7 +462,7 @@ test_find_says_who_and_why() {
   t close-propose signup --reason "帳號流程做完了" >/dev/null
   t archive signup >/dev/null
   assert_contains "$(t find signup)" "封存（用指令；原因：帳號流程做完了）" "an archive must carry the close proposal it followed"
-  t propose "Other" --goal "g" --id other >/dev/null
+  t create "Other" --goal "g" --id other >/dev/null
   rc=0
   out=$(t merge other login --reason "$(printf 'two\nlines')" 2>&1) || rc=$?
   assert_equals 1 "$rc" "a reason of two lines must be refused"

@@ -48,17 +48,15 @@ let open: WriteEngine[];
 
 function topics(): TopicState {
   const state = emptyState();
-  const topic = (name: string, status: "confirmed" | "proposed" = "confirmed") => ({
+  const topic = (name: string) => ({
     name,
     goal: "g",
-    status,
+    status: "confirmed" as const,
     created_at: "",
-    proposed_by: "firstmate" as const,
   });
   state.doc.topics = {
     billing: topic("Billing"),
     login: topic("Login"),
-    idea: topic("Idea", "proposed"),
   };
   state.doc.queues = { high: [], normal: ["billing", "login"], later: [] };
   state.doc.merged = { old: "billing" };
@@ -604,15 +602,15 @@ describe("tagAgent", () => {
     expect(h.delivered).toHaveLength(3);
   });
 
-  it("refuses topics that are not confirmed, unknown homes, and bad task ids", () => {
+  it("refuses archived or unknown topics, unknown homes, and bad task ids", () => {
     const h = harness();
     expect(sent(actions.tagAgent(h.context, "down", "t", "login", "browser")).plan).toMatchObject({
       placement: "remote",
       lastLineAtSend: "",
     });
-    for (const topic of ["idea", "gone", "nope"]) {
+    for (const topic of ["gone", "nope"]) {
       expect(refused(actions.tagAgent(h.context, "main", "t", topic, "browser"))).toBe(
-        `${topic} 不是已確認的議題。`,
+        `${topic} 不是看板上還開著的議題。`,
       );
     }
     expect(refused(actions.tagAgent(h.context, "nobody", "t", "login", "browser"))).toBe(
@@ -985,12 +983,14 @@ describe("api", () => {
   it("passes topic routes to the topic operation of the same name", async () => {
     const h = harness();
     const { call, seen } = api(h);
-    for (const op of ["confirm", "rename", "goal", "archive", "reopen", "keep"]) {
+    for (const op of ["rename", "goal", "archive", "reopen", "keep"]) {
       expect(await call(`POST topics/${op}`, { id: "a", value: "v" })).toEqual({
         status: 200,
         body: { ok: true, line: `ok ${op}` },
       });
     }
+    // Topics are confirmed when they are made, so the page has nothing to confirm.
+    expect((await call("POST topics/confirm", { id: "a" })).status).toBe(404);
     await call("POST topics/move", { id: "a", queue: "high" });
     await call("POST topics/move", { id: "a", queue: "high", before: "b" });
     expect(seen.slice(-2)).toEqual([

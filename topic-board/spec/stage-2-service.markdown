@@ -114,16 +114,15 @@ client 的流程，除了 `status`、`stop` 之外的每個經 socket 的子命�
 
 | 子命令 | 作用 | 原樣重做時 |
 | --- | --- | --- |
-| `propose <名稱> --goal <一行> [--id <id>] [--queue high\|normal\|later]` | 提議新議題，`status: proposed`，不進佇列，`--queue` 存成 `suggested_queue`。印出 id | 提議中的議題裡已有名稱與目標都相同的，回那個 id，不建第二個。同名不同目標照規則加序號 |
-| `confirm <id> [--queue <佇列>]` | 確認提議，放進佇列尾端。佇列的優先順序：`--queue`、`suggested_queue`、`normal` | 已確認就回成功，不搬位置 |
-| `merge <舊 id> <新 id>` | 把舊議題併進新議題：`merged[舊] = 新`，舊議題從 `topics` 與佇列移除（提議中或已確認的都可以併）。新 id 必須是已確認的 | 已併過就回成功 |
+| `create <名稱> --goal <一行> [--id <id>] [--queue high\|normal\|later]` | 建立新議題，一建立就已確認，排在佇列最後：沒有 `--queue` 就是 `normal`，只有明確傳了才放別的佇列，不從名稱或目標推斷（C52）。印出 id 與放在哪裡 | 沒封存的議題裡已有名稱與目標都相同的，回那個 id，不建第二個，也不搬位置（重做時帶了別的 `--queue` 也一樣）。同名不同目標照規則加序號 |
+| `merge <舊 id> <新 id>` | 把舊議題併進新議題：`merged[舊] = 新`，舊議題從 `topics` 與佇列移除。新 id 必須是沒封存的議題 | 已併過就回成功 |
 | `close-propose <id> --reason <文字>` | 寫入 `close_proposal` | 理由相同不動，不同就換掉 |
 | `move <id> <佇列> [--before <id> \| --first]` | 移動佇列與位置；沒給位置時，新進這個佇列的放尾端 | 沒給位置而議題已在那個佇列就不動 |
 | `rename <id> <名稱>`、`goal <id> <一行>` | 改名、改目標 | 值相同不動 |
-| `archive <id>` | 從 `topics.json` 搬到封存檔，加 `archived_at`，清掉 `close_proposal`。提議中的議題也可以封存，等於不採用這個提議 | 已封存就回成功 |
+| `archive <id>` | 從 `topics.json` 搬到封存檔，加 `archived_at`，清掉 `close_proposal` | 已封存就回成功 |
 | `reopen <id> [--queue <佇列>]` | 從封存檔搬回來，一律變成已確認，預設放「一般」尾端 | 已不在封存檔而且存在就回成功 |
 
-每個 id 參數都先過 `merged` 表。名稱與目標是單行、去頭尾空白、不能是空的；名稱上限 80 個碼位，目標上限 200 個碼位。`move`、`reopen` 觸發的「議題變成可派」通知是第四段的事，這一段只留一個內部事件的掛點。`confirm`、`merge`、`close-propose`、`archive`、`reopen` 各寫一筆系統紀錄進 `events.jsonl`。
+每個 id 參數都先過 `merged` 表。名稱與目標是單行、去頭尾空白、不能是空的；名稱上限 80 個碼位，目標上限 200 個碼位。`move`、`reopen` 觸發的「議題變成可派」通知是第四段的事，這一段只留一個內部事件的掛點。`create`、`merge`、`close-propose`、`archive`、`reopen` 各寫一筆系統紀錄進 `events.jsonl`。
 
 `summary` 與 `which` 在第三段。
 

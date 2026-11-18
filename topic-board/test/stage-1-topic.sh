@@ -30,8 +30,10 @@ test_tag_validates_in_main_home() {
   local home out
   home=$(tb_make_home tag-validate)
   tb_write_topics "$home"
-  out=$(tb_run "$home" "$TOPIC" tag task-1 idea 2>&1) && fail "tag accepted a proposed topic"
+  out=$(tb_run "$home" "$TOPIC" tag task-1 nope 2>&1) && fail "tag accepted an unknown topic"
   assert_contains "$out" "billing" "rejection did not list the usable topics"
+  tb_run "$home" "$TOPIC" tag task-3 idea >/dev/null ||
+    fail "tag refused a leftover proposal, which the board confirms when it next starts"
   expect_code 1 "$(tb_code "$home" "$TOPIC" tag task-1 gone)" "tag of an archived topic"
   expect_code 1 "$(tb_code "$home" "$TOPIC" tag task-1 nope)" "tag of an unknown topic"
   expect_code 2 "$(tb_code "$home" "$TOPIC" tag 'bad/id' billing)" "tag with a malformed task id"
@@ -40,15 +42,15 @@ test_tag_validates_in_main_home() {
   assert_absent "$home/data/task-1/topic" "a rejected tag still wrote a file"
   tb_run "$home" "$TOPIC" tag task-2 old-billing >/dev/null
   assert_equals billing "$(cut -d' ' -f1 "$home/data/task-2/topic")" "merged alias was not resolved to the new id"
-  pass "main-home tag accepts only confirmed, unarchived topics and follows merged ids"
+  pass "main-home tag accepts only live, unarchived topics and follows merged ids"
 }
 
 test_tag_without_topic_file_is_rejected() {
   local home
   home=$(tb_make_home tag-nofile)
   expect_code 1 "$(tb_code "$home" "$TOPIC" tag task-1 billing)" "tag with no topic file"
-  assert_absent "$home/data/task-1/topic" "tag wrote without any confirmed topic"
-  pass "main-home tag refuses when no topic is confirmed yet"
+  assert_absent "$home/data/task-1/topic" "tag wrote without any topic"
+  pass "main-home tag refuses when there is no topic yet"
 }
 
 test_tag_from_copies_the_topic() {
@@ -83,7 +85,7 @@ test_tag_without_jq_warns_and_writes() {
   assert_contains "$out" "jq" "tag without jq did not warn"
   assert_present "$home/data/task-1/topic" "tag without jq wrote nothing"
   expect_code 1 "$(PATH="$fakebin" tb_code "$home" "$TOPIC" list)" "list without jq"
-  pass "tag without jq skips the confirmed check, warns, and still writes"
+  pass "tag without jq skips the topic check, warns, and still writes"
 }
 
 test_list() {
@@ -94,7 +96,7 @@ test_list() {
   tb_write_topics "$home"
   out=$(tb_run "$home" "$TOPIC" list)
   assert_contains "$out" "billing" "list missed a confirmed topic"
-  assert_contains "$out" "idea" "list missed a proposed topic"
+  assert_contains "$out" "idea" "list missed a topic that is in no queue"
   assert_not_contains "$out" "gone" "list showed an archived topic without --all"
   out=$(tb_run "$home" "$TOPIC" list --all)
   assert_contains "$out" "gone" "list --all missed the archived topic"
@@ -104,8 +106,9 @@ test_list() {
     "list --json has the wrong shape for a queued topic"
   assert_equals 'archived' "$(printf '%s' "$out" | jq -r '.[] | select(.id == "gone") | .status')" \
     "list --json did not mark the archived topic"
-  assert_equals 'null' "$(printf '%s' "$out" | jq -r '.[] | select(.id == "idea") | .queue')" \
-    "a proposed topic must not be in a queue"
+  assert_equals 'confirmed:null' "$(printf '%s' "$out" | jq -r '.[] | select(.id == "idea") | "\(.status):\(.queue)"')" \
+    "a leftover proposal is listed as a topic in no queue until the board confirms it"
+  assert_not_contains "$out" "proposed" "list must not report a proposed state"
   home=$(tb_make_secondmate_home list-sm sm1)
   out=$(tb_run "$home" "$TOPIC" list 2>&1) && fail "list ran in a secondmate home"
   assert_contains "$out" "只在主 home" "secondmate list did not explain the refusal"

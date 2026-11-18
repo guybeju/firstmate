@@ -142,29 +142,23 @@ const TOPIC_HANDLERS = {
         const task = stringField(args, "task");
         return task === null ? { usage: "需要 task id。" } : topics.clearTodo(service.state, task);
     },
-    propose: (service, args) => {
+    create: (service, args) => {
         const name = stringField(args, "name");
         const goal = stringField(args, "goal");
         const queue = optionalQueue(args);
         const id = args["id"];
-        if (name === null || goal === null || queue === null)
-            return { usage: "propose 需要名稱與 --goal。" };
+        if (name === null || goal === null)
+            return { usage: "create 需要名稱與 --goal。" };
+        if (queue === null)
+            return { usage: "--queue 只能是 high、normal、later。" };
         if (id !== undefined && typeof id !== "string")
             return { usage: "--id 要是字串。" };
-        return topics.propose(service.state, {
+        return topics.create(service.state, {
             name,
             goal,
-            by: "firstmate",
             ...(id === undefined ? {} : { id }),
             ...(queue === undefined ? {} : { queue }),
         }, now());
-    },
-    confirm: (service, args) => {
-        const id = stringField(args, "id");
-        const queue = optionalQueue(args);
-        if (id === null || queue === null)
-            return { usage: "confirm 需要議題 id。" };
-        return topics.confirm(service.state, id, queue);
     },
     merge: (service, args) => {
         const from = stringField(args, "from");
@@ -676,6 +670,7 @@ function loadService(boot) {
             log(`removed stale temp file ${name} in ${dir}`);
     }
     const timings = pollTimings();
+    const loaded = loadTopicState(paths);
     const journal = new Journal(paths.events);
     const run = commandRunner(boot.config);
     const bump = () => {
@@ -683,7 +678,7 @@ function loadService(boot) {
     };
     const service = {
         ...boot,
-        state: loadTopicState(paths),
+        state: loaded.state,
         journal,
         summaries: new Summaries(paths.summaries),
         timings,
@@ -706,11 +701,45 @@ function loadService(boot) {
         }, writeTimings()),
     };
     void service.writes.resumeUnfinished();
+    announceConfirmed(service, loaded.confirmed);
     return service;
+}
+/**
+ * Records the leftover proposals this start confirmed and tells firstmate,
+ * which may still be waiting for the captain to confirm them.
+ */
+function announceConfirmed(service, confirmed) {
+    if (confirmed.length === 0)
+        return;
+    const lines = confirmed.map((proposal) => {
+        const text = `議題「${proposal.name}」已確認，排在「${topics.QUEUE_LABEL[proposal.queue]}」最後`;
+        service.journal.appendBoard({
+            ts: epochSeconds(),
+            home: null,
+            task: null,
+            kind: "topic.confirmed",
+            topic: proposal.id,
+            text,
+        });
+        return `${text}（id：${proposal.id}）`;
+    });
+    const text = `看板不再等確認，還在提議中的議題已確認：${lines.join("；")}`;
+    service.writes.submit({
+        channel: "auto",
+        home: MAIN_HOME,
+        task: null,
+        topic: null,
+        text,
+        plan: {
+            type: "note",
+            requestId: `tb-confirmed-${crypto.randomBytes(8).toString("hex")}`,
+            body: text,
+        },
+    });
 }
 // Decisions firstmate is waiting on or has to act on. A reopening is left out:
 // the dispatchable notice already covers it.
-const DECISION_EVENTS = ["topic.confirmed", "topic.merged", "topic.archived"];
+const DECISION_EVENTS = ["topic.merged", "topic.archived"];
 /** What the captain just decided on the page, as lines for firstmate; empty when it needs none. */
 function decisionLines(op, args, result) {
     if (!result.changed)
@@ -744,8 +773,8 @@ function claimLines(service, args, result, alreadyClaimed) {
 }
 /**
  * Tells firstmate what the captain decided on the page. Firstmate proposes
- * topics and closings and then waits; without this it would learn the outcome
- * only by asking.
+ * closings and then waits; without this it would learn the outcome only by
+ * asking.
  */
 function notifyDecision(service, lines, topic) {
     if (lines.length === 0)

@@ -208,7 +208,7 @@ export function answer(context: ActionContext, input: AnswerInput, channel: Chan
   };
 }
 
-/** Files an agent under a confirmed topic by tagging its task in the home it lives in. */
+/** Files an agent under a live topic by tagging its task in the home it lives in. */
 export function tagAgent(
   context: ActionContext,
   home: string,
@@ -219,8 +219,8 @@ export function tagAgent(
   const placement = agentTarget(context, home, task);
   if (typeof placement !== "string") return placement;
   const topic = resolveTopicId(context.topics.doc, rawTopic);
-  if (context.topics.doc.topics[topic]?.status !== "confirmed")
-    return refuse(`${rawTopic} 不是已確認的議題。`);
+  if (context.topics.doc.topics[topic] === undefined)
+    return refuse(`${rawTopic} 不是看板上還開著的議題。`);
   return {
     ok: true,
     write: context.writes.submit({

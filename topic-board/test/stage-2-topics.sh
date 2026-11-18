@@ -32,55 +32,47 @@ field() {  # <jq filter over topics.json>
   jq -r "$1" "$HOME_DIR/data/topics.json"
 }
 
-test_propose() {
+test_create() {
   local out
-  out=$(t propose "Billing rework" --goal "move charges to the new service")
-  assert_equals "ok billing-rework 已提議，等使用者確認" "$out" "propose must print the new id"
-  assert_equals "proposed|firstmate|" "$(field '.topics["billing-rework"] | "\(.status)|\(.proposed_by)|\(.suggested_queue // "")"')" \
-    "a proposal must be stored as proposed by firstmate"
-  assert_equals "" "$(queue high)$(queue normal)$(queue later)" "a proposal must not enter any queue"
-  out=$(t propose "Billing rework" --goal "move charges to the new service")
-  assert_contains "$out" "ok billing-rework " "repeating a proposal must return the same id"
-  assert_equals 1 "$(field '.topics | length')" "repeating a proposal must not create a second topic"
-  out=$(t propose "Billing rework" --goal "a different goal")
-  assert_contains "$out" "ok billing-rework-2 " "the same name with another goal must get a numbered id"
-  out=$(t propose "帳務重構" --goal "純中文名稱" --queue high)
+  out=$(t create "Billing rework" --goal "move charges to the new service")
+  assert_equals "ok billing-rework 已建立，排在「一般」最後" "$out" "create must print the new id and where it landed"
+  assert_equals "confirmed" "$(field '.topics["billing-rework"].status')" "a new topic must be confirmed at once"
+  assert_equals "|billing-rework|" "$(queue high)|$(queue normal)|$(queue later)" \
+    "a new topic without --queue must land in the normal queue"
+  out=$(t create "Billing rework" --goal "move charges to the new service")
+  assert_equals "ok billing-rework 本來就有這個議題，在「一般」" "$out" "repeating a create must return the same id"
+  out=$(t create "Billing rework" --goal "move charges to the new service" --queue high)
+  assert_contains "$out" "本來就有這個議題" "a repeat naming another queue must still be a repeat"
+  assert_equals "|billing-rework|" "$(queue high)|$(queue normal)|$(queue later)" \
+    "a repeated create must not add or move the topic"
+  assert_equals 1 "$(field '.topics | length')" "repeating a create must not make a second topic"
+  out=$(t create "Billing rework" --goal "a different goal" --queue later)
+  assert_equals "ok billing-rework-2 已建立，排在「待辦」最後" "$out" "--queue must name the queue it lands in"
+  out=$(t create "帳務重構" --goal "純中文名稱" --queue high)
   assert_contains "$out" "ok t1 " "a name with no usable slug must get t<n>"
-  assert_equals high "$(field '.topics.t1.suggested_queue')" "--queue must be kept as the suggested queue"
   assert_equals 2 "$(field '.next_seq')" "next_seq must advance past the id it handed out"
-  out=$(t propose "Custom" --goal "own id" --id my.id-1)
+  out=$(t create "Custom" --goal "own id" --id my.id-1)
   assert_contains "$out" "ok my.id-1 " "--id must be used as given"
-  expect_code 1 "$(code propose "Dup" --goal "g" --id t1)" "--id of an existing topic"
-  expect_code 1 "$(code propose "Bad" --goal "g" --id "-lead")" "--id starting with a dash"
-  expect_code 1 "$(code propose "   " --goal "g")" "an empty name"
-  expect_code 1 "$(code propose "Name" --goal "$(printf 'two\nlines')")" "a two-line goal"
-  expect_code 1 "$(code propose "$(printf 'x%.0s' $(seq 1 81))" --goal "g")" "a name over 80 characters"
-  expect_code 2 "$(code propose "No goal")" "propose without --goal"
-  expect_code 2 "$(code propose)" "propose without a name"
-  expect_code 2 "$(code propose "Name" --goal "g" --queue urgent)" "propose with an unknown queue"
-  expect_code 2 "$(code propose "Name" --goal "g" --bogus x)" "propose with an unknown flag"
-  pass "propose creates a proposed topic, is repeatable, and validates its input"
-}
-
-test_confirm() {
-  local out
-  out=$(t confirm t1)
-  assert_equals "ok t1 已確認，放進「高」" "$out" "confirm must use the suggested queue"
-  out=$(t confirm t1)
-  assert_contains "$out" "本來就已確認" "confirming twice must be a no-op"
-  assert_equals "t1" "$(queue high)" "confirming twice must not queue the topic twice"
-  t confirm billing-rework >/dev/null
-  t confirm billing-rework-2 --queue later >/dev/null
-  t confirm my.id-1 >/dev/null
-  assert_equals "billing-rework my.id-1" "$(queue normal)" "confirm must default to the end of the normal queue"
-  assert_equals "billing-rework-2" "$(queue later)" "--queue must override the default"
-  expect_code 1 "$(code confirm nope)" "confirming an unknown topic"
-  expect_code 2 "$(code confirm)" "confirm without an id"
-  grep -q '"kind":"topic.confirmed","topic":"t1"' "$HOME_DIR/data/topic-board/events.jsonl" ||
-    fail "confirm must write a system record"
-  assert_equals 4 "$(grep -c '"kind":"topic.confirmed"' "$HOME_DIR/data/topic-board/events.jsonl")" \
-    "a repeated confirm must not write a second system record"
-  pass "confirm queues a proposal once and records it"
+  assert_equals "t1|billing-rework my.id-1|billing-rework-2" "$(queue high)|$(queue normal)|$(queue later)" \
+    "each new topic must land after the topics already in its queue"
+  assert_equals 4 "$(grep -c '"kind":"topic.created"' "$HOME_DIR/data/topic-board/events.jsonl")" \
+    "each new topic must write one system record, and a repeat none"
+  assert_equals "null" "$(field '[.topics[] | .suggested_queue, .proposed_by] | map(select(. != null)) | first')" \
+    "a topic must not carry fields of the removed proposal state"
+  expect_code 1 "$(code create "Dup" --goal "g" --id t1)" "--id of an existing topic"
+  expect_code 1 "$(code create "Bad" --goal "g" --id "-lead")" "--id starting with a dash"
+  expect_code 1 "$(code create "   " --goal "g")" "an empty name"
+  expect_code 1 "$(code create "Name" --goal "$(printf 'two\nlines')")" "a two-line goal"
+  expect_code 1 "$(code create "$(printf 'x%.0s' $(seq 1 81))" --goal "g")" "a name over 80 characters"
+  expect_code 2 "$(code create "No goal")" "create without --goal"
+  expect_code 2 "$(code create)" "create without a name"
+  expect_code 2 "$(code create "Name" --goal "g" --queue urgent)" "create with an unknown queue"
+  expect_code 2 "$(code create "Name" --goal "g" --bogus x)" "create with an unknown flag"
+  out=$(t propose "Old" --goal "old rules" 2>&1) && fail "propose must be gone"
+  assert_contains "$out" "create" "propose must point at create"
+  expect_code 2 "$(code confirm t1)" "confirm, which has nothing left to confirm"
+  assert_equals 4 "$(field '.topics | length')" "the removed subcommands must write nothing"
+  pass "create lands a confirmed topic last in its queue, is repeatable, and validates its input"
 }
 
 test_move() {
@@ -127,8 +119,6 @@ test_rename_goal_and_close_propose() {
   t close-propose t1 --reason "換一個理由" >/dev/null
   assert_equals "換一個理由" "$(field '.topics.t1.close_proposal.reason')" "another reason must replace the first"
   expect_code 2 "$(code close-propose t1)" "close-propose without --reason"
-  t propose "Pending" --goal "not confirmed" --id pending >/dev/null
-  expect_code 1 "$(code close-propose pending --reason "x")" "close-propose on a proposed topic"
   pass "rename, goal, and close-propose store their text and repeats are no-ops"
 }
 
@@ -142,7 +132,7 @@ test_archive_and_reopen() {
     "the archive must keep the topic and drop its close proposal"
   assert_contains "$(t archive t1)" "本來就已封存" "archiving twice must be a no-op"
   expect_code 1 "$(code move t1 high)" "moving an archived topic"
-  expect_code 1 "$(code propose "Reuse" --goal "g" --id t1)" "reusing an archived id"
+  expect_code 1 "$(code create "Reuse" --goal "g" --id t1)" "reusing an archived id"
   assert_not_contains "$(t list)" "t1" "list must hide an archived topic"
   assert_contains "$(t list --all)" "$(printf 't1\tarchived')" "list --all must show the archived topic"
 
@@ -151,9 +141,6 @@ test_archive_and_reopen() {
   assert_equals "billing-rework-2 t1" "$(queue normal)" "reopen must append to the queue"
   assert_equals "{}" "$(jq -c '.topics' "$HOME_DIR/data/topics-archive.json")" "reopen must empty the archive entry"
   assert_contains "$(t reopen t1)" "本來就沒有封存" "reopening twice must be a no-op"
-  t archive pending >/dev/null || fail "a proposed topic must be archivable, to turn a proposal down"
-  t reopen pending --queue high >/dev/null
-  assert_equals "confirmed" "$(field '.topics.pending.status')" "reopening a turned-down proposal accepts it"
   expect_code 1 "$(code archive nope)" "archiving an unknown topic"
   expect_code 1 "$(code reopen nope)" "reopening an unknown topic"
   expect_code 2 "$(code archive)" "archive without an id"
@@ -162,21 +149,19 @@ test_archive_and_reopen() {
 
 test_merge() {
   local out
-  t propose "Side idea" --goal "fold into billing" --id side >/dev/null
+  t create "Side idea" --goal "fold into billing" --id side >/dev/null
   out=$(t merge side billing-rework)
   assert_equals "ok side 已併入 billing-rework" "$out" "merge must report the alias"
   assert_equals "billing-rework|null" "$(field '"\(.merged.side)|\(.topics.side)"')" \
     "merge must record the alias and drop the old topic"
   assert_contains "$(t merge side billing-rework)" "本來就已併入" "merging twice must be a no-op"
   t merge my.id-1 billing-rework >/dev/null
-  assert_equals "billing-rework pending" "$(queue high)" "a merged topic must leave its queue"
+  assert_equals "billing-rework" "$(queue high)" "a merged topic must leave its queue"
   assert_contains "$(t rename side "Billing")" "ok billing-rework " "an old id must act on the topic it was merged into"
   tb_run "$HOME_DIR" "$TOPIC" tag task-1 side >/dev/null
   assert_equals billing-rework "$(cut -d' ' -f1 "$HOME_DIR/data/task-1/topic")" "tag must follow the merged id"
-  expect_code 1 "$(code propose "Reuse" --goal "g" --id side)" "reusing a merged id"
+  expect_code 1 "$(code create "Reuse" --goal "g" --id side)" "reusing a merged id"
   expect_code 1 "$(code merge billing-rework billing-rework)" "merging a topic into itself"
-  t propose "Unconfirmed" --goal "target" --id unconfirmed >/dev/null
-  expect_code 1 "$(code merge t1 unconfirmed)" "merging into a proposed topic"
   expect_code 1 "$(code merge nope t1)" "merging an unknown topic"
   expect_code 2 "$(code merge t1)" "merge with one id"
   pass "merge aliases the old id, and old ids keep working everywhere"
@@ -192,6 +177,74 @@ test_reset_token() {
   pass "reset-token replaces the token file"
 }
 
-fm_test_run test_propose test_confirm test_move test_rename_goal_and_close_propose \
-  test_archive_and_reopen test_merge test_reset_token
+# A board that ran older code can hold topics still waiting for the captain.
+# The new board confirms each at the end of the queue it was proposed for
+# (normal when it named none), oldest first, the moment it starts.
+test_confirms_leftover_proposals() {
+  local home out
+  home=$(tb_make_service_home leftover)
+  cat > "$home/data/topics.json" <<'JSON'
+{
+  "v": 1, "next_seq": 1,
+  "queues": { "high": ["hot-old"], "normal": ["work"], "later": ["park"] },
+  "topics": {
+    "hot-old": { "name": "Hot old", "goal": "g", "status": "confirmed", "created_at": "2026-11-01T00:00:00Z" },
+    "work": { "name": "Work", "goal": "g", "status": "confirmed", "created_at": "2026-11-01T00:00:00Z" },
+    "park": { "name": "Park", "goal": "g", "status": "confirmed", "created_at": "2026-11-01T00:00:00Z" },
+    "second": { "name": "Second", "goal": "g", "status": "proposed", "created_at": "2026-11-18T02:00:00Z",
+                "proposed_by": "firstmate" },
+    "first": { "name": "First", "goal": "g", "status": "proposed", "created_at": "2026-11-18T01:00:00Z",
+               "proposed_by": "firstmate" },
+    "urgent": { "name": "Urgent", "goal": "g", "status": "proposed", "created_at": "2026-11-18T03:00:00Z",
+                "proposed_by": "firstmate", "suggested_queue": "high" }
+  },
+  "merged": { "old-first": "first" }
+}
+JSON
+  cat > "$home/data/topics-archive.json" <<'JSON'
+{ "v": 1, "topics": { "turned-down": { "name": "No", "goal": "g", "status": "proposed", "archived_at": "2026-11-17T00:00:00Z" } } }
+JSON
+  mkdir -p "$home/data/task-9"
+  printf 'first 2026-11-18T01:30:00Z\n' > "$home/data/task-9/topic"
+  out=$(tb_run "$home" "$TOPIC" which task-9) || fail "which failed on a board with leftover proposals: $out"
+  assert_equals "First：" "$out" "a task tagged to a leftover proposal must now be under that topic"
+  assert_equals "hot-old urgent|work first second|park" \
+    "$(jq -r '[.queues.high, .queues.normal, .queues.later] | map(join(" ")) | join("|")' "$home/data/topics.json")" \
+    "leftover proposals must land last in their queues, oldest first, leaving every other topic in place"
+  assert_not_contains "$(cat "$home/data/topics.json" "$home/data/topics-archive.json")" "proposed" \
+    "the files must no longer hold a proposal once the board has started"
+  assert_equals "turned-down" "$(jq -r '.topics | keys | join(" ")' "$home/data/topics-archive.json")" \
+    "an archived proposal must stay archived"
+  assert_equals "first" "$(jq -r '.merged["old-first"]' "$home/data/topics.json")" "merged ids must be kept"
+  assert_equals 3 "$(grep -c '"kind":"topic.confirmed"' "$home/data/topic-board/events.jsonl")" \
+    "each confirmed proposal must write one system record"
+  grep -q '看板不再等確認.*Second.*（id：second）' "$home/state/topic-board/audit.jsonl" ||
+    fail "firstmate, which may still be waiting to hear, must be told what was confirmed"
+  assert_contains "$(tb_run "$home" "$TOPIC" list)" "$(printf 'first\tconfirmed\tnormal\t2\tFirst')" \
+    "list must show the confirmed proposal in its queue"
+  tb_run "$home" "$TOPIC" tag task-10 urgent >/dev/null || fail "a confirmed proposal must take tags"
+  tb_run "$home" "$TOPIC" restart >/dev/null
+  tb_run "$home" "$TOPIC" find First >/dev/null
+  assert_equals 3 "$(grep -c '"kind":"topic.confirmed"' "$home/data/topic-board/events.jsonl")" \
+    "a later start must confirm nothing more"
+  tb_run "$home" "$TOPIC" stop >/dev/null
+  pass "a board that starts with leftover proposals confirms them at the end of their queues"
+}
+
+# A secondmate home keeps no topic file, so a topic can only be made in the main home.
+test_secondmate_home_cannot_create() {
+  local home out rc=0
+  home=$(tb_make_secondmate_home sm-create sm1)
+  tb_free_port > "$home/config/topic-board-port"
+  out=$(tb_run "$home" "$TOPIC" create "Elsewhere" --goal "g" 2>&1) || rc=$?
+  expect_code 1 "$rc" "create in a secondmate home"
+  assert_contains "$out" "只在主 home" "the refusal must say topics live in the main home"
+  assert_absent "$home/data/topics.json" "a secondmate home must not get a topic file"
+  assert_absent "$home/state/topic-board" "a secondmate home must not start a board"
+  pass "create runs only in the main home"
+}
+
+fm_test_run test_create test_move test_rename_goal_and_close_propose \
+  test_archive_and_reopen test_merge test_reset_token test_confirms_leftover_proposals \
+  test_secondmate_home_cannot_create
 t stop >/dev/null

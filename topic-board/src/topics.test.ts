@@ -14,7 +14,7 @@ function refusal(result: TopicResult): string {
   return result.line;
 }
 
-/** A state with confirmed topics a (high), b and c (normal), d (later), and proposed p. */
+/** A state with topics a (high), b and c (normal), and d (later). */
 function fixture(): TopicState {
   let state = topics.emptyState();
   for (const [id, queue] of [
@@ -24,85 +24,100 @@ function fixture(): TopicState {
     ["d", "later"],
   ] as const) {
     state = done(
-      topics.propose(
-        state,
-        { name: id.toUpperCase(), goal: `goal ${id}`, id, by: "firstmate" },
-        NOW,
-      ),
+      topics.create(state, { name: id.toUpperCase(), goal: `goal ${id}`, id, queue }, NOW),
     ).state;
-    state = done(topics.confirm(state, id, queue)).state;
   }
-  return done(topics.propose(state, { name: "P", goal: "goal p", id: "p", by: "firstmate" }, NOW))
-    .state;
+  return state;
 }
 
-describe("propose", () => {
-  it("stores a proposed topic outside every queue and prints its id", () => {
+describe("create", () => {
+  it("lands a new topic at the end of the normal queue when no queue is given", () => {
     const result = done(
-      topics.propose(
-        topics.emptyState(),
-        { name: " Billing rework ", goal: "move it", by: "firstmate", queue: "high" },
-        NOW,
-      ),
+      topics.create(fixture(), { name: " Billing rework ", goal: "move it" }, NOW),
     );
-    expect(result.line).toBe("ok billing-rework 已提議，等使用者確認");
+    expect(result.line).toBe("ok billing-rework 已建立，排在「一般」最後");
     expect(result.changed).toBe(true);
     expect(result.state.doc.topics["billing-rework"]).toEqual({
       name: "Billing rework",
       goal: "move it",
-      status: "proposed",
+      status: "confirmed",
       created_at: NOW,
-      proposed_by: "firstmate",
-      suggested_queue: "high",
     });
-    expect(result.state.doc.queues).toEqual({ high: [], normal: [], later: [] });
+    expect(result.state.doc.queues).toEqual({
+      high: ["a"],
+      normal: ["b", "c", "billing-rework"],
+      later: ["d"],
+    });
+    expect(result.events).toEqual([
+      {
+        kind: "topic.created",
+        topic: "billing-rework",
+        text: "議題「Billing rework」已建立，排在「一般」最後",
+      },
+    ]);
+    expect(result.dispatchable).toEqual([]);
   });
 
-  it("returns the same id for an identical proposal and numbers a different goal", () => {
-    const first = done(
-      topics.propose(topics.emptyState(), { name: "X", goal: "one", by: "firstmate" }, NOW),
+  it("lands in the queue the caller names, after the topics already there", () => {
+    const state = fixture();
+    const high = done(topics.create(state, { name: "Urgent", goal: "g", queue: "high" }, NOW));
+    expect(high.state.doc.queues).toEqual({
+      high: ["a", "urgent"],
+      normal: ["b", "c"],
+      later: ["d"],
+    });
+    expect(high.line).toBe("ok urgent 已建立，排在「高」最後");
+    const later = done(
+      topics.create(high.state, { name: "Someday", goal: "g", queue: "later" }, NOW),
     );
-    const again = done(
-      topics.propose(first.state, { name: "X", goal: "one", by: "firstmate" }, NOW),
-    );
-    expect(again.changed).toBe(false);
-    expect(again.line).toContain("ok x ");
-    expect(again.state).toBe(first.state);
-    const other = done(
-      topics.propose(first.state, { name: "X", goal: "two", by: "firstmate" }, NOW),
-    );
+    expect(later.state.doc.queues.later).toEqual(["d", "someday"]);
+  });
+
+  it("changes nothing when the same topic is created again, whatever queue the repeat names", () => {
+    const first = done(topics.create(fixture(), { name: "X", goal: "one" }, NOW));
+    for (const repeat of [
+      { name: "X", goal: "one" },
+      { name: " X ", goal: "one", queue: "high" as const },
+      { name: "X", goal: "one", id: "x" },
+    ]) {
+      const again = done(topics.create(first.state, repeat, "2026-12-01T00:00:00Z"));
+      expect(again.changed).toBe(false);
+      expect(again.line).toBe("ok x 本來就有這個議題，在「一般」");
+      expect(again.state).toBe(first.state);
+    }
+    const other = done(topics.create(first.state, { name: "X", goal: "two" }, NOW));
     expect(other.line).toContain("ok x-2 ");
-    const third = done(
-      topics.propose(other.state, { name: "X", goal: "three", by: "firstmate" }, NOW),
-    );
+    const third = done(topics.create(other.state, { name: "X", goal: "three" }, NOW));
     expect(third.line).toContain("ok x-3 ");
+    expect(third.state.doc.queues.normal).toEqual(["b", "c", "x", "x-2", "x-3"]);
+  });
+
+  it("creates a new topic when the matching one is archived, under a fresh id", () => {
+    const first = done(topics.create(fixture(), { name: "X", goal: "one" }, NOW)).state;
+    const archived = done(topics.archive(first, "x", NOW)).state;
+    const again = done(topics.create(archived, { name: "X", goal: "one" }, NOW));
+    expect(again.line).toBe("ok x-2 已建立，排在「一般」最後");
   });
 
   it("mints t<n> for a name with no slug and never hands out a used number", () => {
-    const first = done(
-      topics.propose(topics.emptyState(), { name: "帳務", goal: "g", by: "firstmate" }, NOW),
-    );
+    const first = done(topics.create(topics.emptyState(), { name: "帳務", goal: "g" }, NOW));
     expect(first.line).toContain("ok t1 ");
     expect(first.state.doc.next_seq).toBe(2);
-    const taken = done(
-      topics.propose(first.state, { name: "手動", goal: "g", id: "t2", by: "firstmate" }, NOW),
-    );
-    const next = done(
-      topics.propose(taken.state, { name: "登入", goal: "g", by: "firstmate" }, NOW),
-    );
+    const taken = done(topics.create(first.state, { name: "手動", goal: "g", id: "t2" }, NOW));
+    const next = done(topics.create(taken.state, { name: "登入", goal: "g" }, NOW));
     expect(next.line).toContain("ok t3 ");
     expect(next.state.doc.next_seq).toBe(4);
   });
 
   it("refuses bad names, goals, and ids", () => {
     const state = fixture();
-    const propose = (input: Partial<topics.ProposeInput>): TopicResult =>
-      topics.propose(state, { name: "N", goal: "g", by: "firstmate", ...input }, NOW);
-    expect(refusal(propose({ name: "   " }))).toContain("名稱");
-    expect(refusal(propose({ name: "x".repeat(topics.NAME_MAX + 1) }))).toContain("名稱");
-    expect(propose({ name: "x".repeat(topics.NAME_MAX) }).ok).toBe(true);
-    expect(refusal(propose({ goal: "two\nlines" }))).toContain("目標");
-    expect(refusal(propose({ goal: "x".repeat(topics.GOAL_MAX + 1) }))).toContain("目標");
+    const create = (input: Partial<topics.CreateInput>): TopicResult =>
+      topics.create(state, { name: "N", goal: "g", ...input }, NOW);
+    expect(refusal(create({ name: "   " }))).toContain("名稱");
+    expect(refusal(create({ name: "x".repeat(topics.NAME_MAX + 1) }))).toContain("名稱");
+    expect(create({ name: "x".repeat(topics.NAME_MAX) }).ok).toBe(true);
+    expect(refusal(create({ goal: "two\nlines" }))).toContain("目標");
+    expect(refusal(create({ goal: "x".repeat(topics.GOAL_MAX + 1) }))).toContain("目標");
     for (const hidden of [
       "a\tb",
       "a\u001b[31mb",
@@ -112,60 +127,25 @@ describe("propose", () => {
       "a\u202eb",
       "a\u2066b",
     ]) {
-      expect(refusal(propose({ name: hidden }))).toContain("名稱");
-      expect(refusal(propose({ goal: hidden }))).toContain("目標");
+      expect(refusal(create({ name: hidden }))).toContain("名稱");
+      expect(refusal(create({ goal: hidden }))).toContain("目標");
       expect(refusal(topics.rename(state, "a", hidden, NOW))).toContain("名稱");
     }
-    expect(propose({ name: "帳務 重構 😀 (v2) “quoted”", goal: "é ü ñ — ok" }).ok).toBe(true);
+    expect(create({ name: "帳務 重構 😀 (v2) “quoted”", goal: "é ü ñ — ok" }).ok).toBe(true);
     for (const builtin of ["constructor", "__proto__", "toString"]) {
-      expect(refusal(propose({ id: builtin }))).toContain("格式");
+      expect(refusal(create({ id: builtin }))).toContain("格式");
     }
-    expect(refusal(propose({ id: "-lead" }))).toContain("格式");
-    expect(refusal(propose({ id: ".hidden" }))).toContain("格式");
-    expect(refusal(propose({ id: "has space" }))).toContain("格式");
-    expect(refusal(propose({ id: "x".repeat(65) }))).toContain("格式");
-    expect(refusal(propose({ id: "a" }))).toContain("已經用過");
-    expect(propose({ id: "ok.id-1_x" }).ok).toBe(true);
+    expect(refusal(create({ id: "-lead" }))).toContain("格式");
+    expect(refusal(create({ id: ".hidden" }))).toContain("格式");
+    expect(refusal(create({ id: "has space" }))).toContain("格式");
+    expect(refusal(create({ id: "x".repeat(65) }))).toContain("格式");
+    expect(refusal(create({ id: "a" }))).toContain("已經用過");
+    expect(create({ id: "ok.id-1_x" }).ok).toBe(true);
   });
 
   it("counts characters, not UTF-16 units, against the limits", () => {
     const name = "𝒳".repeat(topics.NAME_MAX);
-    expect(topics.propose(topics.emptyState(), { name, goal: "g", by: "firstmate" }, NOW).ok).toBe(
-      true,
-    );
-  });
-});
-
-describe("confirm", () => {
-  it("queues a proposal at the end of the chosen, suggested, or normal queue", () => {
-    const state = fixture();
-    const byDefault = done(topics.confirm(state, "p", undefined));
-    expect(byDefault.state.doc.queues.normal).toEqual(["b", "c", "p"]);
-    expect(byDefault.state.doc.topics["p"]?.status).toBe("confirmed");
-    expect(byDefault.events).toEqual([
-      { kind: "topic.confirmed", topic: "p", text: "議題「P」已確認，放進「一般」" },
-    ]);
-    expect(done(topics.confirm(state, "p", "later")).state.doc.queues.later).toEqual(["d", "p"]);
-    const suggested = done(
-      topics.propose(state, { name: "S", goal: "g", id: "s", queue: "high", by: "firstmate" }, NOW),
-    );
-    expect(done(topics.confirm(suggested.state, "s", undefined)).state.doc.queues.high).toEqual([
-      "a",
-      "s",
-    ]);
-    expect(done(topics.confirm(suggested.state, "s", "later")).line).toBe(
-      "ok s 已確認，放進「待辦」",
-    );
-  });
-
-  it("is a no-op when repeated and refuses unknown or archived topics", () => {
-    const state = fixture();
-    const again = done(topics.confirm(state, "a", "later"));
-    expect(again.changed).toBe(false);
-    expect(again.state).toBe(state);
-    expect(refusal(topics.confirm(state, "nope", undefined))).toContain("沒有 nope");
-    const archived = done(topics.archive(state, "a", NOW)).state;
-    expect(refusal(topics.confirm(archived, "a", undefined))).toContain("已封存");
+    expect(topics.create(topics.emptyState(), { name, goal: "g" }, NOW).ok).toBe(true);
   });
 });
 
@@ -219,11 +199,10 @@ describe("move", () => {
     expect(done(topics.move(state, "b", "normal", { first: true })).changed).toBe(false);
   });
 
-  it("refuses a bad anchor, a proposal, and an unknown topic", () => {
+  it("refuses a bad anchor and an unknown topic", () => {
     const state = fixture();
     expect(refusal(topics.move(state, "b", "normal", { before: "a" }))).toContain("不在那個佇列");
     expect(refusal(topics.move(state, "b", "normal", { before: "b" }))).toContain("不在那個佇列");
-    expect(refusal(topics.move(state, "p", "normal", undefined))).toContain("提議中");
     expect(refusal(topics.move(state, "nope", "normal", undefined))).toContain("沒有 nope");
   });
 });
@@ -235,9 +214,9 @@ describe("rename, goal, and close-propose", () => {
     expect(renamed.state.doc.topics["a"]?.name).toBe("New");
     expect(renamed.line).toBe("ok a 名稱已改");
     expect(done(topics.rename(renamed.state, "a", "New", NOW)).changed).toBe(false);
-    const goal = done(topics.setGoal(state, "p", "fresh goal"));
-    expect(goal.state.doc.topics["p"]?.goal).toBe("fresh goal");
-    expect(goal.line).toBe("ok p 目標已改");
+    const goal = done(topics.setGoal(state, "d", "fresh goal"));
+    expect(goal.state.doc.topics["d"]?.goal).toBe("fresh goal");
+    expect(goal.line).toBe("ok d 目標已改");
     expect(refusal(topics.rename(state, "a", "", NOW))).toContain("名稱");
     expect(refusal(topics.rename(state, "a", "x".repeat(topics.NAME_MAX + 1), NOW))).toContain(
       "名稱",
@@ -267,7 +246,6 @@ describe("rename, goal, and close-propose", () => {
       at: "later",
       reason: "other",
     });
-    expect(refusal(topics.closePropose(state, "p", "x", NOW))).toContain("提議中");
     expect(refusal(topics.closePropose(state, "a", "  ", NOW))).toContain("理由");
     const kept = done(topics.keepOpen(proposed.state, "a"));
     expect(kept.state.doc.topics["a"]?.close_proposal).toBeUndefined();
@@ -288,7 +266,6 @@ describe("archive and reopen", () => {
       goal: "goal b",
       status: "confirmed",
       created_at: NOW,
-      proposed_by: "firstmate",
       archived_at: "T1",
     });
     expect(archived.events[0]?.kind).toBe("topic.archived");
@@ -308,12 +285,8 @@ describe("archive and reopen", () => {
     expect(done(topics.reopen(reopened.state, "b", undefined, NOW)).changed).toBe(false);
   });
 
-  it("turns down a proposal by archiving it and accepts it on reopen", () => {
+  it("refuses to archive or reopen an unknown topic", () => {
     const state = fixture();
-    const dismissed = done(topics.archive(state, "p", NOW));
-    expect(dismissed.state.archive.topics["p"]?.status).toBe("proposed");
-    const accepted = done(topics.reopen(dismissed.state, "p", "high", NOW));
-    expect(accepted.state.doc.topics["p"]?.status).toBe("confirmed");
     expect(refusal(topics.archive(state, "nope", NOW))).toContain("沒有 nope");
     expect(refusal(topics.reopen(state, "nope", undefined, NOW))).toContain("沒有 nope");
   });
@@ -338,11 +311,11 @@ describe("merge", () => {
     ).toBe("Via alias");
   });
 
-  it("follows chains and merges a proposal", () => {
+  it("follows chains", () => {
     const first = done(topics.merge(fixture(), "b", "a", NOW)).state;
     const second = done(topics.merge(first, "a", "c", NOW)).state;
     expect(topics.resolveTopicId(second.doc, "b")).toBe("c");
-    expect(done(topics.merge(second, "p", "b", NOW)).state.doc.merged["p"]).toBe("c");
+    expect(done(topics.merge(second, "d", "b", NOW)).state.doc.merged["d"]).toBe("c");
   });
 
   it("records merges, renames, archiving and reopening in the history, oldest first", () => {
@@ -386,7 +359,6 @@ describe("merge", () => {
       goal: "export files",
       status: "confirmed",
       created_at: NOW,
-      proposed_by: "user",
     });
     expect(split.state.doc.history).toEqual([
       { at: NOW, kind: "split", topic: "exp", name: "Exports", from: "b", from_name: "B" },
@@ -443,10 +415,9 @@ describe("merge", () => {
     expect(line).toContain("不在任何佇列");
   });
 
-  it("refuses a split from a topic that is not confirmed, or with a bad name, goal, or id", () => {
+  it("refuses a split from an unknown or archived topic, or with a bad name, goal, or id", () => {
     const state = fixture();
     const input = { from: "b", name: "Exports", goal: "g" };
-    expect(refusal(topics.split(state, { ...input, from: "p" }, NOW))).toContain("提議中");
     expect(refusal(topics.split(state, { ...input, from: "nope" }, NOW))).toContain("沒有 nope");
     const archived = done(topics.archive(state, "b", NOW)).state;
     expect(refusal(topics.split(archived, input, NOW))).toContain("已封存");
@@ -456,10 +427,9 @@ describe("merge", () => {
     expect(refusal(topics.split(state, { ...input, id: "bad id" }, NOW))).toContain("id");
   });
 
-  it("refuses merging into itself, a proposal, an archived or an unknown topic", () => {
+  it("refuses merging into itself, an archived or an unknown topic", () => {
     const state = fixture();
     expect(refusal(topics.merge(state, "a", "a", NOW))).toContain("它自己");
-    expect(refusal(topics.merge(state, "a", "p", NOW))).toContain("提議中");
     expect(refusal(topics.merge(state, "nope", "a", NOW))).toContain("沒有 nope");
     expect(refusal(topics.merge(state, "a", "nope", NOW))).toContain("沒有 nope");
     const archived = done(topics.archive(state, "b", NOW)).state;
@@ -467,9 +437,9 @@ describe("merge", () => {
     expect(refusal(topics.merge(archived, "b", "a", NOW))).toContain("已封存");
     expect(
       refusal(
-        topics.propose(
+        topics.create(
           done(topics.merge(state, "b", "a", NOW)).state,
-          { name: "B", goal: "g", id: "b", by: "user" },
+          { name: "B2", goal: "g", id: "b" },
           NOW,
         ),
       ),
@@ -501,11 +471,7 @@ describe("helpers", () => {
   });
 
   it("keeps a minted slug short enough to take a numeric suffix", () => {
-    const result = topics.propose(
-      topics.emptyState(),
-      { name: "x".repeat(80), goal: "g", by: "user" },
-      NOW,
-    );
+    const result = topics.create(topics.emptyState(), { name: "x".repeat(80), goal: "g" }, NOW);
     expect(done(result).line).toContain(`ok ${"x".repeat(60)} `);
   });
 

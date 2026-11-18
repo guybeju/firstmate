@@ -6,13 +6,13 @@
 
 ## 1. 名詞
 
-- **議題**：看板上的一張卡。有名稱、一行目標、所在佇列與順序。可以沒有任何 agent。
+- **議題**：看板上的一張卡。有名稱、一行目標、所在佇列與順序。一建立就排在佇列最後，不等誰確認（C52）。可以沒有任何 agent。
 - **議題 id**：議題成立時給的穩定識別碼，改名不變。所有指向議題的地方都用它。
 - **task**：firstmate 原意，一個 worker 跑的一件事。**agent** 是執行某個 task 的 worker，一個 agent 只屬於一個議題。
 - **home**：一個 firstmate home。主 home 記作 `main`；secondmate home 用它的 secondmate id。task id 只在單一 home 內唯一，所以指 task 一律用 (home, task id)。
 - **議題標記**：某個 home 裡一個 task 屬於哪個議題的紀錄，建立 backlog 項目時寫下，最晚在派工前；每個 home 只對自己的 task 持有正本。
-- **歸併**：把一個 agent 或一個提議中的議題併進已確認的議題。對 agent 而言就是在它所在的 home 補寫一筆議題標記。
-- **未分類區**：沒有有效標記的 agent、提議中的議題、沒有歸屬的待決事項與摘要。
+- **歸併**：把一個 agent 歸到一個議題，或把一個議題併進另一個議題。對 agent 而言就是在它所在的 home 補寫一筆議題標記。
+- **未分類區**：沒有有效標記的 agent、沒有歸屬的待決事項與摘要。
 - **要你動手的項目**：要使用者親手做的事（sudo 指令、登入）。底層是主 home 的一個 captain hold，原因以 `動手：` 開頭：那一行其餘的字是要做什麼，之後幾行是要跑的指令，原樣保存。只有主 home 的 hold 算；secondmate home 裡同樣開頭的 hold 仍是一般的待決事項。
 - **待決事項**：等使用者回答的 captain hold。**worker 提問**是狀態行裡的 `needs-decision`，對象是 first mate，看板只列出、不能作答。
 - **燈號**：待你決定、卡住、進行中、完成、未知，共五種。
@@ -53,7 +53,7 @@
 
 | 路徑 | 權限 | 內容 | 誰寫 |
 | --- | --- | --- | --- |
-| `data/topics.json` | 0644 | 提議中與已確認的議題 | 只有看板服務 |
+| `data/topics.json` | 0644 | 沒封存的議題 | 只有看板服務 |
 | `data/topics-archive.json` | 0644 | 已封存的議題 | 只有看板服務 |
 | `data/topic-board/events.jsonl` | 0644 | 各 home 的帳本事件加系統紀錄，只追加 | 只有看板服務 |
 | `data/topic-board/summaries.jsonl` | 0644 | 里程碑摘要，只追加 | 只有看板服務 |
@@ -84,7 +84,6 @@
     "billing": {
       "name": "帳務重構", "goal": "把扣款流程搬到新服務",
       "status": "confirmed", "created_at": "2026-11-16T02:00:00Z",
-      "proposed_by": "firstmate", "suggested_queue": "normal",
       "close_proposal": { "at": "2026-11-17T01:00:00Z", "reason": "三個 PR 都已合併" }
     }
   },
@@ -101,15 +100,18 @@
 }
 ```
 
-- `queues` 的陣列順序就是顯示與派工順序。`status: "proposed"` 的議題不在任何佇列。
+- `queues` 的陣列順序就是顯示與派工順序。
+- `status` 一律是 `confirmed`：議題一建立就已確認，這個欄位留著只是讓還在讀它的舊版程式讀得懂（C52）。
+  舊版程式留下的 `status: "proposed"` 議題，看板啟動時照建立時間排到它提議時的佇列（`suggested_queue`，沒有就是 `normal`）最後，立刻寫回檔案，每一個寫一筆系統紀錄並通知主 first mate；封存檔裡的同樣改成 `confirmed`，仍然留在封存。
+  舊檔的 `proposed_by`、`suggested_queue` 讀了不用，下一次存檔就不再寫。
 - `merged` 是「舊 id → 新 id」，可以串接；讀到舊 id 的地方一律走到底。各 home 的標記檔不重寫。
 - `history` 是來歷紀錄，舊的在前，和議題的變動寫在同一次存檔裡。`kind` 是 `merged`、`renamed`、`split`、`archived`、`reopened`；`topic` 與 `name` 是變動之後留下來的議題，合併另記被併掉的 `from` 與 `from_name`，改名另記舊名字 `from_name`，拆分的 `topic` 是新議題、`from` 是它拆出來的來源。另有兩個可省略的欄位：`reason` 是原因（`merge`、`split` 帶的 `--reason`，或封存之前的關閉提議），`by` 是在哪裡做的，`page` 或 `command`（C50）。搬了哪些 task 不記在這裡，各 task 的標記檔本來就有每次標記的時間。沒有這個欄位的舊檔當成空的；讀不懂的項目略過。`fm-topic.sh find` 讀它。
 - `todos` 記要你動手的項目在「還沒做」之外的狀態，鍵是主 home 的 task id：`claimed`（使用者按了做完了，等 first mate 驗證）、`rejected`（first mate 驗證沒過，附 `reason`）、`obsolete`（first mate 不再需要，附 `reason`，等使用者撤下）。項目本身（標題、說明、指令、開或關）只在 backlog 的 hold 裡；這裡的紀錄只在對應的 hold 還開著時才顯示，hold 不在了的紀錄在下一次寫入時清掉。沒有這個欄位的舊檔當成空的；讀不懂的項目略過。
-- `close_proposal` 沒有就省略。`proposed_by` 是 `firstmate` 或 `user`。
+- `close_proposal` 沒有就省略。
 - `next_seq` 是 `t<流水號>` 的下一個號碼，只增不減（採建議 C14）。
 - `data/topics-archive.json`：`{"v":1,"topics":{<id>:{…同上…,"archived_at":…}}}`。
 
-**議題 id**：文法 `[A-Za-z0-9._-]`，不以 `.` 或 `-` 開頭，最長 64 字元。提議時由名稱產生 slug（小寫、非 `[a-z0-9]` 的連續字元換成 `-`、去頭尾的 `-`）；slug 是空的（例如純中文）就用 `t<next_seq>`；和既有的 id 重複就加 `-2`、`-3`。「既有」包含 `topics`、封存檔與 `merged` 的鍵：封存或併掉的 id 永不重用。`--id` 可以自行指定，一樣要通過這些檢查。
+**議題 id**：文法 `[A-Za-z0-9._-]`，不以 `.` 或 `-` 開頭，最長 64 字元。建立時由名稱產生 slug（小寫、非 `[a-z0-9]` 的連續字元換成 `-`、去頭尾的 `-`）；slug 是空的（例如純中文）就用 `t<next_seq>`；和既有的 id 重複就加 `-2`、`-3`。「既有」包含 `topics`、封存檔與 `merged` 的鍵：封存或併掉的 id 永不重用。`--id` 可以自行指定，一樣要通過這些檢查。
 
 ### 3.2 議題標記 `data/<task-id>/topic`
 
@@ -120,7 +122,8 @@
 每行一個 JSON：
 
 - 帳本事件：`{"src":"ledger","home":"<home>","raw":"<上游帳本的那一行，原樣的字串>"}`。存原始字串而不是解析後的物件，重啟後才能用同樣的位元組去重。上游的事件有 `v`、`ts`（epoch 秒）、`event`、`task`，五種 `event`：`task.dispatched`、`task.status`、`task.pr_ready`、`task.merged`、`task.cleaned_up`。
-- 系統紀錄（`ts` 也是 epoch 秒）：`{"src":"board","ts":…,"kind":"topic.confirmed|topic.merged|agent.tagged|hold.answered|topic.close_proposed|topic.archived|topic.reopened","topic":"<id>","home":…,"task":…,"text":"<顯示用的一行>"}`。議題層級的紀錄沒有 `home` 與 `task`。
+- 系統紀錄（`ts` 也是 epoch 秒）：`{"src":"board","ts":…,"kind":"topic.created|topic.confirmed|topic.merged|agent.tagged|hold.answered|topic.close_proposed|topic.archived|topic.reopened","topic":"<id>","home":…,"task":…,"text":"<顯示用的一行>"}`。議題層級的紀錄沒有 `home` 與 `task`。
+  `topic.confirmed` 只在看板啟動時確認舊版留下的提議時寫（第 3.1 節）；更早寫下的照樣顯示。
 
 去重的鍵是 (home, 帳本那一行的原始位元組)。啟動時讀完整個檔重建去重集合；最後一行沒有換行字元就截掉。
 
@@ -191,7 +194,7 @@
 
 `state/topic-board/board.sock`，0600，不帶 token。一條連線一個要求：client 送一行 JSON `{"v":1,"op":"<名稱>","args":{…}}`，服務回一行 JSON `{"ok":true,"line":"<要印的那一行>",…}` 或 `{"ok":false,"code":"refused|usage|…","line":"<原因與修法>"}`，然後關閉連線。
 
-`op` 的清單：`health`、`status`、`stop`、`propose`、`confirm`、`merge`、`close-propose`、`move`、`rename`、`split`、`goal`、`archive`、`reopen`、`keep`（清掉關閉的提議；`fm-topic.sh` 沒有對應的子命令，頁面的「先不關」用它）、`summary`、`which`、`find`、`todo-failed`、`todo-obsolete`、`todo-clear`（`todo add` 改寫內容後清掉舊狀態用）、`todo-claim`（頁面的「做完了」用它；`fm-topic.sh` 沒有對應的子命令）、`reset-token`。`open` 與 `restart` 由 client 用 `health` 與 `stop` 組出來。另有只給測試用的 `dump`、`test-write`、`test-resend`、`test-ignore`，只在服務的環境變數 `FM_TOPIC_BOARD_TEST=1` 時註冊，平常送這些 `op` 會得到「不認得的 op」。
+`op` 的清單：`health`、`status`、`stop`、`create`、`merge`、`close-propose`、`move`、`rename`、`split`、`goal`、`archive`、`reopen`、`keep`（清掉關閉的提議；`fm-topic.sh` 沒有對應的子命令，頁面的「先不關」用它）、`summary`、`which`、`find`、`todo-failed`、`todo-obsolete`、`todo-clear`（`todo add` 改寫內容後清掉舊狀態用）、`todo-claim`（頁面的「做完了」用它；`fm-topic.sh` 沒有對應的子命令）、`reset-token`。`open` 與 `restart` 由 client 用 `health` 與 `stop` 組出來。另有只給測試用的 `dump`、`test-write`、`test-resend`、`test-ignore`，只在服務的環境變數 `FM_TOPIC_BOARD_TEST=1` 時註冊，平常送這些 `op` 會得到「不認得的 op」。
 
 `health` 回 `{"ok":true,"pid":…,"port":…,"code_commit":…,"boot_id":…,"started_at":…}`。
 
@@ -277,7 +280,7 @@ API 的路徑與 body 由第五段定；這裡只定兩件事：
 
 例外：`--in-home <id> answers` 原樣傳回 `fm-captain-hold.sh` 的 exit code 與輸出。
 
-成功印一行 `ok <id> <做了什麼>`；`propose`、`summary`、`which`、`find`、`order`、`list`、`status`、`open` 各有自己的輸出。錯誤在 stderr 印一行原因與修法。只有 `list` 有 `--json`。
+成功印一行 `ok <id> <做了什麼>`；`summary`、`which`、`find`、`order`、`list`、`status`、`open` 各有自己的輸出。錯誤在 stderr 印一行原因與修法。只有 `list` 有 `--json`。
 
 回 69 時 stderr 的那一行固定是「看板服務無法啟動：<原因>。<怎麼修>。這次的要求沒有寫入。」類別見第二段。
 

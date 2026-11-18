@@ -1,39 +1,35 @@
 import { describe, expect, it } from "vitest";
 import { findLines } from "./lineage.js";
 import * as topics from "./topics.js";
-import type { TopicResult, TopicState } from "./topics.js";
+import type { Queue, TopicResult, TopicState } from "./topics.js";
 
 function done(result: TopicResult): TopicState {
   if (!result.ok) throw new Error(`refused: ${result.line}`);
   return result.state;
 }
 
-/** Topics: 帳務重構 (billing, high), 登入 (login, normal), 點子 (idea, proposed). */
+/** Topics: 帳務重構 (billing, high), 登入 (login, normal), 點子 (idea, later). */
 function fixture(): TopicState {
   let state = topics.emptyState();
-  const add = (id: string, name: string): void => {
-    state = done(topics.propose(state, { name, goal: `${name}的目標`, id, by: "firstmate" }, "T"));
+  const add = (id: string, name: string, queue?: Queue): void => {
+    const input = { name, goal: `${name}的目標`, id, ...(queue === undefined ? {} : { queue }) };
+    state = done(topics.create(state, input, "T"));
   };
-  add("billing", "帳務重構");
+  add("billing", "帳務重構", "high");
   add("login", "登入");
-  add("idea", "點子");
-  state = done(topics.confirm(state, "billing", "high"));
-  state = done(topics.confirm(state, "login", undefined));
+  add("idea", "點子", "later");
   return state;
 }
 
 /** 帳務報表 (reports) renamed from 報表, merged into billing, which then merged into 財務 (finance). */
 function chained(): TopicState {
   let state = fixture();
-  state = done(
-    topics.propose(state, { name: "報表", goal: "g", id: "reports", by: "firstmate" }, "T"),
-  );
+  state = done(topics.create(state, { name: "報表", goal: "g", id: "reports" }, "T"));
   state = done(topics.rename(state, "reports", "帳務報表", "2026-11-18T01:00:00Z"));
   state = done(topics.merge(state, "reports", "billing", "2026-11-20T01:00:00Z"));
   state = done(
-    topics.propose(state, { name: "財務", goal: "g", id: "finance", by: "firstmate" }, "T"),
+    topics.create(state, { name: "財務", goal: "g", id: "finance", queue: "later" }, "T"),
   );
-  state = done(topics.confirm(state, "finance", "later"));
   state = done(topics.merge(state, "billing", "finance", "2026-12-02T01:00:00Z"));
   return state;
 }
@@ -43,7 +39,7 @@ describe("findLines", () => {
     const state = fixture();
     expect(findLines(state, "BILL", [])).toEqual(["billing　帳務重構（高）"]);
     expect(findLines(state, "登", [])).toEqual(["login　登入（一般）"]);
-    expect(findLines(state, "點子的目標", [])).toEqual(["idea　點子（提議中）"]);
+    expect(findLines(state, "點子的目標", [])).toEqual(["idea　點子（待辦）"]);
   });
 
   it("follows an old name through a rename and two merges to where it is now", () => {
@@ -110,11 +106,7 @@ describe("findLines", () => {
     let state = topics.emptyState();
     for (let index = 0; index < 8; index += 1) {
       state = done(
-        topics.propose(
-          state,
-          { name: `同名 ${index}`, goal: "g", id: `t${index}`, by: "firstmate" },
-          "T",
-        ),
+        topics.create(state, { name: `同名 ${index}`, goal: "g", id: `t${index}` }, "T"),
       );
     }
     for (let index = 0; index < 11; index += 1) {
@@ -122,11 +114,11 @@ describe("findLines", () => {
     }
     const lines = findLines(state, "同名", []);
     expect(lines.filter((line) => !line.startsWith("  "))).toEqual([
-      "t0　同名 0 第10版（提議中）",
-      "t1　同名 1（提議中）",
-      "t2　同名 2（提議中）",
-      "t3　同名 3（提議中）",
-      "t4　同名 4（提議中）",
+      "t0　同名 0 第10版（一般）",
+      "t1　同名 1（一般）",
+      "t2　同名 2（一般）",
+      "t3　同名 3（一般）",
+      "t4　同名 4（一般）",
       "還有 3 個議題符合，請用更長的關鍵字。",
     ]);
     expect(lines.slice(1, 10)).toEqual([
@@ -165,7 +157,7 @@ describe("findLines", () => {
     ]);
   });
 
-  it("says when a confirmed topic sits in no queue", () => {
+  it("says when a topic sits in no queue", () => {
     const state = fixture();
     state.doc.queues.normal = [];
     expect(findLines(state, "login", [])).toEqual(["login　登入（沒有排進佇列）"]);
@@ -190,9 +182,7 @@ describe("findLines", () => {
   it("prints no leftover note at exactly the caps, and counts one past them", () => {
     let state = topics.emptyState();
     const add = (index: number): void => {
-      state = done(
-        topics.propose(state, { name: `同 ${index}`, goal: "g", id: `t${index}`, by: "user" }, "T"),
-      );
+      state = done(topics.create(state, { name: `同 ${index}`, goal: "g", id: `t${index}` }, "T"));
     };
     for (let index = 0; index < 5; index += 1) add(index);
     for (let index = 0; index < 8; index += 1) {
@@ -242,9 +232,7 @@ describe("findLines for working out what happened", () => {
   it("prints every topic and every entry with exact times when asked for everything", () => {
     let state = topics.emptyState();
     for (let index = 0; index < 7; index += 1) {
-      state = done(
-        topics.propose(state, { name: `同 ${index}`, goal: "g", id: `t${index}`, by: "user" }, "T"),
-      );
+      state = done(topics.create(state, { name: `同 ${index}`, goal: "g", id: `t${index}` }, "T"));
     }
     for (let index = 0; index < 10; index += 1) {
       state = done(topics.rename(state, "t0", `同 0 版${index}`, `2026-11-18T00:00:0${index}Z`));
