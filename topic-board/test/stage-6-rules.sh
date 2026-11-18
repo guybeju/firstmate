@@ -31,7 +31,7 @@ test_creates_both_files() {
   assert_equals "規則：captain.md 未裝；captain-shared.md 未裝" "$(rules_line "$home")" "status must report missing rules"
   out=$(install "$home") || fail "install-rules failed on an empty home: $out"
   assert_contains "$out" "captain.md：新增（v6）" "install-rules must report the new main block"
-  assert_contains "$out" "captain-shared.md：新增（v1）" "install-rules must report the new shared block"
+  assert_contains "$out" "captain-shared.md：新增（v2）" "install-rules must report the new shared block"
   assert_contains "$out" "生效時間" "install-rules must say when the rules take effect"
   assert_contains "$(cat "$home/data/captain.md")" "fm-topic.sh retract" "the main rules must say how to take back a wrong summary"
   assert_contains "$(cat "$home/data/captain.md")" "fm-topic.sh find" "the main rules must say how to look up a topic's history"
@@ -42,7 +42,7 @@ test_creates_both_files() {
     "a new captain-shared.md must be the header followed by the template"
   gap=$(shared_captain_header_valid "$home/data/captain-shared.md") || fail "upstream rejects the new shared file's header (missing: $gap)"
   assert_equals "drwx------" "$(tb_mode "$home/state/topic-board/rules-backup")" "the backup directory must be 0700"
-  assert_equals "規則：captain.md 和範本相同（v6）；captain-shared.md 和範本相同（v1）" "$(rules_line "$home")" \
+  assert_equals "規則：captain.md 和範本相同（v6）；captain-shared.md 和範本相同（v2）" "$(rules_line "$home")" \
     "status must report installed rules that match the templates"
   pass "install-rules creates both files, and upstream accepts the shared file's header"
 }
@@ -92,7 +92,7 @@ test_second_run_changes_nothing() {
   sleep 1.1
   out=$(install "$home") || fail "a second install-rules failed"
   assert_contains "$out" "captain.md：已是最新（v6）" "an unchanged file must be reported as current"
-  assert_contains "$out" "captain-shared.md：已是最新（v1）" "an unchanged shared file must be reported as current"
+  assert_contains "$out" "captain-shared.md：已是最新（v2）" "an unchanged shared file must be reported as current"
   assert_equals "$stamp" "$(stat -c '%Y %i' "$home/data/captain.md" "$home/data/captain-shared.md" 2>/dev/null ||
     stat -f '%m %i' "$home/data/captain.md" "$home/data/captain-shared.md")" "an unchanged file must not be rewritten"
   assert_equals 0 "$(find "$home/state/topic-board/rules-backup" -type f | wc -l | tr -d ' ')" "nothing may be backed up when nothing changes"

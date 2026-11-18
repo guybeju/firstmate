@@ -22,10 +22,10 @@
 | fork 裡的檔名 | 來源 | 大小 |
 | --- | --- | --- |
 | `captain.block.md.tmpl` | `templates/captain.block.md` | 約 1061 token |
-| `captain-shared.block.md.tmpl` | `templates/captain-shared.block.md` | 約 254 token |
+| `captain-shared.block.md.tmpl` | `templates/captain-shared.block.md` | 約 300 token（v2，加了 `--on-answer` 那一句） |
 | `captain-shared.header.md.tmpl` | `templates/captain-shared.header.md` | 約 81 token |
 
-副檔名不能是 `.md`（[contracts](contracts.markdown) 第 2 節的限制）。token 用上游的算法：UTF-8 位元組數除以 3 無條件進位；三者合計約 1396，預設預算是 7500。
+副檔名不能是 `.md`（[contracts](contracts.markdown) 第 2 節的限制）。token 用上游的算法：UTF-8 位元組數除以 3 無條件進位；三者合計約 1442，預設預算是 7500。
 
 內容照搬，這一段不改任何字。之後要改規則，改的是 fork 裡的範本，然後重跑 `install-rules`；標記那一行的 `vN` 跟著加一。
 

@@ -179,8 +179,8 @@ bin/fm-topic.sh install-rules
 
 它把兩段規則各寫成一個標記區塊，放進 `data/captain.md` 與 `data/captain-shared.md`，區塊外的內容不動，寫之前備份到 `state/topic-board/rules-backup/`。
 
-**確認**：輸出有 `captain.md：新增（v6）` 與 `captain-shared.md：新增（v1）`（已經裝過的是 `已更新` 或 `已是最新`）。
-之後 `bin/fm-topic.sh status` 的最後一行是 `規則：captain.md 和範本相同（v6）；captain-shared.md 和範本相同（v1）`。
+**確認**：輸出有 `captain.md：新增（v6）` 與 `captain-shared.md：新增（v2）`（已經裝過的是 `已更新` 或 `已是最新`）。
+之後 `bin/fm-topic.sh status` 的最後一行是 `規則：captain.md 和範本相同（v6）；captain-shared.md 和範本相同（v2）`。
 裝完重開主 first mate 的 session：規則在下一次 session 開始或下一次壓縮之後才生效（`install-rules` 自己也會印這一句）。
 
 **不對時**：
@@ -195,6 +195,7 @@ bin/fm-topic.sh install-rules
   下一個看板指令發現服務的程式版本不同，會自動換掉舊服務；`status` 出現「目前的程式是 …；下一個指令或 restart 會換成新版」時，也可以直接 `bin/fm-topic.sh restart`。
   **確認**：`status` 的 `程式版本：` 等於 `git -C <clone> rev-parse HEAD`。
 - **規則範本有變**：更新後 `status` 的規則那一行會是 `和範本不同`；由使用者決定之後再跑一次 `install-rules`，再重開 session。
+  有 second mate 時，先和第 8 節第 4 點一樣確認每個 home 都是 `相同` 再裝：新的規則可能用到只有新版程式才有的選項，例如共用規則 v2 要 `fm-captain-hold.sh hold --on-answer`，還沒更新的 home 會拒絕它。
 - **上游有新版**：只有在 fork 的維護者把上游的 `main` 合併進 `carry` 之後才會到你手上，之後就和「fork 有新版」一樣（[rollout「之後怎麼更新」](topic-board/spec/rollout.markdown)）。
   這台機器不用自己合併上游。
 - `carry` 的推送與 base 是 `carry` 的 PR 會跑 fork 自己的 lint 檢查 [`carry-lint.yml`](.github/workflows/carry-lint.yml)，內容是 `bin/fm-lint.sh` 完整的兩個 partition；它只在 fork 的 Actions 開著時才會跑。

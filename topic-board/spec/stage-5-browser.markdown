@@ -48,7 +48,7 @@
 | `POST /api/agents/tag` | `{home, task, topic}` | 歸併 agent |
 | `POST /api/messages` | `{topic, text}` | 給主 first mate |
 | `POST /api/direct` | `{home, task, text}` | 直送 |
-| `POST /api/holds/answer` | 第一步 `{home, task, answer, label}`；第二步再加 `{confirm, mode}`，`mode` 是 `done` 或 `release` | 作答，兩步 |
+| `POST /api/holds/answer` | 第一步 `{home, task, answer, label}`；第二步再加 `{confirm}`。送 `done` 還是 `release` 照 hold 記下的處理方式，請求裡的 `mode` 不看 | 作答，兩步 |
 | `POST /api/todos/claim` | `{task}` | 對要你動手的項目按「做完了」：記成 `claimed` 並通知主 first mate 去驗證；不關 hold。重複按不重複通知 |
 | `POST /api/writes/resend` | `{write_id, confirm?}` | 重送；結果不明的要兩步 |
 | `POST /api/writes/ignore` | `{write_id}` | 忽略 |
@@ -102,7 +102,7 @@
   - 「併入其他議題…」：選一個已確認的議題，走伺服器的兩步確認，第二步寫明「併入之後不能拆開，<舊名稱> 的 agent 與更新都會顯示在 <新名稱> 底下」。
 - 提議中的議題在未分類區，點名稱一樣進議題頁，改名與改目標相同；它的「⋯」選單把「封存」寫成「不採用」（做的是同一件事）。
 
-**待決事項的卡**：問題原文保留換行；有選項就畫按鈕，文字框一律有（單行）。按下任何選項或送出文字，卡片裡出現第二步確認（文字與兩個送出鈕見 [contracts](contracts.markdown) 第 8 節），選了其中一個才送。暫緩的 hold 展開後一樣可以作答。
+**待決事項的卡**：問題原文保留換行；有選項就畫按鈕，文字框一律有（單行）。按下任何選項或送出文字，卡片裡出現第二步確認（文字與送出鈕見 [contracts](contracts.markdown) 第 8 節），按「送出」才送。暫緩的 hold 展開後一樣可以作答。
 
 **寫入的狀態**：顯示在它送出的地方（agent 列、hold 卡片、輸入框下方），一行：原文、狀態標籤、錯誤說明。失敗、未送達、結果不明三種有「重送」與「忽略」。結果不明按重送先出現一次警告「可能會重複送出」，再按才送。以 `/`、`$`、`-` 開頭的直送在送出前就在頁面上擋下並說明原因（伺服器也擋）。
 
@@ -147,7 +147,7 @@
    | 用原始 socket 送一個 `Host:` 值是亂碼的請求 | 4xx，服務沒當掉 |
 
    另外確認：每個回應都有 CSP 與 `X-Frame-Options: DENY`；`ss -ltn` 顯示服務只聽 `127.0.0.1`；`index.html` 的原始碼裡沒有 token、沒有任何議題資料；每筆被拒的請求在 `audit.jsonl` 有一行，而且那一行沒有 token。
-3. 兩步確認：第二步沒帶 `mode` 或 `mode` 不是 `done`／`release`、沒有確認碼直接送作答、確認碼用第二次、確認碼過期、兩步之間 hold 的問題變了、服務重啟後用舊的確認碼，全部被拒。
+3. 兩步確認：沒有確認碼直接送作答、確認碼用第二次、確認碼過期、兩步之間 hold 的問題或處理方式變了、服務重啟後用舊的確認碼，全部被拒；請求裡帶的 `mode` 不影響送出的處理方式。
 4. `reset-token` 之後，舊 token 的請求回 401。
 5. 手動走一遍（用假資料的暫存 `FM_HOME`，在 Chrome 與 Firefox 各一次），每項截圖貼進 PR：首頁五段、議題頁、拖曳跨佇列與 Esc 取消、從待辦拖出的倒數、改名、改目標、封存與重開、併入其他議題、確認提議、歸併 agent、作答一個有選項的 hold、送一則訊息給 first mate、直送、一筆失敗的寫入按重送與忽略、停掉服務後的紅色橫幅、再啟動後頁面自己恢復。
 6. 和 `topic-board/test/prototype-variant-c.html` 並排比對版面；有出入的地方在 PR 裡列出原因。已知的出入：側欄的議題卡多了一個「移到…」選單（鍵盤可用的後備）；提議中的議題多了「不採用」；Host 不對回 403（不是 400）。
