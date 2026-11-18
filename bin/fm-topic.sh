@@ -23,7 +23,7 @@
 #   fm-topic.sh retract [--home <secondmate-id>] <task-id> <ready|report|failed|landed> -
 #   fm-topic.sh which [--home <secondmate-id>] <task-id>
 #   fm-topic.sh find [--all] <keyword>
-#   fm-topic.sh todo add <task-id> <title> --topic <topic-id> -
+#   fm-topic.sh todo add <task-id> <title> --topic <topic-id> --do <one line> [--note <text>] [--cmd <command>]...
 #   fm-topic.sh todo done <task-id>
 #   fm-topic.sh todo failed <task-id> --reason <one line>
 #   fm-topic.sh todo obsolete <task-id> --reason <one line>
@@ -70,9 +70,16 @@
 #
 # todo keeps the things the captain has to do by hand (a sudo command, a
 # login) on the board. add holds <task-id> for the captain, creating it when it
-# does not exist, and tags it with the topic; stdin's first line says what to
-# do and why, and the remaining lines are the commands, shown exactly as
-# written with a copy button. The page offers 做完了 and 不做了. 做完了 does not
+# does not exist, and tags it with the topic. --do says what to do, in one
+# line; --note is optional guidance shown as plain text; each --cmd is one
+# command, shown exactly as written in its own block with its own copy button.
+# A command of several lines (a here-document, a line continuation) is one
+# --cmd, for example --cmd "$(cat <<'EOF' ... EOF)". An item with no --cmd
+# shows no command. add reads no stdin: the old "-" form is refused. In the
+# hold reason every line after the action carries a label (說明：, 指令：, or
+# 續： for a further line of a command); a reason with an unlabelled line was
+# written before the labels and is shown as it always was, everything after
+# its first line in one block. The page offers 做完了 and 不做了. 做完了 does not
 # close the item: the board tells firstmate, who checks and then runs done
 # (which closes it) or failed (which puts it back in front of the captain with
 # the reason). obsolete marks an item firstmate no longer needs; the captain
@@ -536,45 +543,98 @@ todo_kind() {
       else "none" end'
 }
 
-# todo add <task-id> <title> --topic <topic-id> -: put a hands-on item for the
-# captain on the board. The topic is checked before anything is written.
+# todo_lines <first-label> <next-label> <text>: <text> one label per line,
+# <first-label> on its first line and <next-label> on the rest, each line
+# after a newline. Line contents are kept byte for byte.
+todo_lines() {
+  local label=$1 next=$2 rest=$3 nl=$'\n' out="" line
+  while :; do
+    case "$rest" in
+      *"$nl"*)
+        line=${rest%%"$nl"*}
+        out+="$nl$label$line"
+        rest=${rest#*"$nl"}
+        ;;
+      *)
+        out+="$nl$label$rest"
+        break
+        ;;
+    esac
+    label=$next
+  done
+  printf '%s' "$out"
+}
+
+# todo_part <flag> <value>: <value> with carriage returns and trailing newlines
+# removed. A value with nothing else in it is a usage error.
+todo_part() {
+  local value=${2//$'\r'/}
+  while [ "${value%$'\n'}" != "$value" ]; do value=${value%$'\n'}; done
+  [ -n "${value//[[:space:]]/}" ] || usage_error "$1 後面要有內容"
+  printf '%s' "$value"
+}
+
+TODO_ADD_USAGE='todo add 的用法是 <task-id> <標題> --topic <議題 id> --do <要做什麼> [--note <說明>] [--cmd <指令>]…：每個要使用者跑的指令一個 --cmd（多行的指令整段放進同一個 --cmd），不是指令的說明放 --note'
+
+# todo add <task-id> <title> --topic <topic-id> --do <action> [--note <text>]
+# [--cmd <command>]...: put a hands-on item for the captain on the board. The
+# topic is checked before anything is written.
 todo_add() {
-  local topic="" text what kind
-  local -a words=()
+  local topic="" action="" note="" text kind command
+  local -a words=() commands=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --topic)
-        [ "$#" -ge 2 ] || usage_error "--topic 後面要有議題 id"
-        topic=$2
+      --topic | --do | --note | --cmd)
+        [ "$#" -ge 2 ] || usage_error "$1 後面要有值。$TODO_ADD_USAGE"
+        case "$1" in
+          --topic) topic=$2 ;;
+          --do)
+            [ -z "$action" ] || usage_error "--do 只能有一個。$TODO_ADD_USAGE"
+            action=$(todo_part --do "$2")
+            ;;
+          --note)
+            [ -z "$note" ] || usage_error "--note 只能有一個；多行的說明放進同一個 --note。$TODO_ADD_USAGE"
+            note=$(todo_part --note "$2")
+            ;;
+          --cmd) commands+=("$(todo_part --cmd "$2")") ;;
+        esac
         shift 2
         ;;
-      -) shift ;;
-      --*) usage_error "todo add 不認得 $1" ;;
+      -) usage_error "todo add 不再從 stdin 讀內容；要做什麼放 --do，說明放 --note，指令放 --cmd。$TODO_ADD_USAGE" ;;
+      --*) usage_error "todo add 不認得 ${1}。$TODO_ADD_USAGE" ;;
       *)
         words+=("$1")
         shift
         ;;
     esac
   done
-  if [ "${#words[@]}" -ne 2 ] || [ -z "$topic" ]; then
-    usage_error "todo add 的用法是 <task-id> <標題> --topic <議題 id> -（stdin 第一行是說明，其餘是指令）"
+  if [ "${#words[@]}" -ne 2 ] || [ -z "$topic" ] || [ -z "$action" ]; then
+    usage_error "$TODO_ADD_USAGE"
   fi
+  case "$action" in
+    *$'\n'*) usage_error "--do 只寫一行；其餘的說明放 --note，指令放 --cmd。$TODO_ADD_USAGE" ;;
+  esac
   tb_valid_id "${words[0]}" || usage_error "task id 格式不對：${words[0]}"
   tb_valid_id "$topic" || usage_error "議題 id 格式不對：$topic"
-  [ ! -t 0 ] || usage_error "todo add 從 stdin 讀內容：第一行是說明，其餘是指令"
-  text=$(cat)
-  text=${text//$'\r'/}
-  what=${text%%$'\n'*}
-  [ -n "${what//[[:space:]]/}" ] || usage_error "stdin 的第一行要寫要做什麼"
+  # The labels are what the board reads the parts by (TODO_LABELS in topic-board/src/view.ts).
+  text="$TODO_MARKER$action"
+  [ -z "$note" ] || text+=$(todo_lines '說明：' '說明：' "$note")
+  for command in ${commands[@]+"${commands[@]}"}; do
+    text+=$(todo_lines '指令：' '續：' "$command")
+  done
   topic=$(main_home_topic_for_tag "$topic")
   kind=$(todo_kind "${words[0]}")
   [ "$kind" != other ] ||
     tb_die 1 "${words[0]} 已經是等使用者決定的項目，不能改成要使用者動手的項目。"
   [ "$kind" != task ] ||
     tb_die 1 "${words[0]} 已經是一件工作，不能改成要使用者動手的項目；換一個 task id。"
+  # Bring the board onto this code before the item is written, so a board still
+  # running older code never shows the labelled text as one command.
+  "$SELF" open >/dev/null || exit $?
   # A hands-on item holds only the captain's own action, so answering it closes it.
-  "$SCRIPT_DIR/fm-captain-hold.sh" hold "${words[0]}" --title "${words[1]}" --reason "$TODO_MARKER$text" \
-    --on-answer close >/dev/null || tb_die 1 "沒有建立 ${words[0]}；修好上面的問題後原樣再跑一次。"
+  # todo add reads no stdin, so the caller's stdin is not handed on either.
+  "$SCRIPT_DIR/fm-captain-hold.sh" hold "${words[0]}" --title "${words[1]}" --reason "$text" \
+    --on-answer close </dev/null >/dev/null || tb_die 1 "沒有建立 ${words[0]}；修好上面的問題後原樣再跑一次。"
   "$SELF" tag "${words[0]}" "$topic" >/dev/null ||
     tb_die 1 "${words[0]} 已建立但沒有標上議題；原樣再跑一次同一個指令。"
   # A rewritten item starts over: what the captain or firstmate said about the old text no longer holds.
