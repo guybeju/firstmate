@@ -21,7 +21,7 @@
 指令（工作目錄是 checkout 的根目錄）：
 
 ```
-topic-board/test/run.sh            # 六段全部，十一個腳本，這台 Linux 約十分鐘
+topic-board/test/run.sh            # 六段全部，十二個腳本，這台 Linux 約十分鐘
 topic-board/test/run.sh 1          # 只跑第一段；可以列多個數字
 bash topic-board/test/stage-4-writes.sh   # 單跑一個腳本
 bash topic-board/test/check-dist.sh       # dist/ 是不是 src/ 編出來的
@@ -30,14 +30,14 @@ bin/fm-doc-audience-check.sh              # 上游的檢查；新增的檔不能
 (cd topic-board && pnpm test)             # vitest 單元測試
 (cd topic-board && pnpm run typecheck && pnpm run lint && pnpm run format:check)
 (cd topic-board && pnpm run build)        # 改了 src/ 之後重編 dist/，結果要一起提交
-shellcheck -x bin/fm-topic.sh bin/fm-topic-lib.sh bin/fm-topic-board-read.sh topic-board/test/*.sh
+shellcheck -x bin/fm-topic.sh bin/fm-topic-lib.sh bin/fm-topic-board-read.sh bin/fm-topic-session-start.sh topic-board/test/*.sh
 ```
 
 - 每個腳本在第一個失敗的檢查印 `not ok - …` 並以非 0 結束；全過時 `run.sh` 的最後一行是 `# topic-board tests passed (<n> scripts)`。
 - `run.sh` 用啟動它的那個 bash 跑每個腳本，但腳本裡呼叫的 `bin/fm-topic*.sh` 是照自己第一行的 `#!/usr/bin/env bash` 找 bash。要在 macOS 上驗 bash 3.2，兩邊都要是 3.2：`PATH="/bin:$PATH" /bin/bash topic-board/test/run.sh`。正式環境裡遠端的 home 用哪個 bash，同樣取決於當時 `PATH` 上第一個是哪一個。
 - 測試用的環境變數由各腳本自己設：`FM_TOPIC_BOARD_TEST=1` 打開只給測試用的 socket 操作，`FM_TOPIC_BOARD_LOCAL_MS` 等縮短輪詢與重試的間隔。不用事先設任何變數。
 - 暫存目錄：macOS 預設的暫存目錄很深，會讓 socket 路徑超過 103 位元組的上限。`helpers.sh` 在預設暫存目錄的路徑超過 40 個字元時改用 `/tmp`。
-- 範圍：這台 Linux 要十一個腳本全過。遠端的 home 只跑 `bin/fm-topic*.sh`，不跑服務也不開頁面，所以在 Mac 上要過的是第一段。頁面程式在使用者開看板的那台機器的瀏覽器裡執行。
+- 範圍：這台 Linux 要十二個腳本全過。遠端的 home 只跑 `bin/fm-topic*.sh`，不跑服務也不開頁面，所以在 Mac 上要過的是第一段。頁面程式在使用者開看板的那台機器的瀏覽器裡執行。
 - ShellCheck 會對 `tests/lib.sh` 的 source 報 SC1091，可以忽略；其他的要是零。
 
 ### 在暫時的 home 手動試
@@ -179,7 +179,7 @@ t stop                                            # 用完要停，再把 $H 丟
 - 第 3 節「還開著」的項目與第 4 節「延後、之後要補的」由 fleet 接手。
 
 - 上游的新版合併進 `carry`：fleet 負責，見 [rollout](rollout.markdown)「之後怎麼更新」。
-- 看板的檔案是 `topic-board/**` 與 `bin/fm-topic*.sh`。改到 [contracts](contracts.markdown) 第 11 節列的任何一支框架指令時，跑那一列寫的測試。
+- 看板的檔案是 `topic-board/**` 與 `bin/fm-topic*.sh`，另外在上游的 `bin/fm-session-start.sh` 裡有一個呼叫點（contracts 第 11.3 節）。改到 [contracts](contracts.markdown) 第 11 節列的任何一支框架指令時，跑那一列寫的測試。
 - 規則範本改了要升版本號（`captain.block.md.tmpl` 第一行），`stage-6-rules.sh` 裡的版本與 token 上限跟著改，真的 home 由使用者明講之後重跑 `install-rules`。
 - `dist/` 要和 `src/` 一起提交；`dist/` 有變，執行中的看板要重啟才生效，`public/` 的 CSS 不用。
 - 看板每次修改（程式、指令、規則範本、需要的工具）都要在同一個修改裡對照新機器的安裝說明 [FORK-SETUP](../../FORK-SETUP.markdown)，改掉不一致的地方。
