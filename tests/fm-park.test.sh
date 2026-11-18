@@ -564,8 +564,10 @@ test_hung_pending_check_ends_within_the_tick() {
   w=$(make_world park-pending-hang "$GH_URL")
   gh_fixture "$w/gh.1.json"
   kill_park_during_stop "$w"
-  cp "$w/state/lane.meta" "$w/state/lane2.meta"
-  cp "$w/state/lane.review-park" "$w/state/lane2.review-park"
+  # The tick visits lanes in glob order, which follows the locale's collation.
+  # "other" sorts after "lane" in every locale; "lane2" sorts first in zh_TW.
+  cp "$w/state/lane.meta" "$w/state/other.meta"
+  cp "$w/state/lane.review-park" "$w/state/other.review-park"
   : > "$w/tmux.hang"
   start=$(date +%s)
   out=$(FM_PARK_TICK_SECS=2 run_park "$w" tick 2>&1)
@@ -573,12 +575,12 @@ test_hung_pending_check_ends_within_the_tick() {
   [ "$took" -lt 10 ] || fail "pending-hang: a hung agent check held the tick for ${took}s"
   [ -z "$out" ] && [ ! -e "$w/control.log" ] || fail "pending-hang: tick acted: $out"
   grep -qx 'pending=1' "$w/state/lane.review-park" || fail "pending-hang: an unanswered check settled a pending record"
-  grep -qx 'pending=1' "$w/state/lane2.review-park" || fail "pending-hang: an unvisited pending record was settled"
-  [ "$(cat "$w/state/.review-park-tick-next" 2>/dev/null)" = lane2 ] \
+  grep -qx 'pending=1' "$w/state/other.review-park" || fail "pending-hang: an unvisited pending record was settled"
+  [ "$(cat "$w/state/.review-park-tick-next" 2>/dev/null)" = other ] \
     || fail "pending-hang: the tick did not save the lane it never reached"
   rm -f "$w/tmux.hang"
   run_park "$w" tick >/dev/null 2>&1
-  ! grep -q '^pending=' "$w/state/lane.review-park" "$w/state/lane2.review-park" \
+  ! grep -q '^pending=' "$w/state/lane.review-park" "$w/state/other.review-park" \
     || fail "pending-hang: the next tick did not settle the pending records"
   pass "a hung agent check on a pending park ends within the tick, and the next tick resumes and settles it"
 }
@@ -852,8 +854,9 @@ test_slow_relaunch_is_never_cut_short_by_the_tick() {
 test_tick_resumes_where_the_last_one_ran_out_of_time() {
   local w out
   w=$(make_world tick-rotate "$GH_URL"); gh_fixture "$w/gh.1.json"; park_world "$w"
-  cp "$w/state/lane.meta" "$w/state/lane2.meta"
-  cp "$w/state/lane.review-park" "$w/state/lane2.review-park"
+  # "other" is visited after "lane" in every locale (see the pending-hang case).
+  cp "$w/state/lane.meta" "$w/state/other.meta"
+  cp "$w/state/lane.review-park" "$w/state/other.review-park"
   gh_fixture "$w/gh.1.json" 'rollup="FAILURE"'
   # The first lane's read outlasts the whole tick; in the next tick the second
   # lane visited is the slow one, so only the lane that tick starts at relaunches.
@@ -863,13 +866,13 @@ test_tick_resumes_where_the_last_one_ran_out_of_time() {
   [ -z "$out" ] && [ ! -e "$w/control.log" ] || fail "rotate: the slow tick acted: $out"
   FM_PARK_TICK_SECS=6 run_park "$w" tick >/dev/null 2>&1
   wait_report "$w" rotate
-  [ "$(grep ' relaunch ' "$w/control.log" | cut -d' ' -f1)" = lane2 ] \
+  [ "$(grep ' relaunch ' "$w/control.log" | cut -d' ' -f1)" = other ] \
     || fail "rotate: the next tick did not start at the lane the last one never reached: $(grep ' relaunch ' "$w/control.log")"
   [ -e "$w/state/lane.review-park" ] || fail "rotate: the lane read last was relaunched"
   out=$(run_park "$w" tick 2>&1)
-  case "$out" in "relaunched lane2: "*) ;; *) fail "rotate: the next tick did not report lane2: $out" ;; esac
+  case "$out" in "relaunched other: "*) ;; *) fail "rotate: the next tick did not report other: $out" ;; esac
   wait_report "$w" rotate-rest
-  [ ! -e "$w/state/lane.review-park" ] && [ ! -e "$w/state/lane2.review-park" ] \
+  [ ! -e "$w/state/lane.review-park" ] && [ ! -e "$w/state/other.review-park" ] \
     || fail "rotate: a complete tick did not visit every lane: $out"
   pass "a tick that runs out of time resumes at the next unvisited lane, so a slow early lane cannot starve later ones"
 }
