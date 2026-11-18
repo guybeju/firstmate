@@ -185,26 +185,33 @@ test_answer_takes_two_steps() {
   api refresh '{}' >/dev/null
   assert_equals "合併|先不要" "$(state '.holds[] | select(.task == "call-1") | .options | join("|")')" "the hold must be on the board"
   before=$(grep -c '^cmd=fm-captain-hold.sh' "$TB_LOG" || true)
-  assert_equals "confirm" "$(api holds/answer '{"home":"main","task":"call-1","answer":"合併","label":"合併","confirm":"00000000000000000000000000000000","mode":"done"}' | jq -r '.error')" \
+  assert_equals "release false" "$(state '.holds[] | select(.task == "call-1") | "\(.on_answer) \(.on_answer_recorded)"')" \
+    "a hold that records no outcome must be shown as released, and as not recorded"
+  assert_equals "confirm" "$(api holds/answer '{"home":"main","task":"call-1","answer":"合併","label":"合併","confirm":"00000000000000000000000000000000"}' | jq -r '.error')" \
     "an invented code must not answer"
   code=$(answer_step1)
-  got=$(api holds/answer "{\"home\":\"main\",\"task\":\"call-1\",\"answer\":\"合併\",\"label\":\"合併\",\"confirm\":\"$code\"}" | jq -r '.error')
-  assert_equals "usage" "$got" \
-    "the second step must choose done or release"
-  code=$(answer_step1)
-  got=$(api holds/answer "{\"home\":\"main\",\"task\":\"call-1\",\"answer\":\"先不要\",\"label\":\"x\",\"confirm\":\"$code\",\"mode\":\"done\"}" | jq -r '.error')
+  got=$(api holds/answer "{\"home\":\"main\",\"task\":\"call-1\",\"answer\":\"先不要\",\"label\":\"x\",\"confirm\":\"$code\"}" | jq -r '.error')
   assert_equals "confirm" "$got" \
     "a code must not work for another answer"
   code=$(answer_step1)
   sed -i.bak 's/要合併嗎？/要現在合併嗎？/' "$MAIN/data/backlog.md"
   api refresh '{}' >/dev/null
-  got=$(api holds/answer "{\"home\":\"main\",\"task\":\"call-1\",\"answer\":\"合併\",\"label\":\"合併\",\"confirm\":\"$code\",\"mode\":\"done\"}" | jq -r '.error')
+  got=$(api holds/answer "{\"home\":\"main\",\"task\":\"call-1\",\"answer\":\"合併\",\"label\":\"合併\",\"confirm\":\"$code\"}" | jq -r '.error')
   assert_equals "confirm" "$got" \
     "a code must not work once the question changed"
   code=$(answer_step1)
+  awk '{ print } /^  Captain hold set: / && held { print "  Captain hold on answer: close" } { held = /^- \[ \] call-1 / }' \
+    "$MAIN/data/backlog.md" > "$MAIN/data/backlog.md.new" && mv "$MAIN/data/backlog.md.new" "$MAIN/data/backlog.md"
+  api refresh '{}' >/dev/null
+  assert_equals "close true" "$(state '.holds[] | select(.task == "call-1") | "\(.on_answer) \(.on_answer_recorded)"')" \
+    "a recorded close must reach the page"
+  got=$(api holds/answer "{\"home\":\"main\",\"task\":\"call-1\",\"answer\":\"合併\",\"label\":\"合併\",\"confirm\":\"$code\"}" | jq -r '.error')
+  assert_equals "confirm" "$got" \
+    "a code must not work once what answering does changed"
+  code=$(answer_step1)
   t restart >/dev/null
   api refresh '{}' >/dev/null
-  got=$(api holds/answer "{\"home\":\"main\",\"task\":\"call-1\",\"answer\":\"合併\",\"label\":\"合併\",\"confirm\":\"$code\",\"mode\":\"done\"}" | jq -r '.error')
+  got=$(api holds/answer "{\"home\":\"main\",\"task\":\"call-1\",\"answer\":\"合併\",\"label\":\"合併\",\"confirm\":\"$code\"}" | jq -r '.error')
   assert_equals "confirm" "$got" \
     "a restart must void outstanding codes"
   assert_equals "$before" "$(grep -c '^cmd=fm-captain-hold.sh' "$TB_LOG" || true)" "nothing may reach the hold before a valid second step"
@@ -212,10 +219,10 @@ test_answer_takes_two_steps() {
   code=$(answer_step1)
   got=$(api holds/answer "{\"home\":\"main\",\"task\":\"call-1\",\"answer\":\"合併\",\"label\":\"合併\",\"confirm\":\"$code\",\"mode\":\"release\"}" | jq -r '.ok')
   assert_equals true "$got" \
-    "the second step with the code and a mode must answer"
+    "the second step with the code must answer"
   sleep 1
-  grep '^cmd=fm-captain-hold.sh' "$TB_LOG" | tail -n 1 | grep -q 'stdin=call-1	合併	合併	release' ||
-    fail "the answer must reach the hold with the chosen mode"
+  grep '^cmd=fm-captain-hold.sh' "$TB_LOG" | tail -n 1 | grep -q 'stdin=call-1	合併	合併	done' ||
+    fail "the answer must close as the hold recorded, whatever mode the request names"
   assert_equals "refused" "$(api holds/answer '{"home":"main","task":"nope","answer":"x","label":"x"}' | jq -r '.error')" \
     "answering a hold that is not there is refused"
   pass "answering a hold needs a code bound to the hold, its question, and the answer"

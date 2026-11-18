@@ -44,7 +44,7 @@ fm-topic.sh ──Unix socket（0600）──┘      │  獨家寫入 data/top
 
 ## 不變的原則
 
-1. 不修改上游任何既有檔案，只新增。
+1. 不修改上游任何既有檔案，只新增；例外見 [contracts](contracts.markdown) 第 2 節。
 2. 看板執行的外部指令只有 [contracts](contracts.markdown) 第 7 節的那張表。
 3. 看板不執行合併、捨棄、清理，不碰 backlog；它只記下答覆並通知 first mate。
 4. first mate 不重讀 agent 對話來分類；能用腳本做的不交給模型。
@@ -80,7 +80,7 @@ fm-topic.sh ──Unix socket（0600）──┘      │  獨家寫入 data/top
 - 議題與 agent 的真正多對多。
 - 高優先插隊、暫停進行中的工作。
 - 手機或對外存取。
-- 修改上游既有檔案，包含派工腳本與 `AGENTS.md`。
+- 修改上游既有檔案，包含派工腳本與 `AGENTS.md`（例外見 contracts 第 2 節）。
 - 由獨立 agent 定期改寫議題摘要。
 - 貢獻回 firstmate 上游。
 - 整理 `events.jsonl`、`summaries.jsonl`、`audit.jsonl`（第一版不整理，`status` 印出大小）。

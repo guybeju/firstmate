@@ -62,25 +62,21 @@ const merge = (host, body) => {
     const into = field(body, "into");
     return twoStep(host, body, bindingOf("merge", from, into), () => fromTopicOp(host.topicOp("merge", { from, into })));
 };
-function holdQuestion(context, home, task) {
-    const hold = actions.findHold(context, home, task);
-    return hold === undefined ? null : hold.question;
-}
-/** Answering closes or releases the hold and cannot be taken back, so it always takes two steps. */
+/**
+ * Answering closes or releases the hold, as the hold recorded, and cannot be
+ * taken back, so it always takes two steps. The code is bound to the question
+ * and that outcome, so a hold rewritten between the steps is refused.
+ */
 const answer = (host, body) => {
     const context = host.actionContext();
     const home = field(body, "home");
     const task = field(body, "task");
     const text = field(body, "answer");
-    const question = holdQuestion(context, home, task);
-    if (question === null)
+    const hold = actions.findHold(context, home, task);
+    if (hold === undefined)
         return fail(409, "refused", "這個待決事項已經不在了（可能已經有人答了）。");
-    return twoStep(host, body, bindingOf("answer", home, task, question, text), () => {
-        const mode = actions.ANSWER_MODES.find((name) => name === body["mode"]);
-        if (mode === undefined)
-            return fail(400, "usage", "要選「這件事結束」或「讓工作繼續」。");
-        return fromAction(actions.answer(context, { home, task, answer: text, label: field(body, "label"), mode }, "browser"));
-    });
+    const binding = bindingOf("answer", home, task, hold.question, text, actions.answerMode(home, hold));
+    return twoStep(host, body, binding, () => fromAction(actions.answer(context, { home, task, answer: text, label: field(body, "label") }, "browser")));
 };
 /** Resending a write whose outcome is unknown may duplicate it, so that case takes two steps. */
 const resend = (host, body) => {

@@ -24,8 +24,10 @@ write_fleet() {
 - [ ] live-hold - Live call (repo: sample) (kind: captain) (hold: choose a route) (hold-kind: captain)
   Captain hold set: 2026-07-20T00:00:00Z
   Captain hold origin: run-a
+  Captain hold on answer: release
 - [ ] dated-hold - Dated call (repo: sample) (kind: captain) (hold: revisit later) (hold-kind: captain) (hold-until: 2026-12-01)
   Captain hold set: 2026-07-20T00:00:00Z
+  Captain hold on answer: later
 - [ ] plain-hold - Not a captain hold (repo: sample) (kind: ship) (hold: waiting for a vendor)
 - [ ] queued - Plain queued (repo: sample) (kind: ship)
 - [ ] handed - Handed off (repo: sample) (kind: ship)
@@ -66,6 +68,9 @@ test_first_read_reports_the_whole_home() {
   assert_equals 'dated|2026-12-01|' \
     "$(printf '%s' "$out" | jq -r '.holds[] | select(.id == "dated-hold") | "\(.hold_bucket)|\(.hold_until)|\(.origin)"')" \
     "a dated captain hold must carry its date and an empty origin"
+  assert_equals 'live-hold=release dated-hold=null' \
+    "$(printf '%s' "$out" | jq -r '[.holds[] | "\(.id)=\(.on_answer)"] | join(" ")')" \
+    "a hold must report its recorded answer outcome, and null for none or an unknown value"
   assert_equals 2 "$(printf '%s' "$out" | jq -r '.holds | length')" "only captain holds belong in holds[]"
   assert_equals 'live-hold|captain|Live call|choose a route|true dated-hold|captain|Dated call|revisit later|true plain-hold|ship|Not a captain hold|waiting for a vendor|false queued|ship|Plain queued||false handed|ship|Handed off||false ' \
     "$(printf '%s' "$out" | jq -r '.queued[] | "\(.id)|\(.kind)|\(.title)|\(.hold // "")|\(.captain)"' | tr '\n' ' ')" \

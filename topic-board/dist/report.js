@@ -2,6 +2,7 @@
 // where it enters the service.
 import { isRecord, stringField, stringRecord, textField } from "./files.js";
 export const REPORT_SCHEMA = 1;
+const ON_ANSWER = ["close", "release"];
 function records(value) {
     return Array.isArray(value) ? value.filter(isRecord) : [];
 }
@@ -11,6 +12,10 @@ function strings(value) {
         : [];
 }
 const BUCKETS = ["live", "aged", "dated", "blocked"];
+function onAnswerOf(value) {
+    const found = ON_ANSWER.find((name) => name === value);
+    return found === undefined ? null : found;
+}
 function parseHold(raw) {
     const id = stringField(raw, "id");
     const bucket = BUCKETS.find((name) => name === raw["hold_bucket"]);
@@ -26,6 +31,7 @@ function parseHold(raw) {
         unresolved_blocker_ids: strings(raw["unresolved_blocker_ids"]),
         hold_age_days: typeof age === "number" ? age : null,
         origin: textField(raw, "origin"),
+        on_answer: onAnswerOf(raw["on_answer"]),
     };
 }
 function parseLedger(raw) {

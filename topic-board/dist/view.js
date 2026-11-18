@@ -17,6 +17,19 @@ export function parseTodo(question) {
     const [first = "", ...rest] = question.slice(TODO_MARKER.length).split("\n");
     return { what: first.trim(), command: rest.join("\n").replace(/\s+$/, "") };
 }
+/**
+ * What answering `hold` does: what whoever opened it recorded, else a default
+ * that cannot finish unfinished work. A decision without a record is released,
+ * so an item that still gates work (a merge approval) goes back to the queue
+ * instead of being marked done. A main-home hands-on item without a record is
+ * closed, as it always was: it carries only the captain's own action.
+ */
+export function answerOutcome(home, hold) {
+    if (hold.on_answer !== null)
+        return { on_answer: hold.on_answer, recorded: true };
+    const handsOn = home === MAIN_HOME && parseTodo(hold.question) !== null;
+    return { on_answer: handsOn ? "close" : "release", recorded: false };
+}
 function todoView(home, hold, marks) {
     const text = home === MAIN_HOME ? parseTodo(hold.question) : null;
     if (text === null)
@@ -232,11 +245,19 @@ function agentsOf(home, stale, placer, last, runs) {
     });
     return [...running, ...ended];
 }
+/** Whether a hold is due now, and if not, why it waits. */
+function holdTiming(hold, todo) {
+    // Something to do by hand does not become less due by sitting there.
+    if (todo !== null && hold.hold_bucket === "aged")
+        return { live: true, deferred_reason: null };
+    return { live: hold.hold_bucket === "live", deferred_reason: deferredReason(hold) };
+}
 function holdsOf(home, stale, placer, marks) {
     if (home.report === null)
         return [];
     return home.report.holds.map((hold) => {
         const todo = todoView(home.id, hold, marks);
+        const outcome = answerOutcome(home.id, hold);
         const own = placer.current(home.id, hold.id);
         const placement = own.topic === null && hold.origin !== "" ? placer.current(home.id, hold.origin) : own;
         return {
@@ -248,9 +269,9 @@ function holdsOf(home, stale, placer, marks) {
                 question: hold.question,
                 options: todo === null ? parseOptions(hold.question) : [],
                 todo,
-                // Something to do by hand does not become less due by sitting there.
-                live: hold.hold_bucket === "live" || (todo !== null && hold.hold_bucket === "aged"),
-                deferred_reason: todo !== null && hold.hold_bucket === "aged" ? null : deferredReason(hold),
+                on_answer: outcome.on_answer,
+                on_answer_recorded: outcome.recorded,
+                ...holdTiming(hold, todo),
                 topic: placement.topic,
                 stale,
             },

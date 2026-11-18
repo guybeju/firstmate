@@ -34,6 +34,10 @@ export interface ReportQueued {
   topic_hint: string | null;
 }
 
+/** What answering a hold does to its item, as `fm-captain-hold.sh hold --on-answer` recorded it. */
+export type OnAnswer = "close" | "release";
+const ON_ANSWER: readonly OnAnswer[] = ["close", "release"];
+
 export interface ReportHold {
   id: string;
   title: string;
@@ -43,6 +47,8 @@ export interface ReportHold {
   unresolved_blocker_ids: string[];
   hold_age_days: number | null;
   origin: string;
+  /** Null when the hold records no outcome, or the home's code is too old to report one. */
+  on_answer: OnAnswer | null;
 }
 
 export interface ReportQuestion {
@@ -90,6 +96,11 @@ function strings(value: unknown): string[] {
 
 const BUCKETS = ["live", "aged", "dated", "blocked"] as const;
 
+function onAnswerOf(value: unknown): OnAnswer | null {
+  const found = ON_ANSWER.find((name) => name === value);
+  return found === undefined ? null : found;
+}
+
 function parseHold(raw: Record<string, unknown>): ReportHold | null {
   const id = stringField(raw, "id");
   const bucket = BUCKETS.find((name) => name === raw["hold_bucket"]);
@@ -104,6 +115,7 @@ function parseHold(raw: Record<string, unknown>): ReportHold | null {
     unresolved_blocker_ids: strings(raw["unresolved_blocker_ids"]),
     hold_age_days: typeof age === "number" ? age : null,
     origin: textField(raw, "origin"),
+    on_answer: onAnswerOf(raw["on_answer"]),
   };
 }
 

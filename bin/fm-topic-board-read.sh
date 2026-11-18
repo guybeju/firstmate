@@ -14,8 +14,11 @@
 # secondmates. --in-home reads a LOCAL registered secondmate home instead.
 #
 # Task state, holds, and worker questions come from fm-fleet-snapshot.sh --json;
-# this script does not parse status logs or state files itself. The one
-# exception is a hold's origin, taken from its "Captain hold origin:" body line.
+# this script does not parse status logs or state files itself. The exceptions
+# are two lines of a hold's body: its origin ("Captain hold origin:") and what
+# answering it does ("Captain hold on answer: close|release", from
+# fm-captain-hold.sh hold --on-answer), reported as on_answer, null when the
+# hold records neither value.
 #
 # ledger.status is "delta" (lines follow), "absent" (no ledger file), or
 # "continuity-broken" (the ledger is shorter than <ledger-offset> or its first
@@ -211,7 +214,11 @@ main() {
                     unresolved_blocker_ids: (.unresolved_blocker_ids // []),
                     hold_age_days,
                     origin: ([ (.body_lines // [])[]
-                               | capture("^Captain hold origin: (?<origin>.*)$") | .origin ][0] // "")} ],
+                               | capture("^Captain hold origin: (?<origin>.*)$")
+                               | .origin ][0] // ""),
+                    on_answer: ([ (.body_lines // [])[]
+                                  | capture("^Captain hold on answer: (?<v>close|release)$")
+                                  | .v ][0] // null)} ],
         queued: [ $snap.backlog.records[]
                   | select(.structured == true and .state == "queued")
                   | {id, kind: (.kind // ""), title: (.title // ""), hold: .hold_reason,

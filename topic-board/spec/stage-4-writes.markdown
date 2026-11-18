@@ -9,7 +9,7 @@
 | 4-1 | `secondmates[]` 裡的 id 能直接當 `fm-send.sh` 的 target | 已讀原始碼確認：target 接受 `<id>` 或 `fm-<id>`，靠主 home 的 `state/<id>.meta` 解析（`bin/fm-backend.sh:973-990`），`--fire-and-forget` 要求它是有紀錄的 secondmate（`bin/fm-send.sh:700-703`）。上線時再實跑一次 `bin/fm-send.sh <id> --fire-and-forget <16 位> 測試` | 主 home 沒有該 secondmate 的 meta 時 `fm-send.sh` 回非 0，那筆寫入記「失敗」並附 stderr。不需要別的退路 |
 | 4-2 | secondmate 收到「轉給 <worker-id>：…」會照字面轉給該 worker，轉不出去時會回報 | 裝好規則之後（第六段），從看板直送一則給 secondmate 底下的 worker，到那個 worker 的終端機確認 | 這條靠模型照規則做。不照做時訊息停在 secondmate 的收件匣；看板仍顯示「已送達」（已知限制，見下）。直送按鈕上寫明「經 <secondmate> 轉達」讓使用者知道多了一層 |
 | 4-3 | `fm-on.sh --stdin <id> fm-captain-hold.sh answers --source topic-board` 能寫進遠端的 hold | 在遠端 home 開一個測試用的 hold，從主 home 送一行答案，看輸出有沒有 `closed: <id>` | 寫不進去就只剩一條路：把答案用 W1 的 note 告訴主 first mate，由它處理。這會改寫作答的流程，要回頭開一張決定 |
-| 4-4 | `done` 與 `release` 兩種作答之後，被 hold 的項目各變成什麼狀態；特別是純決定的項目被 `release` 之後會不會被 `order` 列為「可派」 | 在暫時的 `FM_HOME`（要有 `tasks-axi`）開兩個 hold 各試一種，之後跑 `bin/fm-topic.sh order` | 會被列為可派的話，第二步確認的說明文字要寫明「選『讓工作繼續』之後，這個項目會回到排隊中」。機制不變，由使用者選 |
+| 4-4 | `done` 與 `release` 兩種作答之後，被 hold 的項目各變成什麼狀態；特別是純決定的項目被 `release` 之後會不會被 `order` 列為「可派」 | 在暫時的 `FM_HOME`（要有 `tasks-axi`）開兩個 hold 各試一種，之後跑 `bin/fm-topic.sh order` | 會被列為可派的話，第二步確認的說明文字要寫明這個項目會回到排隊中。送哪一種照 hold 記下的處理方式（C19） |
 
 4-2、4-3 需要 secondmate；4-4 需要 `tasks-axi`。都不擋這一段的 PR。
 
@@ -32,7 +32,7 @@
 - 執行前先產生 write id 與去重用的 key，寫一行 `sending` 進 `audit.jsonl`，然後才執行。
 - 呼叫端立刻拿到 write id 與「送出中」；結果靠看板狀態拿。
 - 同一個 home 的指令一次只執行一個，不同 home 之間可以並行。互斥的只有「執行指令」那一段：一筆寫入在等下一次重試時不佔位置，後面的寫入照常送。（原本整筆寫入排隊；實作時的測試發現一筆卡在重試的 note 會把同一個 home 後面的寫入擋住最久 15 分鐘。）
-- 作答的答案一行：`<task-id>\t<answer>\t<label>\t<mode>`。`<label>` 是按下的選項文字，用文字框作答時是「文字作答」；`<mode>` 是使用者在第二步選的 `done` 或 `release`（C19）。這一行整個存進 `sending`，重放時逐位元組相同（上游用答案與 mode 的 digest 判斷重放）。
+- 作答的答案一行：`<task-id>\t<answer>\t<label>\t<mode>`。`<label>` 是按下的選項文字，用文字框作答時是「文字作答」；`<mode>` 是照 hold 記下的處理方式填的 `done` 或 `release`（C19）。這一行整個存進 `sending`，重放時逐位元組相同（上游用答案與 mode 的 digest 判斷重放）。
 
 ### 結果怎麼判
 

@@ -102,8 +102,11 @@ brief 與帳本研究都說待決事項從 snapshot 的 `decisions_open` 讀。�
 
 - **問題**：`fm-captain-hold.sh answers` 每行的第四欄決定作答之後怎麼處理被 hold 的項目：空或 `done` 是把它標成完成，`release` 是解除 hold 讓它繼續。上游的守則：純粹的決定用 close，還有沒做完的工作用 release，合併的同意也用 release（`.agents/skills/captain-hold-lifecycle/SKILL.md:34-42`）。看板分不出一個 hold 是哪一種，沒有任何一張票定這件事。
 - **選錯的後果**：該 release 的用了 done，一件還沒做的工作會被標成完成，而且不會有人發現。該 done 的用了 release，一個純決定的項目會留在 backlog，first mate 收到通知後自己關掉。
-- **定案（問過使用者）**：不由看板猜。作答的第二步確認放兩個送出鈕，「送出，這件事結束」（`done`）與「送出，讓工作繼續」（`release`），沒有預設。
-- 還沒驗的：兩種之後項目實際的狀態（第四段 4-4）。已知上游在 away 狀態下拒絕 `release`（回 `refused:`），那時那筆寫入顯示「失敗」並附原因。
+- **定案（使用者 2026-11-18 改定）**：由開 hold 的人在開的時候決定，看板照著送。`fm-captain-hold.sh hold --on-answer close|release` 把它記在 hold 的內文，規則（共用區塊 v2）要 first mate 開 hold 時帶上。卡片只有一個送出鈕，並寫明送出之後這一項會怎樣。原本的定案是兩個送出鈕、沒有預設，使用者每次都要判斷一個 first mate 開 hold 時就知道的結果，所以改掉；做法寫在 [contracts](contracts.markdown) 第 8 節。
+- **沒有記的 hold**：送 `release`。`release` 之後項目回到排隊中，純決定的項目由 first mate 收到通知後自己關掉，最壞是多一個要關的項目；改送 `done` 的話，擋著沒做完工作的項目（例如同意合併）會被默默標成完成，工作就不見了。主 home 的要你動手的項目例外，送 `done`：它只裝使用者自己要做的事，「不做了」「好，撤下」本來就是結束它（C46）。
+- **答的不是定案**（例如「先給我更多資訊」）：`close` 的項目照樣關掉並記下那句話，first mate 收到通知，要再問就另開一個 hold（關掉的 task 不能再 hold）；`release` 的項目回到排隊中，first mate 補完資訊後再 hold 一次。
+- 已知上游在 away 狀態下拒絕 `release`（回 `refused:`），那時那筆寫入顯示「失敗」並附原因；沒有記的 hold 照預設送 `release`，所以 away 時一樣會失敗。兩種之後項目的狀態在第四段 4-4 驗過（[handover](handover.markdown) 第 3 節）。
+- 規則的共用區塊升到 v2，只多 `--on-answer` 那半句；三個範本合計約 1445 token，測試的上限 1450 不變。真的 home 要由使用者明講之後重跑 `install-rules`，而且要等每個 home 都更新到有 `--on-answer` 的程式（[FORK-SETUP](../../FORK-SETUP.markdown) 第 7 節）。
 
 ### C20　各段怎麼分
 
@@ -272,7 +275,7 @@ brief 與帳本研究都說待決事項從 snapshot 的 `decisions_open` 讀。�
 - 「做完了」不關 hold：看板記成 `claimed`、發一則通知給主 first mate（附兩個指令），卡片留著並顯示「等 first mate 驗證」。通知萬一沒送到，`fm-topic.sh order` 的「等你驗證」也會列出來。
 - first mate 驗證後跑 `fm-topic.sh todo done <task-id>`：經上游唯一的作答入口關掉 hold，紀錄是「做完了」，附註「first mate 已驗證」。只關開著的這種項目。沒成功就跑 `todo failed <task-id> --reason <一行>`：卡片回到要使用者動手，顯示原因。
 - first mate 不再需要時跑 `todo obsolete <task-id> --reason <一行>`：卡片顯示原因與一個「好，撤下」按鈕，由使用者按下才關。**這一點和當初對使用者說的「first mate 直接撤下」不同**：上游把每一次作答都記成「Captain answered」，沒有讓 first mate 自己關掉 captain hold 而不冒充使用者的入口（`reconcile close` 要先有使用者的選擇），所以關閉的那一下留給使用者。
-- 「不做了」與「好，撤下」走原本作答的兩步確認，固定是「這件事結束」。
+- 「不做了」與「好，撤下」走原本作答的兩步確認，照 hold 記下的處理方式送出：`todo add` 記的是 `close`，更早建立、沒有記的也送 `done`（C19）。
 - 規則範本升到 v5，多一句說明這四個指令。三個範本合計約 1355 token，測試的上限調到 1400。真的 home 要由使用者明講之後重跑 `install-rules`。
 - 看板服務沒有多跑任何指令：通知走原本的 `fm-inbox.sh`，作答走原本的 `fm-captain-hold.sh answers`；`todo add` 與 `todo done` 是 first mate 在終端機跑的。
 

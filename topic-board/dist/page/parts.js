@@ -70,12 +70,21 @@ export function writeRows(page, actions, matches) {
         .slice(0, 5)
         .map((write) => writeRow(page, actions, write));
 }
-function answerConfirm(page, actions, key) {
+/** What sending an answer will do to the item, in the words the card shows. */
+function answerOutcomeText(hold) {
+    const outcome = hold.on_answer === "close"
+        ? "送出後這一項就結束，標成完成。"
+        : "送出後解除等待，這一項回到排隊中，由 first mate 接著做。";
+    return hold.on_answer_recorded
+        ? outcome
+        : `${outcome}（開這個決定時沒有註明答了之後怎麼處理，所以照預設不結束它。）`;
+}
+function answerConfirm(page, actions, key, hold) {
     const pending = page.pending.get(key);
     if (pending === undefined)
         return null;
     const seconds = Math.max(0, Math.round((pending.expiresAt - Date.now()) / 1000));
-    return h("div", { class: "confirm" }, h("div", {}, `你的答覆：「${String(pending.body["answer"])}」`), h("div", { class: "note" }, `會記成你的答覆並通知 first mate。看板自己不會合併或捨棄。這次確認還有 ${seconds} 秒有效。`), h("div", { class: "btns" }, h("button", { class: "danger", onclick: () => actions.confirm(key, { mode: "done" }) }, "送出，這件事結束"), h("button", { class: "danger", onclick: () => actions.confirm(key, { mode: "release" }) }, "送出，讓工作繼續"), h("button", { onclick: () => actions.cancel(key) }, "取消")), h("div", { class: "note" }, "「這件事結束」用在純粹的決定；「讓工作繼續」用在還有工作沒做完的項目，例如同意合併。"));
+    return h("div", { class: "confirm" }, h("div", {}, `你的答覆：「${String(pending.body["answer"])}」`), h("div", { class: "note" }, `會記成你的答覆並通知 first mate。看板自己不會合併或捨棄。這次確認還有 ${seconds} 秒有效。`), h("div", { class: "note outcome" }, answerOutcomeText(hold)), h("div", { class: "btns" }, h("button", { class: "danger", onclick: () => actions.confirm(key) }, "送出"), h("button", { onclick: () => actions.cancel(key) }, "取消")));
 }
 function holdMeta(view, actions, hold, showTopic) {
     return h("div", { class: "meta" }, showTopic ? topicLink(view, hold.topic, actions) : null, h("span", { class: "pill" }, hold.home), h("span", { class: "note" }, hold.task), hold.live ? null : h("span", { class: "pill warn" }, `暫緩：${hold.deferred_reason ?? ""}`), hold.stale ? h("span", { class: "pill warn" }, "可能已過時") : null);
@@ -130,7 +139,7 @@ function todoConfirm(page, actions, key) {
     const pending = page.pending.get(key);
     if (pending === undefined)
         return null;
-    return h("div", { class: "confirm" }, `會記成你的答覆「${String(pending.body["answer"])}」，這一項就從看板拿掉，並通知 first mate。`, h("div", { class: "btns" }, h("button", { class: "danger", onclick: () => actions.confirm(key, { mode: "done" }) }, "確定"), h("button", { onclick: () => actions.cancel(key) }, "取消")));
+    return h("div", { class: "confirm" }, `會記成你的答覆「${String(pending.body["answer"])}」，這一項就從看板拿掉，並通知 first mate。`, h("div", { class: "btns" }, h("button", { class: "danger", onclick: () => actions.confirm(key) }, "確定"), h("button", { onclick: () => actions.cancel(key) }, "取消")));
 }
 /** Something the captain has to do by hand: what, the commands to copy, and where it stands. */
 function todoCard(page, view, actions, hold, todo, showTopic) {
@@ -156,7 +165,7 @@ export function holdCard(page, view, actions, hold, showTopic) {
             });
     };
     const askTyped = () => ask(page.drafts.get(draftKey) ?? "", "文字作答");
-    return h("div", { class: "card" }, holdMeta(view, actions, hold, showTopic), h("b", {}, hold.title), h("pre", { class: "q" }, hold.question), h("div", { class: "btns" }, hold.options.map((option) => h("button", { onclick: () => ask(option, option) }, option))), h("div", { class: "btns" }, draftInput(page, actions, draftKey, "用文字回答", askTyped), h("button", { onclick: askTyped }, "送出")), answerConfirm(page, actions, key), writeRows(page, actions, (write) => write.kind === "answer" && write.home === hold.home && write.task === hold.task));
+    return h("div", { class: "card" }, holdMeta(view, actions, hold, showTopic), h("b", {}, hold.title), h("pre", { class: "q" }, hold.question), h("div", { class: "btns" }, hold.options.map((option) => h("button", { onclick: () => ask(option, option) }, option))), h("div", { class: "btns" }, draftInput(page, actions, draftKey, "用文字回答", askTyped), h("button", { onclick: askTyped }, "送出")), answerConfirm(page, actions, key, hold), writeRows(page, actions, (write) => write.kind === "answer" && write.home === hold.home && write.task === hold.task));
 }
 export function questionRow(view, actions, question, showTopic) {
     return h("div", { class: "row" }, h("span", { class: "pill" }, "first mate 處理中"), h("span", { class: "grow" }, `${question.home}/${question.task}：${question.summary}`), showTopic ? topicLink(view, question.topic, actions) : null);

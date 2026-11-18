@@ -41,6 +41,7 @@ function hold(id: string, extra: Partial<ReportHold> = {}): ReportHold {
     unresolved_blocker_ids: [],
     hold_age_days: 1,
     origin: "",
+    on_answer: null,
     ...extra,
   };
 }
@@ -580,6 +581,8 @@ describe("holds and questions", () => {
       question: "q",
       options: [],
       todo: null,
+      on_answer: "release",
+      on_answer_recorded: false,
       live: true,
       deferred_reason: null,
       topic: "hi",
@@ -678,6 +681,31 @@ describe("hands-on items", () => {
     expect(holds["main/obsolete"]?.todo).toMatchObject({ state: "obsolete", reason: "不用了" });
     expect(holds["main/plain"]?.todo).toBeNull();
     expect(holds["main/toString"]?.todo?.state).toBe("open");
+  });
+
+  it("answers as the hold recorded, else releases, except a main-home hands-on item", () => {
+    const holds = built(topics(), [
+      home("main", {
+        report: report({
+          holds: [
+            hold("close", { on_answer: "close" }),
+            hold("release", { on_answer: "release" }),
+            hold("old-call"),
+            todoHold("old-todo"),
+            { ...todoHold("kept-todo"), on_answer: "release" },
+          ],
+        }),
+      }),
+      home("sm1", { report: report({ holds: [todoHold("mate-todo")] }) }),
+    ]);
+    const outcome = (key: string): string =>
+      `${holds[key]?.on_answer}/${holds[key]?.on_answer_recorded}`;
+    expect(outcome("main/close")).toBe("close/true");
+    expect(outcome("main/release")).toBe("release/true");
+    expect(outcome("main/old-call")).toBe("release/false");
+    expect(outcome("main/old-todo")).toBe("close/false");
+    expect(outcome("main/kept-todo")).toBe("release/true");
+    expect(outcome("sm1/mate-todo")).toBe("release/false");
   });
 
   it("keeps an old hands-on item in play, but not one put off to a date or blocked", () => {

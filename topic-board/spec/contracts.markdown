@@ -23,7 +23,8 @@
 
 ## 2. fork 裡新增的檔案
 
-看板只新增檔案，不改上游既有的檔案；唯一的例外是 `bin/fm-session-start.sh` 裡的呼叫點（第 11.3 節）。
+看板只新增檔案，不改上游既有的檔案；例外有兩處：`bin/fm-session-start.sh` 裡的呼叫點（第 11.3 節），以及 [open-issues](open-issues.markdown) C19 的 `bin/fm-captain-hold.sh` `hold --on-answer` 與它在既有的 `tests/fm-captain-hold-lifecycle.test.sh` 裡的測試（第 11.2 節）。
+上游合併進 `carry` 時這些檔可能衝突，衝突時保留這幾行。
 
 | 路徑 | 內容 | 哪一段加入 |
 | --- | --- | --- |
@@ -156,7 +157,8 @@
                 "captain": false, "blockers": [], "topic_hint": "<內文 topic: 那一行的 id 或 null>" } ],
   "holds": [ { "id": "…", "title": "<backlog 項目的標題>", "question": "<hold reason 原文>",
                "hold_bucket": "live|aged|dated|blocked", "hold_until": null,
-               "unresolved_blocker_ids": [], "hold_age_days": 0, "origin": "<origin task id 或空字串>" } ],
+               "unresolved_blocker_ids": [], "hold_age_days": 0, "origin": "<origin task id 或空字串>",
+               "on_answer": "close|release|null" } ],
   "status_decisions": [ { "id": "…", "key": "…", "summary": "…" } ],
   "topics": { "<task-id>": "<data/<task-id>/topic 的原文>" },
   "ledger": { "status": "delta|continuity-broken|absent",
@@ -165,7 +167,7 @@
 }
 ```
 
-- `tasks[]`、`holds[]` 取自 `fm-fleet-snapshot.sh --json`：`tasks` 與 `backlog.records[]`。`holds[]` 只收 `hold_kind` 是 captain 的紀錄。`origin` 由腳本自己從 hold 內文的 `Captain hold origin:` 那一行取出，取不到就是空字串。
+- `tasks[]`、`holds[]` 取自 `fm-fleet-snapshot.sh --json`：`tasks` 與 `backlog.records[]`。`holds[]` 只收 `hold_kind` 是 captain 的紀錄。`origin` 由腳本自己從 hold 內文的 `Captain hold origin:` 那一行取出，取不到就是空字串。`on_answer` 同樣取自 `Captain hold on answer:` 那一行（`fm-captain-hold.sh hold --on-answer` 寫的），沒有那一行或值不是 `close`、`release` 就是 `null`。
 - `ledger.lines` 從 offset 起、每次最多 256 KiB 的完整行；還有沒讀完的就 `more: true`。offset 超過檔案長度、或前綴雜湊對不上，回 `continuity-broken`。沒有帳本檔回 `absent`。
 - `secondmates[]` 只在主 home 的輸出裡有，資料取自上游的 `fm-secondmate-registry-lib.sh` 逐行解析 `data/secondmates.md`。
 - `schema` 是這個格式的版本號。欄位有不相容的改動就加一。
@@ -239,7 +241,7 @@ API 的路徑與 body 由第五段定；這裡只定兩件事：
 - `<offset>` 是非負整數；`<sha>` 是 64 位十六進位或 `-`。
 - `<task-id>`、`<議題 id>` 符合 `[A-Za-z0-9._-]`、不以 `-` 開頭。
 - W2、W3 的使用者文字以 `/`、`$`、`!` 或 `-` 開頭就拒收（前面有空白也算），不送出、不改寫，提示「以 /、$、! 或 - 開頭會被當成指令。要跑指令請到終端機，要傳文字請在開頭加字。」`fm-send.sh` 不收 `--` 終止符，所以這條擋在看板這一側。
-- 答案一行的格式是 `<task-id>\t<answer>\t<label>\t<mode>`。`<answer>` 不能含 tab 或換行（採建議 C12）。`<mode>` 是 `done` 或 `release`，由使用者在第二步確認時選（使用者定案，見 C19）。
+- 答案一行的格式是 `<task-id>\t<answer>\t<label>\t<mode>`。`<answer>` 不能含 tab 或換行（採建議 C12）。`<mode>` 是 `done` 或 `release`，看板照 hold 記下的處理方式填，使用者不選（第 8 節，C19）。
 
 看板直接讀寫的檔案只有第 3 節表裡它自己的那些，再加唯讀的 `config/topic-board-port` 與 `topic-board/` 底下自己的程式與靜態檔。它不讀 `data/secondmates.md`、不讀帳本、不讀 Herdr。
 
@@ -251,11 +253,15 @@ API 的路徑與 body 由第五段定；這裡只定兩件事：
 
 | 動作 | 確認碼綁定的對象 |
 | --- | --- |
-| 作答待決事項（按選項或送出文字） | (home, task id, 問題全文的 SHA-256, 答案)。`mode` 在第二步才選，不綁 |
+| 作答待決事項（按選項或送出文字） | (home, task id, 問題全文的 SHA-256, 答案, 答了之後的處理方式) |
 | 議題併進另一個議題 | (舊 id, 新 id) |
 | 重送一筆「結果不明」的寫入 | write id |
 
-作答一律兩步（採建議 C12）：答案送出就會關掉那個 hold，不能收回。第二步的畫面寫明「記成你的答覆並通知 first mate」「看板自己不會合併或捨棄」與確認碼的有效時間，並放兩個送出鈕：「送出，這件事結束」（`done`：被 hold 的項目標成完成，用在純粹的決定）與「送出，讓工作繼續」（`release`：解除 hold，用在還有工作沒做完的項目，例如同意合併）。沒有預設選項。問題全文在兩步之間變了（hold 被改寫或已關掉）就拒絕。
+作答一律兩步（採建議 C12）：答案送出就會關掉或解除那個 hold，不能收回。
+答了之後這一項怎麼處理，由開 hold 的人用 `fm-captain-hold.sh hold --on-answer close|release` 記在 hold 上（第 4 節的 `on_answer`），看板照著送，使用者不選：`close` 送 `done`，被 hold 的項目標成完成；`release` 送 `release`，解除 hold、項目回到排隊中。
+沒有記的（較早的 hold、程式還沒更新的 home）送 `release`，只有主 home 的要你動手的項目送 `done`；原因在 C19。
+第二步的畫面寫明「記成你的答覆並通知 first mate」「看板自己不會合併或捨棄」、確認碼的有效時間，以及送出之後這一項會怎樣（沒有記的再註明這是預設），只有一個「送出」鈕與「取消」。
+問題全文或處理方式在兩步之間變了（hold 被改寫或已關掉）就拒絕。請求裡帶的 `mode` 不看。
 
 封存不用兩步：可以重開。頁面上只做一次畫面內的確認，說明排隊中的項目會被停住、已經在跑的不會停。
 
@@ -297,7 +303,7 @@ API 的路徑與 body 由第五段定；這裡只定兩件事：
 
 ## 11. 看板依賴的框架介面
 
-看板幾乎只新增檔案（唯一的例外是 11.3 的 session start 呼叫點），它呼叫、source、讀取下面這些框架的東西。框架改到其中任何一項，就可能在不碰看板檔案的情況下弄壞看板。每一列寫了看板靠的是什麼，以及哪個測試會在它壞掉時失敗。
+看板幾乎只新增檔案（例外是 11.3 的 session start 呼叫點與 C19 的 `hold --on-answer`，見第 2 節），它呼叫、source、讀取下面這些框架的東西。框架改到其中任何一項，就可能在不碰看板檔案的情況下弄壞看板。每一列寫了看板靠的是什麼，以及哪個測試會在它壞掉時失敗。
 
 「真的」是測試執行 checkout 裡真的那支指令；「替身」是測試用自己寫的假指令取代它，只檢查看板送出去的參數與 stdin，並照劇本回應。**替身的那幾列，框架改了輸出或 exit code，看板的測試不會失敗**，要靠人對照這張表。
 
@@ -325,6 +331,7 @@ snapshot 的 JSON 裡用到的欄位（少了哪一個，對應的東西就從�
 | `backlog.records[]` 的 `structured`、`state`（`queued`、`done`）、`id`、`title`、`kind` | 排隊中的項目；`order` 的分組 |
 | `backlog.records[]` 的 `hold_kind`（`captain`）、`hold_reason`、`hold_bucket`（`live`、`aged`、`dated`、`blocked`）、`hold_until`、`hold_age_days`、`unresolved_blocker_ids` | 待決事項、要你動手的項目、排隊項目在等什麼 |
 | `backlog.records[].body_lines[]` 裡 `Captain hold origin: <id>` 那一行 | 待決事項沒有自己的議題標記時，跟著來源 task 的議題 |
+| `backlog.records[].body_lines[]` 裡 `Captain hold on answer: close\|release` 那一行 | 作答時送 `done` 還是 `release`（第 8 節） |
 | `backlog.records[].body_lines[]` 裡 `topic: <議題 id>` 那一行 | 排隊中的項目沒有議題標記時用它（C51）；first mate 轉交項目時寫的 |
 
 ### 11.2 寫入
@@ -336,8 +343,8 @@ argv 的確切形狀在第 7 節，結果怎麼判在 [第四段](stage-4-writes
 | `bin/fm-inbox.sh note --request-id <id> -` | exit 0 是送到（重放同一個 id 也是 0）；exit 3 是存了但沒叫醒 first mate，用同一個 id 重放會補叫醒；其他是失敗 | 替身：`stage-4-writes.sh` 的 `test_message_to_firstmate`、`test_answer_notice_survives_a_restart`、`test_dispatchable_notice`、`test_decisions_made_on_the_page_reach_firstmate` |
 | `bin/fm-send.sh <task-id> <文字>` 與 `<sm> --fire-and-forget <16 位十六進位> <文字>` | exit 0 是送到；exit 3 是自己重試後仍未確認；不接受 `--` 終止符，所以開頭是 `/`、`$`、`!`、`-` 的文字由看板擋下 | 替身：`stage-4-writes.sh` 的 `test_direct_message`、`test_retries_run_out` |
 | `bin/fm-on.sh <sm> <指令…>` 與 `--stdin` | 在遠端 home 執行並把 stdout、exit code 傳回；exit 255 是連線層失敗，可以重試 | 替身：`stage-3-data.sh`（遠端 home 是本機的目錄）、`stage-4-writes.sh` 的 `test_answers`、`test_tagging` |
-| `bin/fm-captain-hold.sh answers --source topic-board`，stdin 一行 `<task-id>\t<answer>\t<label>\t<mode>` | 逐行讀 stdout：`closed: <id>` 是成功；`skipped: <id> (already closed)`、`(… records a different captain decision …)`、`(not held for the captain)` 是別處已處理；其他的 `skipped:`、`refused:` 是失敗。`mode` 是 `done` 或 `release` | 替身：`stage-4-writes.sh` 的 `test_answers`、`stage-5-http.sh` 的 `test_answer_takes_two_steps`。真的：`test_hands_on_item_with_the_real_hold_tool`，只有裝了 `tasks-axi` 才跑，只涵蓋 `done` |
-| `bin/fm-captain-hold.sh hold <id> --title <標題> --reason <多行文字>` | 建立或更新 captain hold；原因可以有換行、括號、引號，讀回來一字不差；重複執行會更新原因 | 真的：`test_hands_on_item_with_the_real_hold_tool`（同上，要 `tasks-axi`）。替身：`test_hands_on_commands` |
+| `bin/fm-captain-hold.sh answers --source topic-board`，stdin 一行 `<task-id>\t<answer>\t<label>\t<mode>` | 逐行讀 stdout：`closed: <id>` 是成功；`skipped: <id> (already closed)`、`(… records a different captain decision …)`、`(not held for the captain)` 是別處已處理；其他的 `skipped:`、`refused:` 是失敗。`mode` 是 `done` 或 `release` | 替身：`stage-4-writes.sh` 的 `test_answers`、`stage-5-http.sh` 的 `test_answer_takes_two_steps`。真的：`test_hands_on_item_with_the_real_hold_tool`，只有裝了 `tasks-axi` 才跑，涵蓋 `done` 與 `release` |
+| `bin/fm-captain-hold.sh hold <id> --title <標題> --reason <多行文字> --on-answer close` | 建立或更新 captain hold；原因可以有換行、括號、引號，讀回來一字不差；重複執行會更新原因。`--on-answer` 寫成內文的 `Captain hold on answer:` 一行，之後重複 hold 不帶它也保留 | 真的：`test_hands_on_item_with_the_real_hold_tool`（同上，要 `tasks-axi`）。替身：`test_hands_on_commands` |
 | `bin/fm-tasks-axi.sh hold <id> --reason <文字>`、`unhold <id>` | 看板不執行，只由 `order` 印成給 first mate 照著跑的指令 | `stage-1-order.sh` 的 `test_sections` 只檢查印出來的字串；指令本身能不能跑沒有測試 |
 
 ### 11.3 其他

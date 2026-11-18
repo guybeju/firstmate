@@ -125,7 +125,18 @@ export function writeRows(
     .map((write) => writeRow(page, actions, write));
 }
 
-function answerConfirm(page: Page, actions: Actions, key: string): Child {
+/** What sending an answer will do to the item, in the words the card shows. */
+function answerOutcomeText(hold: HoldView): string {
+  const outcome =
+    hold.on_answer === "close"
+      ? "送出後這一項就結束，標成完成。"
+      : "送出後解除等待，這一項回到排隊中，由 first mate 接著做。";
+  return hold.on_answer_recorded
+    ? outcome
+    : `${outcome}（開這個決定時沒有註明答了之後怎麼處理，所以照預設不結束它。）`;
+}
+
+function answerConfirm(page: Page, actions: Actions, key: string, hold: HoldView): Child {
   const pending = page.pending.get(key);
   if (pending === undefined) return null;
   const seconds = Math.max(0, Math.round((pending.expiresAt - Date.now()) / 1000));
@@ -138,25 +149,12 @@ function answerConfirm(page: Page, actions: Actions, key: string): Child {
       { class: "note" },
       `會記成你的答覆並通知 first mate。看板自己不會合併或捨棄。這次確認還有 ${seconds} 秒有效。`,
     ),
+    h("div", { class: "note outcome" }, answerOutcomeText(hold)),
     h(
       "div",
       { class: "btns" },
-      h(
-        "button",
-        { class: "danger", onclick: () => actions.confirm(key, { mode: "done" }) },
-        "送出，這件事結束",
-      ),
-      h(
-        "button",
-        { class: "danger", onclick: () => actions.confirm(key, { mode: "release" }) },
-        "送出，讓工作繼續",
-      ),
+      h("button", { class: "danger", onclick: () => actions.confirm(key) }, "送出"),
       h("button", { onclick: () => actions.cancel(key) }, "取消"),
-    ),
-    h(
-      "div",
-      { class: "note" },
-      "「這件事結束」用在純粹的決定；「讓工作繼續」用在還有工作沒做完的項目，例如同意合併。",
     ),
   );
 }
@@ -254,11 +252,7 @@ function todoConfirm(page: Page, actions: Actions, key: string): Child {
     h(
       "div",
       { class: "btns" },
-      h(
-        "button",
-        { class: "danger", onclick: () => actions.confirm(key, { mode: "done" }) },
-        "確定",
-      ),
+      h("button", { class: "danger", onclick: () => actions.confirm(key) }, "確定"),
       h("button", { onclick: () => actions.cancel(key) }, "取消"),
     ),
   );
@@ -342,7 +336,7 @@ export function holdCard(
       draftInput(page, actions, draftKey, "用文字回答", askTyped),
       h("button", { onclick: askTyped }, "送出"),
     ),
-    answerConfirm(page, actions, key),
+    answerConfirm(page, actions, key, hold),
     writeRows(
       page,
       actions,

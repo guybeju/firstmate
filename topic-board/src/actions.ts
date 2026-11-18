@@ -7,7 +7,7 @@ import type { HomeReport, ReportHold } from "./report.js";
 import { MAIN_HOME } from "./journal.js";
 import { resolveTopicId } from "./topics.js";
 import type { TopicState } from "./topics.js";
-import { placeTask } from "./view.js";
+import { answerOutcome, placeTask } from "./view.js";
 import type { HomeSnapshot } from "./view.js";
 import type { WriteEngine, WriteRecord } from "./writes.js";
 
@@ -20,8 +20,6 @@ export interface ActionContext {
 
 export type ActionResult = { ok: true; write: WriteRecord } | { ok: false; line: string };
 export type Channel = WriteRecord["channel"];
-export const ANSWER_MODES = ["done", "release"] as const;
-export type AnswerMode = (typeof ANSWER_MODES)[number];
 
 const TASK_ID = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
 const MESSAGE_MAX = 4000;
@@ -121,7 +119,6 @@ export interface AnswerInput {
   task: string;
   answer: string;
   label: string;
-  mode: AnswerMode;
 }
 
 function oneLineProblem(what: string, text: string): string | null {
@@ -174,7 +171,12 @@ function holdTopic(
   return placeTask(context.topics, context.homes, home, origin).topic;
 }
 
-/** An answer to a captain hold, followed by a note telling firstmate. */
+/** The close mode fm-captain-hold.sh answers takes for what answering `hold` does. */
+export function answerMode(home: string, hold: ReportHold): "done" | "release" {
+  return answerOutcome(home, hold).on_answer === "close" ? "done" : "release";
+}
+
+/** An answer to a captain hold, closing or releasing it as the hold recorded, followed by a note telling firstmate. */
 export function answer(context: ActionContext, input: AnswerInput, channel: Channel): ActionResult {
   const placement = agentTarget(context, input.home, input.task);
   if (typeof placement !== "string") return placement;
@@ -198,7 +200,7 @@ export function answer(context: ActionContext, input: AnswerInput, channel: Chan
       plan: {
         type: "answer",
         placement,
-        line: [input.task, input.answer, input.label, input.mode].join("\t"),
+        line: [input.task, input.answer, input.label, answerMode(input.home, hold)].join("\t"),
         noteBody: `［議題：${name}］已在看板回答 ${input.home}/${input.task}：${input.answer}`,
         answered: false,
       },

@@ -2,7 +2,7 @@
 // inputs always give the same view.
 import { MAIN_HOME } from "./journal.js";
 import type { JournalEvent, LedgerEvent, Summary } from "./journal.js";
-import type { HomeReport, ReportHold, ReportQueued, ReportTask } from "./report.js";
+import type { HomeReport, OnAnswer, ReportHold, ReportQueued, ReportTask } from "./report.js";
 import { orNull } from "./files.js";
 import { QUEUES, resolveTopicId } from "./topics.js";
 import type { Queue, TodoMark, TodoState, TopicState } from "./topics.js";
@@ -90,6 +90,10 @@ export interface HoldView {
   options: string[];
   /** Set when the hold is a hands-on item, which only the main home can have. */
   todo: TodoView | null;
+  /** What sending an answer does to the item; see answerOutcome. */
+  on_answer: OnAnswer;
+  /** False when the hold recorded no outcome and on_answer is the default. */
+  on_answer_recorded: boolean;
   live: boolean;
   deferred_reason: string | null;
   topic: string | null;
@@ -162,6 +166,22 @@ export function parseTodo(question: string): { what: string; command: string } |
   if (!question.startsWith(TODO_MARKER)) return null;
   const [first = "", ...rest] = question.slice(TODO_MARKER.length).split("\n");
   return { what: first.trim(), command: rest.join("\n").replace(/\s+$/, "") };
+}
+
+/**
+ * What answering `hold` does: what whoever opened it recorded, else a default
+ * that cannot finish unfinished work. A decision without a record is released,
+ * so an item that still gates work (a merge approval) goes back to the queue
+ * instead of being marked done. A main-home hands-on item without a record is
+ * closed, as it always was: it carries only the captain's own action.
+ */
+export function answerOutcome(
+  home: string,
+  hold: ReportHold,
+): { on_answer: OnAnswer; recorded: boolean } {
+  if (hold.on_answer !== null) return { on_answer: hold.on_answer, recorded: true };
+  const handsOn = home === MAIN_HOME && parseTodo(hold.question) !== null;
+  return { on_answer: handsOn ? "close" : "release", recorded: false };
 }
 
 function todoView(
@@ -422,6 +442,16 @@ function agentsOf(
   return [...running, ...ended];
 }
 
+/** Whether a hold is due now, and if not, why it waits. */
+function holdTiming(
+  hold: ReportHold,
+  todo: TodoView | null,
+): { live: boolean; deferred_reason: string | null } {
+  // Something to do by hand does not become less due by sitting there.
+  if (todo !== null && hold.hold_bucket === "aged") return { live: true, deferred_reason: null };
+  return { live: hold.hold_bucket === "live", deferred_reason: deferredReason(hold) };
+}
+
 /** A hold as shown, with the age that orders it among its topic's holds. */
 interface RankedHold {
   view: HoldView;
@@ -437,6 +467,7 @@ function holdsOf(
   if (home.report === null) return [];
   return home.report.holds.map((hold) => {
     const todo = todoView(home.id, hold, marks);
+    const outcome = answerOutcome(home.id, hold);
     const own = placer.current(home.id, hold.id);
     const placement =
       own.topic === null && hold.origin !== "" ? placer.current(home.id, hold.origin) : own;
@@ -449,9 +480,9 @@ function holdsOf(
         question: hold.question,
         options: todo === null ? parseOptions(hold.question) : [],
         todo,
-        // Something to do by hand does not become less due by sitting there.
-        live: hold.hold_bucket === "live" || (todo !== null && hold.hold_bucket === "aged"),
-        deferred_reason: todo !== null && hold.hold_bucket === "aged" ? null : deferredReason(hold),
+        on_answer: outcome.on_answer,
+        on_answer_recorded: outcome.recorded,
+        ...holdTiming(hold, todo),
         topic: placement.topic,
         stale,
       },
