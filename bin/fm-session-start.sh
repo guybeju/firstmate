@@ -54,11 +54,16 @@
 #                       state/.afk daemon flag), and a cheap per-task
 #                       endpoint-liveness read, each bounded and crash-
 #                       isolated so one task's read can never abort the
-#                       digest: read-only, always runs. The per-task reads
+#                       digest: read-only, always runs, except for the topic
+#                       board line below. The per-task reads
 #                       run serially, so with a wedged backend the stage's
 #                       ceiling is tasks x the per-read bound
 #                       (FM_SESSION_START_ENDPOINT_TIMEOUT, default 10s) and
 #                       can itself reach the digest's runtime bound.
+#                       A full locked start (never read-only, never --reemit)
+#                       ends this stage with the topic board's one line, which
+#                       starts that home's board service when it is down;
+#                       bin/fm-topic-session-start.sh owns when it prints.
 #   7. network checks - the result of the deferred network stage started back at
 #                       step 1, harvested WITHOUT waiting for it.
 #   8. context digest - data/projects.md, data/secondmates.md, data/captain.md,
@@ -133,10 +138,11 @@
 # and all of which are safe to compute without verified lock ownership.
 # It deliberately skips the network-only GitHub-auth probe because a read-only
 # session has no dispatch, spawn, steer, or merge action for that verdict to gate.
-# Only projection cleanup, the six bootstrap mutating sweeps, and wake-queue
-# presentation are skipped.
+# Only projection cleanup, the six bootstrap mutating sweeps, the topic board
+# start, and wake-queue presentation are skipped.
 # The context and fleet-state digests
-# below are always read-only, so they run unconditionally in both modes.
+# below are read-only, so they run unconditionally in both modes; the one
+# mutating step among them, the topic board start, runs only when locked.
 #
 # BACKLOG DIGEST: the startup listing is a RECOVERY input, not a reporting
 # surface, so it carries what this turn can act on and nothing else.
@@ -184,8 +190,9 @@
 # local is not the same as bounded: tool version probes and the backlog
 # listing are unbounded subprocesses, while each per-task endpoint read runs
 # in its own crash-isolated child under FM_SESSION_START_ENDPOINT_TIMEOUT
-# (default 10s). So the whole digest still runs as ONE bounded child of this
-# script (FM_SESSION_START_TIMEOUT, default 120s). The deferred network stage
+# (default 10s), and the topic board check bounds its own client calls
+# (bin/fm-topic-session-start.sh). So the whole digest still runs as ONE
+# bounded child of this script (FM_SESSION_START_TIMEOUT, default 120s). The deferred network stage
 # deliberately sits OUTSIDE that bound,
 # in its own process group under its own aggregate deadline, so a truncated
 # digest neither waits for it nor orphans it unbounded. The
@@ -212,7 +219,7 @@
 #             projection cleanup and bootstrap's six mutating sweeps (fleet
 #             sync, same-home backlog reconciliation, secondmate convergence and
 #             liveness, pending remote handoff retry, X-mode
-#             artifact writes) - and
+#             artifact writes), and the topic board check - and
 #             re-emit the rest. Wake-queue presentation is NOT skipped: queued
 #             records are this turn's work queue, they arrived after startup,
 #             and a session that owns the lock is exactly the session that must
@@ -685,7 +692,8 @@ if [ "$REEMIT" -eq 1 ]; then
   printf 'context. Lock ownership is re-verified and the durable records below are\n'
   printf 'reprinted, but the sweeps startup already reconciled - project clone refresh,\n'
   printf 'secondmate convergence and liveness, pending remote handoff\n'
-  printf 'retry, X-mode artifact writes, and stale Herdr child cleanup - are NOT repeated.\n'
+  printf 'retry, X-mode artifact writes, stale Herdr child cleanup, and the topic board\n'
+  printf 'check - are NOT repeated.\n'
   printf 'Queued wakes ARE still drained: they arrived after startup and are this turn work.\n'
 else
   section "SESSION START - $FM_HOME"
@@ -706,8 +714,9 @@ if [ "$LOCK_RC" -ne 0 ]; then
     printf '●  %s\n' "$LOCK_OUT"
     printf '●  Skipping every mutating step: stale Herdr child cleanup,\n'
     printf '●  secondmate convergence, secondmate liveness, pending remote handoff retry,\n'
-    printf '●  X-mode artifacts, fleet sync, and wake-queue drain. Detect-only bootstrap\n'
-    printf '●  diagnostics and the rest of this read-only-safe digest still ran below.\n'
+    printf '●  X-mode artifacts, fleet sync, topic board start, and wake-queue drain.\n'
+    printf '●  Detect-only bootstrap diagnostics and the rest of this read-only-safe\n'
+    printf '●  digest still ran below.\n'
     printf '●  Operate read-only until this resolves - do not spawn, steer, merge, or\n'
     printf '●  otherwise mutate fleet state from this session.\n'
     printf '%s\n' "$BAR"
@@ -1024,6 +1033,12 @@ if fm_pf_relay_active "$FM_HOME" \
     printf '%s/bin/fm-public-followup.sh deliver <id>. Hand a delivered loop on with rechain, or close it with\n' "$FM_ROOT"
     printf '%s/bin/fm-public-followup.sh retire <id> --reason "...". Load fmx-respond for the procedure.\n' "$FM_ROOT"
   fi
+fi
+
+# The topic board's one line; bin/fm-topic-session-start.sh owns when it prints
+# and what it starts. Full locked starts only: a read-only session starts nothing.
+if [ "$READ_ONLY" -eq 0 ] && [ "$REEMIT" -eq 0 ]; then
+  FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-topic-session-start.sh" 2>/dev/null || true
 fi
 
 # --- 7. network checks ------------------------------------------------------

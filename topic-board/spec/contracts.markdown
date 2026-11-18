@@ -23,13 +23,14 @@
 
 ## 2. fork 裡新增的檔案
 
-只新增，不改上游任何既有檔案。
+看板只新增檔案，不改上游既有的檔案；唯一的例外是 `bin/fm-session-start.sh` 裡的呼叫點（第 11.3 節）。
 
 | 路徑 | 內容 | 哪一段加入 |
 | --- | --- | --- |
 | `bin/fm-topic.sh` | 議題指令，Bash | 一（之後各段加子命令） |
 | `bin/fm-topic-board-read.sh` | 唯讀彙整腳本，Bash | 一 |
 | `bin/fm-topic-lib.sh` | 上面兩支共用的函式（id 檢查、查同機 secondmate 的 home），只被 source | 一 |
+| `bin/fm-topic-session-start.sh` | 開 session 時檢查看板服務、沒在跑就啟動，印啟動摘要裡的那一行，Bash | 上線後 |
 | `topic-board/src/` | TypeScript 原始碼：服務、node client、頁面腳本 | 二起 |
 | `topic-board/dist/` | `tsc` 的編譯結果，提交進 git；執行期只跑這裡的 `.js` | 二起 |
 | `topic-board/public/` | 靜態頁面：`index.html`、`board.css`、`icon.svg` | 五 |
@@ -296,7 +297,7 @@ API 的路徑與 body 由第五段定；這裡只定兩件事：
 
 ## 11. 看板依賴的框架介面
 
-看板只新增檔案，但它呼叫、source、讀取下面這些框架的東西。框架改到其中任何一項，就可能在不碰看板檔案的情況下弄壞看板。每一列寫了看板靠的是什麼，以及哪個測試會在它壞掉時失敗。
+看板幾乎只新增檔案（唯一的例外是 11.3 的 session start 呼叫點），它呼叫、source、讀取下面這些框架的東西。框架改到其中任何一項，就可能在不碰看板檔案的情況下弄壞看板。每一列寫了看板靠的是什麼，以及哪個測試會在它壞掉時失敗。
 
 「真的」是測試執行 checkout 裡真的那支指令；「替身」是測試用自己寫的假指令取代它，只檢查看板送出去的參數與 stdin，並照劇本回應。**替身的那幾列，框架改了輸出或 exit code，看板的測試不會失敗**，要靠人對照這張表。
 
@@ -307,9 +308,10 @@ API 的路徑與 body 由第五段定；這裡只定兩件事：
 | `bin/fm-fleet-snapshot.sh --json`，環境變數 `FM_SNAPSHOT_SECONDMATES=1`、`FM_SNAPSHOT_BUDGET=1`、`FM_CREW_STATE_NO_FORGE=1`、`FM_HOME` | `fm-topic-board-read.sh`、`fm-topic.sh order` | exit 0 並在 stdout 印一個 JSON 物件；失敗時非 0。用到的欄位見下一張表 | 真的：`stage-1-read.sh` 全部、`stage-1-order.sh` 全部、`stage-3-data.sh` 全部 |
 | `state/fleet-ledger.jsonl` | `fm-topic-board-read.sh` 逐位元組分段讀；服務解析每一行 | 只會從尾端增加的 JSONL。每行是物件，有字串 `event`、字串 `task`、數字 `ts`；另外用到 `kind`、`pr`、`text`、`state`。`event` 認得 `task.dispatched`、`task.status`、`task.pr_ready`、`task.merged`、`task.cleaned_up`，其他的照原樣顯示 | `stage-1-read.sh` 的 `test_ledger_delta_and_continuity`；`stage-3-data.sh` 的 `test_updates_and_topics`、`test_ledger_is_stored_once_and_survives_rewrites`（帳本是測試自己寫的固定內容，不是框架產生的） |
 | `config/fleet-ledger` 存在與否 | `fm-topic-board-read.sh`、`fm-topic.sh setup` | 檔案存在就是這個 home 的帳本開著；`setup` 建一個空檔來打開 | `stage-1-topic.sh` 的 `test_setup_is_idempotent`；`stage-3-data.sh` 的 `test_home_status` |
-| `bin/fm-primary-scope-lib.sh` 的 `fm_root_is_secondmate_home <home>` | 兩支 Bash 指令 | 回傳值分辨 secondmate home（標記檔 `.fm-secondmate-home`） | 真的：`stage-1-topic.sh` 的 `test_tag_in_secondmate_home_checks_format_only`；`stage-1-order.sh` 的 `test_falls_open_without_a_usable_topic_file` |
+| `bin/fm-primary-scope-lib.sh` 的 `fm_root_is_secondmate_home <home>` | `fm-topic.sh`、`fm-topic-board-read.sh`、`fm-topic-session-start.sh` | 回傳值分辨 secondmate home（標記檔 `.fm-secondmate-home`） | 真的：`stage-1-topic.sh` 的 `test_tag_in_secondmate_home_checks_format_only`；`stage-1-order.sh` 的 `test_falls_open_without_a_usable_topic_file` |
 | `bin/fm-secondmate-registry-lib.sh` 的 `secondmate_registry_parse_line`（設 `SECONDMATE_REGISTRY_ID`、`_HOME`、`_REMOTE`）與 `secondmate_registry_field <登記檔> <id> remote\|home` | `fm-topic-board-read.sh`、`fm-topic-lib.sh` | `data/secondmates.md` 每個 `- ` 開頭的行解析出 id、home、是不是遠端 | 真的：`stage-1-read.sh` 的 `test_secondmates_and_in_home`；`stage-1-topic.sh` 的 `test_in_home_routes_to_a_local_secondmate` |
 | `bin/fm-config-inherit-lib.sh` 的 `shared_captain_header_valid <檔>` | `fm-topic.sh install-rules` | 回傳值判斷共用檔的檔頭上游收不收；印出缺的那一段 | 真的：`stage-6-rules.sh` 的 `test_creates_both_files`、`test_refuses_a_shared_file_with_a_bad_header` |
+| `bin/fm-timeout-lib.sh` 的 `fm_run_timed <秒> <指令…>` 與 `fm_timed_out <exit code>` | `fm-topic-session-start.sh` | 指令超過秒數就被停下，回 `fm_timed_out` 認得的 exit code；其他時候回指令自己的 exit code | 真的：`stage-2-startup.sh` 全部（沒有逾時的情況） |
 | `bin/fm-startup-memory-budget.sh report` | `fm-topic.sh install-rules` | 只把它的輸出印出來；失敗時印一句替代的話，不影響安裝 | 真的：`stage-6-rules.sh` 的 `test_creates_both_files`（只檢查安裝成功） |
 | `data/backlog.md` 的項目行格式 | 經 snapshot 間接讀；看板自己不解析 | 測試的 backlog 是照這個格式手寫的；hold 的原因用 `fm-hold-v1:<base64>` 編碼時由 snapshot 解回原文 | `stage-4-writes.sh` 的 `test_hands_on_items`（編碼過的原因）；`stage-5-page.sh` |
 
@@ -340,7 +342,8 @@ argv 的確切形狀在第 7 節，結果怎麼判在 [第四段](stage-4-writes
 
 ### 11.3 其他
 
-- `tests/lib.sh`：看板的測試腳本 source 它，用 `fm_test_tmproot`、`fm_test_run`、`fm_test_cleanup`、`fm_git_init_commit`、`fm_write_meta`、`pass`、`fail`、`assert_equals`、`assert_contains`、`assert_not_contains`、`assert_grep`、`expect_code` 與變數 `ROOT`。改到這些，十一個腳本都受影響。
+- `bin/fm-session-start.sh`：fleet state 那一段的最後，只在拿到 session 鎖、不是 `--reemit` 時，呼叫 `bin/fm-topic-session-start.sh`，它的輸出原樣印進啟動摘要。這是看板在上游檔案裡唯一的呼叫點；合併上游時要留著這幾行。看板的測試靠真的 `fm-session-start.sh` 與 `fm-lock.sh`：拿得到鎖時跑、鎖被一個活著的 harness 程序拿著時是唯讀。測試：真的，`stage-2-startup.sh` 全部。
+- `tests/lib.sh`：看板的測試腳本 source 它，用 `fm_test_tmproot`、`fm_test_run`、`fm_test_cleanup`、`fm_git_init_commit`、`fm_write_meta`、`pass`、`fail`、`assert_equals`、`assert_contains`、`assert_not_contains`、`assert_grep`、`expect_code` 與變數 `ROOT`。改到這些，十二個腳本都受影響。
 - 環境變數 `FM_HOME`、`FM_ROOT_OVERRIDE`、`FM_DATA_OVERRIDE`、`FM_CONFIG_OVERRIDE`、`FM_STATE_OVERRIDE`：看板的 Bash 指令照上游的慣例解析路徑。
 - 自我更新：主 home 的 `config/self-update-source` 指向 `carry`。看板的服務在下一個議題指令發現程式的 commit 變了，就換掉自己。
 - `data/captain.md`、`data/captain-shared.md`：`install-rules` 在裡面維護一個有標記的區塊；`/stow` 之類的整理不能動到標記行。
