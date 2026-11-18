@@ -882,6 +882,61 @@ test_answer_records_and_closes() {
   pass "answer records the captain's words, closes idempotently, and releases routed work"
 }
 
+# `hold --on-answer` records on the held task what the captain's answer does to
+# it, as one body line a reader such as the topic board can show. The record
+# lives with the hold: a repeated hold, a rewritten reason, and an origin keep
+# it; a new hold after a release starts unrecorded unless it states one again.
+test_hold_records_what_an_answer_does() {
+  local home show out
+  home=$(make_home on-answer)
+  tasks_in "$home" add sample-merge "Land the sample change" --kind ship --repo sample >/dev/null \
+    || fail "could not create the gated work item"
+  tasks_in "$home" add sample-origin "Review the sample" --kind scout --repo sample >/dev/null \
+    || fail "could not create the origin"
+  write_origin_meta "$home" sample-origin
+  if run_captain "$home" hold sample-merge --reason "merge?" --on-answer finish \
+    > "$home/bad.out" 2> "$home/bad.err"; then
+    fail "hold accepted an unknown --on-answer value"
+  fi
+  assert_grep "on-answer must be close or release" "$home/bad.err" \
+    "the refusal did not name the accepted values"
+  show=$(tasks_in "$home" show sample-merge --full)
+  assert_contains "$show" "held: no" "a refused --on-answer still held the task"
+
+  run_captain "$home" hold sample-merge --reason "May I merge?" --on-answer release >/dev/null \
+    || fail "hold --on-answer release failed"
+  show=$(tasks_in "$home" show sample-merge --full)
+  assert_contains "$show" "Captain hold on answer: release" "the hold did not record its answer outcome"
+  run_captain "$home" hold sample-merge --reason "May I merge it now?" --origin sample-origin >/dev/null \
+    || fail "repeating the hold with a new reason and an origin failed"
+  show=$(tasks_in "$home" show sample-merge --full)
+  assert_contains "$show" "Captain hold on answer: release" \
+    "a repeated hold or its origin rewrite dropped the recorded outcome"
+  assert_contains "$show" "Captain hold origin: sample-origin" "the origin was not recorded beside it"
+  run_captain "$home" hold sample-merge --reason "May I merge it now?" --on-answer close >/dev/null \
+    || fail "restating the outcome on an active hold failed"
+  show=$(tasks_in "$home" show sample-merge --full)
+  assert_equals 1 "$(printf '%s\n' "$show" | grep -c 'Captain hold on answer:')" \
+    "restating the outcome left more than one record"
+  assert_contains "$show" "Captain hold on answer: close" "restating the outcome did not replace it"
+
+  printf 'sample-merge\tgo\tgo\trelease\n' | run_captain "$home" answers --source "on-answer fixture" >/dev/null \
+    || fail "could not release the first call"
+  run_captain "$home" hold sample-merge --reason "A new question" >/dev/null \
+    || fail "could not hold released work again"
+  show=$(tasks_in "$home" show sample-merge --full)
+  assert_not_contains "$show" "Captain hold on answer:" \
+    "a new hold after a release inherited the previous call's outcome"
+  printf 'sample-merge\tgo\tgo\trelease\n' | run_captain "$home" answers --source "on-answer fixture 2" >/dev/null \
+    || fail "could not release the second call"
+  out=$(run_captain "$home" hold sample-merge --reason "A dated question" --until 2099-01-01 \
+    --on-answer close) || fail "a dated hold with --on-answer failed"
+  assert_equals sample-merge "$out" "hold printed something other than the task id"
+  show=$(tasks_in "$home" show sample-merge --full)
+  assert_contains "$show" "Captain hold on answer: close" "a dated new hold did not record its outcome"
+  pass "hold --on-answer records the answer outcome with the hold and keeps it across repeated holds"
+}
+
 # --release lifts the hold instead of closing, preserving the work item's own
 # body under the record; a re-held task later accepts a new answer.
 test_release_frees_held_work() {
@@ -5129,6 +5184,7 @@ test_retained_body_keeps_its_utf8_bytes
 test_completion_gate_attests_and_transfers
 test_answer_records_and_closes
 test_release_frees_held_work
+test_hold_records_what_an_answer_does
 test_release_is_attended_only
 test_release_rechecks_away_after_waiting_on_task_lock
 test_hold_stamp_precedes_hold_visibility

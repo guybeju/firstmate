@@ -21,7 +21,8 @@
 #
 # Usage:
 #   fm-captain-hold.sh hold <task-id> --reason <reason> \
-#     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD]
+#     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD] \
+#     [--on-answer close|release]
 #   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release]
 #   fm-captain-hold.sh pr-policy <task-id> <PR-url> <merged|closed|terminal> <close|release>
 #   fm-captain-hold.sh settle-pr <task-id> <PR-url>
@@ -58,6 +59,12 @@
 # `--until` records the captain's own deferral date through `tasks-axi hold
 # --until`, so a "revisit later" answer is stored as a date instead of a live
 # card.
+# `--on-answer` records, on a `Captain hold on answer: close|release` body line,
+# what the caller declares the captain's answer does to the task, so a channel
+# can show that outcome and declare it as the close mode instead of asking.
+# `close` is for a task that holds only the decision, `release` for one that
+# still gates unfinished work. Repeating an active hold without the flag keeps
+# the record; a new hold lifecycle without it drops a previous call's record.
 #
 # `answer` records the captain's exact words and resolves the call in the same
 # act. It requires a non-empty captain decision file of at most 8192 bytes and
@@ -874,6 +881,7 @@ write_hold_set_stamp() {  # <task-id> <shown-body> <timestamp> <preserve-existin
 # The origin a hold was recorded for lives in the held task's own body, on a
 # line of its own, so `complete` can tell a call held for this origin from one
 # held for another. Omitting --origin leaves any existing association intact.
+# The declared answer outcome uses the same kind of line; an empty value drops it.
 body_hold_origin() {  # <decoded-task-body>
   printf '%s\n' "$1" | sed -n 's/^Captain hold origin: \(.*\)$/\1/p' | head -1
 }
@@ -889,28 +897,29 @@ task_identity() {
   printf '%s' "$id"
 }
 
-write_hold_origin() {  # <task-id> <shown-body> <origin>
-  local id=$1 body=$2 origin=$3 stamp rest new_body tmp
+write_hold_line() {  # <task-id> <shown-body> <label> <value>
+  local id=$1 body=$2 label=$3 value=$4 stamp rest new_body tmp
   body=$(decode_shown_value "$body") \
     || fail "could not decode the existing body for $id"
   stamp=$(printf '%s\n' "$body" | sed -n 1p)
   [ -n "$(body_hold_set_timestamp "$body")" ] \
-    || fail "task $id lost its hold-set stamp before its origin was recorded"
-  rest=$(printf '%s\n' "$body" | sed 1d | awk '!/^Captain hold origin: /' \
+    || fail "task $id lost its hold-set stamp before its $label was recorded"
+  rest=$(printf '%s\n' "$body" | sed 1d | awk -v prefix="Captain hold $label: " 'index($0, prefix) != 1' \
     | awk 'NF || started { started = 1; print }')
-  new_body=$(printf '%s\nCaptain hold origin: %s' "$stamp" "$origin")
+  new_body=$stamp
+  [ -z "$value" ] || new_body=$(printf '%s\nCaptain hold %s: %s' "$stamp" "$label" "$value")
   if [ -n "$rest" ]; then
     new_body=$(printf '%s\n\n%s' "$new_body" "$rest")
   fi
-  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-origin.XXXXXX") \
-    || fail "cannot stage the hold origin"
+  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-line.XXXXXX") \
+    || fail "cannot stage the hold $label"
   if ! printf '%s\n' "$new_body" > "$tmp"; then
     rm -f -- "$tmp"
-    fail "cannot stage the hold origin for $id"
+    fail "cannot stage the hold $label for $id"
   fi
   if ! tasks_axi update "$id" --body-file "$tmp" >/dev/null; then
     rm -f -- "$tmp"
-    printf 'fm-captain-hold: could not record the hold origin on %s\n' "$id" >&2
+    printf 'fm-captain-hold: could not record the hold %s on %s\n' "$label" "$id" >&2
     return 1
   fi
   rm -f -- "$tmp"
@@ -1117,7 +1126,7 @@ verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how> <origi
 }
 
 command_hold() {
-  local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
+  local id=${1:-} title='' reason='' repo='' origin='' until='' on_answer='' show state existing_title body='' hold_kind hold_set occurrence
   local existing_hold_kind='' existing_held='' preserve_hold_set=0 stored_reason original_body='' hold_status=0
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
@@ -1128,11 +1137,16 @@ command_hold() {
       --repo) shift; repo=${1:-} ;;
       --origin) shift; origin=${1:-} ;;
       --until) shift; until=${1:-} ;;
+      --on-answer) shift; on_answer=${1-} ;;
       *) usage >&2; exit 2 ;;
     esac
     shift
   done
   validate_slug task-id "$id"
+  case "$on_answer" in
+    ''|close|release) : ;;
+    *) fail "--on-answer must be close or release: $on_answer" ;;
+  esac
   [ -n "$reason" ] || fail "reason must not be empty"
   # bin/fm-hold-reason-lib.sh owns the storage constraint and reversible encoding.
   stored_reason=$(fm_hold_reason_encode "$reason") || fail "could not encode the hold reason"
@@ -1226,7 +1240,12 @@ command_hold() {
   occurrence=$(( $(resolution_record_count "$(show_field "$show" body)") + 1 ))
   publish_parent_hold "$id" "$occurrence" needs-decision "$reason" "$until"
   if [ -n "$origin" ]; then
-    write_hold_origin "$id" "$(show_field "$show" body)" "$origin" || exit $?
+    write_hold_line "$id" "$(show_field "$show" body)" origin "$origin" || exit $?
+    task_show_or_fail "$id" "task $id disappeared while recording its origin"
+  fi
+  if [ -n "$on_answer" ] || { [ "$preserve_hold_set" = 0 ] \
+    && show_field_value "$show" body | grep -q '^Captain hold on answer: '; }; then
+    write_hold_line "$id" "$(show_field "$show" body)" 'on answer' "$on_answer" || exit $?
   fi
   printf '%s\n' "$id"
 }
