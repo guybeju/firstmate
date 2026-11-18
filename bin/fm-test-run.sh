@@ -71,8 +71,8 @@
 #   --per-script-timeout-secs N
 #                   terminate a script that runs longer than N seconds and
 #                   record it as exit 124 (0 disables, the default). The
-#                   --changed applies 1500s automatically, above the current
-#                   slowest CI hint with margin; exceeding it becomes a bounded
+#                   --changed applies 3600s automatically, above the slowest
+#                   measured script with margin; exceeding it becomes a bounded
 #                   failure, not proof of a hang. --max-wall-ms is checked
 #                   after the run and so cannot catch a hang on its own.
 #                   External interruption cleanup is outside this runner's
@@ -188,15 +188,14 @@ MAX_WALL_MS=
 PER_SCRIPT_TIMEOUT_SECS=0
 # Bound applied automatically on the automatic --changed path, derived from
 # measured healthy runtimes with margin rather than picked: the slowest measured
-# script is tests/fm-watch-triage.test.sh at about 593s under CI load (the hint
-# table below records that loaded figure). 1500s keeps every measured script
-# under the bound with roughly 2.5x headroom over the slowest loaded measurement,
-# and it stays under the 30-minute normal CI tier so a wedged script fails here,
-# with its output, before the job cap
-# cancels the lane. It is a guard, not a speed control: a HUNG script becomes a
-# bounded failure instead of an unbounded suite, which is the shape that
-# silently outruns a caller's invocation budget.
-CHANGED_DEFAULT_TIMEOUT_SECS=1500
+# script is tests/fm-remote-secondmate-lifecycle-e2e.test.sh, about 1005s on CI
+# (the hint table below) and 1631-1911s alone on a slow laptop CPU. 3600s keeps
+# it under the bound with about 1.9x headroom over that slowest healthy run.
+# No CI job runs --changed; this is the local verification path. It is a guard,
+# not a speed control: a HUNG script becomes a bounded failure, with its output,
+# instead of an unbounded suite, which is the shape that silently outruns a
+# caller's invocation budget.
+CHANGED_DEFAULT_TIMEOUT_SECS=3600
 
 # How many separate-runner shards the portable serial remainder splits into.
 # One owner: CI lane names carry this count and are refused when they disagree.
