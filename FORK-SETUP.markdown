@@ -5,7 +5,7 @@
 內容只取自這個 fork `carry` 分支上追蹤的檔案；已經有別的文件寫好的地方，這裡只連過去，不重抄。
 
 這一頁在 `carry` 分支上。
-fork 的首頁顯示的是 `main`，和上游一樣，所以從首頁找不到這一頁；要給別人看時，用指到 `carry` 的網址：<https://github.com/guybeju/firstmate/blob/carry/FORK-SETUP.markdown>。
+fork 的首頁顯示的是 `main`，和上游一樣，但首頁右側 About 的網站連結指到這一頁；要給別人看時，用同一個指到 `carry` 的網址：<https://github.com/guybeju/firstmate/blob/carry/FORK-SETUP.markdown>。
 
 ## 0. 先知道的事
 
@@ -160,13 +160,17 @@ bin/fm-topic.sh status
 **確認**：有 `看板服務：在跑`、`輪詢：進行中`，每一行 `home <id>：` 都是 `相同`（只有主 home 時只有 `home main：相同`）。
 剛打開時那一行可能是 `還沒讀到`，等一下再看。
 
+服務第一次成功啟動之後，主 first mate 每次開 session 都會檢查它：沒在跑就啟動，並在啟動摘要 fleet state 那一段的最後印一行 `看板服務：在跑`、`看板服務：原本沒在跑，已啟動`、`看板服務：原本沒有回應，已重新啟動` 或 `看板服務：無法啟動：<原因>`（[`bin/fm-topic-session-start.sh`](bin/fm-topic-session-start.sh)）。
+沒拿到 session 鎖的唯讀 session、second mate 的 home、服務從來沒成功啟動過的主 home，都不檢查也不印這一行。
+
 **不對時**：
 
 - 指令以 exit 69 結束，stderr 是一行「看板服務無法啟動：<原因>。<怎麼修>。這次的要求沒有寫入。」（[contracts](topic-board/spec/contracts.markdown) 第 9 節）；照那一行修。
   沒有 `node` 或低於 22、`topic-board/dist/` 不完整（回第 3 步更新）、`config/topic-board-port` 不合法，都在這一行說明。
+  開 session 時的 `看板服務：無法啟動：<原因>` 是同一個原因，照著修，下一次開 session 或任何一個看板指令會再試。
 - 上一次啟動失敗的原因在 `state/topic-board/startup-error`，服務的輸出在 `state/topic-board/service.log`（contracts 第 3 節）。
 - 某個 home 顯示 `還沒換到 fork`、`版本不相容` 或 `版本不同`，或頁面說帳本未開，表示那個 home 不在同一版或沒開帳本；只有主 home 時不會出現，有 second mate 時見第 8 節。
-- 不用時 `bin/fm-topic.sh stop` 停掉服務。
+- 不用時 `bin/fm-topic.sh stop` 停掉服務；主 first mate 下一次開 session 時會再把它啟動。
 
 ## 6. 裝規則，重開 session
 
@@ -182,6 +186,7 @@ bin/fm-topic.sh install-rules
 **確認**：輸出有 `captain.md：新增（v6）` 與 `captain-shared.md：新增（v2）`（已經裝過的是 `已更新` 或 `已是最新`）。
 之後 `bin/fm-topic.sh status` 的最後一行是 `規則：captain.md 和範本相同（v6）；captain-shared.md 和範本相同（v2）`。
 裝完重開主 first mate 的 session：規則在下一次 session 開始或下一次壓縮之後才生效（`install-rules` 自己也會印這一句）。
+重開的 session 的啟動摘要裡會有第 5 步說的那一行；服務一直開著時是 `看板服務：在跑`。
 
 **不對時**：
 
@@ -192,7 +197,7 @@ bin/fm-topic.sh install-rules
 ## 7. 之後怎麼更新
 
 - **fork 有新版**（看板或 fork 的修正進了 `carry`）：在主 home 跑 `/updatefirstmate`。
-  下一個看板指令發現服務的程式版本不同，會自動換掉舊服務；`status` 出現「目前的程式是 …；下一個指令或 restart 會換成新版」時，也可以直接 `bin/fm-topic.sh restart`。
+  下一個看板指令發現服務的程式版本不同，會自動換掉舊服務（開 session 時的檢查不換，只回報 `看板服務：在跑`）；`status` 出現「目前的程式是 …；下一個指令或 restart 會換成新版」時，也可以直接 `bin/fm-topic.sh restart`。
   **確認**：`status` 的 `程式版本：` 等於 `git -C <clone> rev-parse HEAD`。
 - **規則範本有變**：更新後 `status` 的規則那一行會是 `和範本不同`；由使用者決定之後再跑一次 `install-rules`，再重開 session。
   有 second mate 時，先和第 8 節第 4 點一樣確認每個 home 都是 `相同` 再裝：新的規則可能用到只有新版程式才有的選項，例如共用規則 v2 要 `fm-captain-hold.sh hold --on-answer`，還沒更新的 home 會拒絕它。

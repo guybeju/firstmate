@@ -38,7 +38,8 @@
 # only in the main home and need node 22 or newer. Repeating any of them
 # unchanged is safe.
 #
-# open prints the board's URL. status and stop never start the service.
+# open prints the board's URL. status and stop never start the service, but
+# the main home's next session start does (bin/fm-topic-session-start.sh).
 #
 # summary stores a one-to-three sentence milestone summary read from stdin (at
 # most 600 characters) and prints the line to start the chat reminder with:

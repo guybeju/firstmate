@@ -20,7 +20,7 @@
 
 | # | 要驗的事 | 怎麼驗 | 假設不成立時 |
 | --- | --- | --- | --- |
-| 2-1 | 服務活過 Claude Code session 結束。這次只能驗到「跨工具呼叫仍活著、已脫離原本的 session」 | 在主 home 的 first mate session 裡跑 `bin/fm-topic.sh status` 讓服務起來，記下 pid；結束那個 session；從另一個終端機 `ps -p <pid>` | 服務本來就是懶啟動：下一個議題指令或 `open` 會把它帶起來，資料不會掉。只是使用者會看到「看板服務沒有回應」直到那時 |
+| 2-1 | 服務活過 Claude Code session 結束。這次只能驗到「跨工具呼叫仍活著、已脫離原本的 session」 | 在主 home 的 first mate session 裡跑 `bin/fm-topic.sh status` 讓服務起來，記下 pid；結束那個 session；從另一個終端機 `ps -p <pid>` | 服務本來就是懶啟動：下一個議題指令、`open` 或主 home 下一次開 session 會把它帶起來，資料不會掉。只是使用者會看到「看板服務沒有回應」直到那時 |
 | 2-2 | `ps -o args= -p <pid>` 在 macOS 的輸出能比對出同一個 home 的服務 | 在 macOS 上啟動服務後跑一次 | 比對不出來就不殺，回 69 並請使用者手動處理。主 home 目前是 Linux |
 | 2-3 | `tsc` 的輸出在不同機器上逐位元組相同 | 在兩台機器各跑一次 `topic-board/test/check-dist.sh` | 不同就把檢查改成「重編後 `node --test` 全過」，不比位元組 |
 
@@ -78,6 +78,8 @@ client 的流程，除了 `status`、`stop` 之外的每個經 socket 的子命�
 這一段 TCP 只需要綁住埠、對任何請求回 404；瀏覽器那條通道的檢查與 API 是第五段的事。
 
 服務不會閒置自動關，session 鎖換手時不重啟，沒有 watchdog。只有 `stop`、被殺或重開機會讓它停。收到 `stop` 或 TERM：不再接新要求，寫完手上的檔，刪掉 socket 檔與 `pid` 檔，退出。
+
+主 home 每次開 session（拿到 session 鎖、不是重印摘要）時，`bin/fm-session-start.sh` 呼叫 `bin/fm-topic-session-start.sh`：服務成功啟動過（`state/topic-board/token` 存在）的主 home 先跑一次 `status`，在跑就不動，即使跑的是舊版的程式；不是在跑就跑 `open`，丟掉它印的網址。結果在啟動摘要裡印成一行：在跑、已啟動、沒有回應而重新啟動，或無法啟動加上原因。所以 `stop` 停掉的服務會在下一次開 session 時回來；重開機之後也一樣。secondmate home、服務沒有成功啟動過的主 home、沒拿到鎖的唯讀 session 都不做這件事。
 
 ### 啟動失敗的類別
 
