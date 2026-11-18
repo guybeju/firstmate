@@ -342,7 +342,8 @@ no_shims() {
     "$SHIMS/unfixed.logged" "$SHIMS/unfixed.pid"
 }
 
-# kill_own_child <pid>: the only place this test sends a signal. signal-check
+# kill_own_child <pid>: the test's one signal command (the boards' own stop
+# commands, the migration's S1 and the cleanup on exit send theirs). signal-check
 # judges the raw arguments, and only an accepted pid is signalled; anything
 # else fails the test unsent. In a dry run nothing is sent and signal-check
 # logs the call. The pid is a child this shell has not waited for, so it
