@@ -245,6 +245,13 @@ function agentsOf(home, stale, placer, last, runs) {
     });
     return [...running, ...ended];
 }
+/** Whether a hold is due now, and if not, why it waits. */
+function holdTiming(hold, todo) {
+    // Something to do by hand does not become less due by sitting there.
+    if (todo !== null && hold.hold_bucket === "aged")
+        return { live: true, deferred_reason: null };
+    return { live: hold.hold_bucket === "live", deferred_reason: deferredReason(hold) };
+}
 function holdsOf(home, stale, placer, marks) {
     if (home.report === null)
         return [];
@@ -264,9 +271,7 @@ function holdsOf(home, stale, placer, marks) {
                 todo,
                 on_answer: outcome.on_answer,
                 on_answer_recorded: outcome.recorded,
-                // Something to do by hand does not become less due by sitting there.
-                live: hold.hold_bucket === "live" || (todo !== null && hold.hold_bucket === "aged"),
-                deferred_reason: todo !== null && hold.hold_bucket === "aged" ? null : deferredReason(hold),
+                ...holdTiming(hold, todo),
                 topic: placement.topic,
                 stale,
             },

@@ -200,7 +200,8 @@ test_answer_takes_two_steps() {
   assert_equals "confirm" "$got" \
     "a code must not work once the question changed"
   code=$(answer_step1)
-  sed -i.bak '/^- \[ \] call-1 /{n;s/$/\n  Captain hold on answer: close/;}' "$MAIN/data/backlog.md"
+  awk '{ print } /^  Captain hold set: / && held { print "  Captain hold on answer: close" } { held = /^- \[ \] call-1 / }' \
+    "$MAIN/data/backlog.md" > "$MAIN/data/backlog.md.new" && mv "$MAIN/data/backlog.md.new" "$MAIN/data/backlog.md"
   api refresh '{}' >/dev/null
   assert_equals "close true" "$(state '.holds[] | select(.task == "call-1") | "\(.on_answer) \(.on_answer_recorded)"')" \
     "a recorded close must reach the page"

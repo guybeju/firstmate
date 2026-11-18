@@ -106,7 +106,7 @@ brief 與帳本研究都說待決事項從 snapshot 的 `decisions_open` 讀。�
 - **沒有記的 hold**：送 `release`。`release` 之後項目回到排隊中，純決定的項目由 first mate 收到通知後自己關掉，最壞是多一個要關的項目；改送 `done` 的話，擋著沒做完工作的項目（例如同意合併）會被默默標成完成，工作就不見了。主 home 的要你動手的項目例外，送 `done`：它只裝使用者自己要做的事，「不做了」「好，撤下」本來就是結束它（C46）。
 - **答的不是定案**（例如「先給我更多資訊」）：`close` 的項目照樣關掉並記下那句話，first mate 收到通知，要再問就另開一個 hold（關掉的 task 不能再 hold）；`release` 的項目回到排隊中，first mate 補完資訊後再 hold 一次。
 - 已知上游在 away 狀態下拒絕 `release`（回 `refused:`），那時那筆寫入顯示「失敗」並附原因；沒有記的 hold 照預設送 `release`，所以 away 時一樣會失敗。兩種之後項目的狀態在第四段 4-4 驗過（[handover](handover.markdown) 第 3 節）。
-- 規則的共用區塊升到 v2，只多 `--on-answer` 那半句；三個範本合計約 1442 token，測試的上限 1450 不變。真的 home 要由使用者明講之後重跑 `install-rules`，而且要等每個 home 都更新到有 `--on-answer` 的程式（[FORK-SETUP](../../FORK-SETUP.markdown) 第 7 節）。
+- 規則的共用區塊升到 v2，只多 `--on-answer` 那半句；三個範本合計約 1445 token，測試的上限 1450 不變。真的 home 要由使用者明講之後重跑 `install-rules`，而且要等每個 home 都更新到有 `--on-answer` 的程式（[FORK-SETUP](../../FORK-SETUP.markdown) 第 7 節）。
 
 ### C20　各段怎麼分
 
