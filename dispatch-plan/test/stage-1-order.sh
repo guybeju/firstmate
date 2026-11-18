@@ -5,8 +5,8 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tests/lib.sh"
-# shellcheck source=topic-board/test/helpers.sh
-. "$ROOT/topic-board/test/helpers.sh"
+# shellcheck source=myshape/test/helpers.sh
+. "$ROOT/myshape/test/helpers.sh"
 
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 TMP_ROOT=$(fm_test_tmproot dispatch-plan-stage-1-order)
@@ -123,7 +123,7 @@ test_lists_hands_on_items_waiting_for_a_check() {
   out=$(tb_run "$home" "$PLAN" order)
   assert_equals "td1 " "$(section "$out" "等你驗證：")" \
     "only an open hands-on item the captain says is done waits for a check"
-  assert_contains "$out" "$(printf 'td1\t帳務重構\t高\t← 使用者說做完了；驗證後跑 bin/fm-topic.sh todo done td1，沒成功就跑 bin/fm-topic.sh todo failed td1 --reason <一行>')" \
+  assert_contains "$out" "$(printf 'td1\t帳務重構\t高\t← 使用者說做完了；驗證後跑 bin/myshape.sh todo done td1，沒成功就跑 bin/myshape.sh todo failed td1 --reason <一行>')" \
     "the line must carry both commands"
   assert_not_contains "$(section "$out" "可派：")" "td" "a hands-on item is never dispatchable"
   pass "order lists the hands-on items the captain says are done"
@@ -159,7 +159,7 @@ test_falls_open_when_the_snapshot_fails() {
   tb_write_topics "$home"
   root="$TMP_ROOT/order-root"
   mkdir -p "$root/bin"
-  cp "$ROOT"/bin/fm-dispatch-plan.sh "$ROOT"/bin/fm-topic-lib.sh "$ROOT"/bin/fm-primary-scope-lib.sh "$root/bin/"
+  cp "$ROOT"/bin/fm-dispatch-plan.sh "$ROOT"/bin/myshape-lib.sh "$ROOT"/bin/fm-primary-scope-lib.sh "$root/bin/"
   printf '#!/usr/bin/env bash\nexit 1\n' > "$root/bin/fm-fleet-snapshot.sh"
   chmod +x "$root/bin/fm-fleet-snapshot.sh"
   out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-dispatch-plan.sh" order) ||

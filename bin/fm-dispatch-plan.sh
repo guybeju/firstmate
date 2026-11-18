@@ -35,8 +35,8 @@ TODO_MARKER='動手：'
 
 # shellcheck source=bin/fm-primary-scope-lib.sh
 . "$SCRIPT_DIR/fm-primary-scope-lib.sh"
-# shellcheck source=bin/fm-topic-lib.sh
-. "$SCRIPT_DIR/fm-topic-lib.sh"
+# shellcheck source=bin/myshape-lib.sh
+. "$SCRIPT_DIR/myshape-lib.sh"
 
 usage() {
   sed -n '2,/^set -euo pipefail$/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
@@ -155,7 +155,7 @@ cmd_order() {
       ($items | map(select(.claimed)) as $claimed
        | if ($claimed | length) == 0 then empty
          else "等你驗證：",
-              ($claimed[] | line + "\t← 使用者說做完了；驗證後跑 bin/fm-topic.sh todo done \(.id)，沒成功就跑 bin/fm-topic.sh todo failed \(.id) --reason <一行>")
+              ($claimed[] | line + "\t← 使用者說做完了；驗證後跑 bin/myshape.sh todo done \(.id)，沒成功就跑 bin/myshape.sh todo failed \(.id) --reason <一行>")
          end)
   ' || {
     printf '%s\n' "讀不到 backlog，照平常的方式派工。"

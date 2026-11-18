@@ -4,8 +4,8 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tests/lib.sh"
-# shellcheck source=topic-board/test/helpers.sh
-. "$ROOT/topic-board/test/helpers.sh"
+# shellcheck source=myshape/test/helpers.sh
+. "$ROOT/myshape/test/helpers.sh"
 
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 TMP_ROOT=$(fm_test_tmproot fm-board-stage-1-tag)
@@ -133,7 +133,7 @@ test_in_home_answers_passes_through() {
   # A private code root whose fm-captain-hold.sh records what it was given.
   root="$TMP_ROOT/answers-root"
   mkdir -p "$root/bin"
-  cp "$ROOT"/bin/fm-board.sh "$ROOT"/bin/fm-board-lib.sh "$ROOT"/bin/fm-topic-lib.sh \
+  cp "$ROOT"/bin/fm-board.sh "$ROOT"/bin/fm-board-lib.sh "$ROOT"/bin/myshape-lib.sh \
     "$ROOT"/bin/fm-primary-scope-lib.sh "$ROOT"/bin/fm-secondmate-registry-lib.sh "$root/bin/"
   cat > "$root/bin/fm-captain-hold.sh" <<'SH'
 #!/usr/bin/env bash
@@ -148,7 +148,7 @@ SH
     FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-board.sh" --in-home sm1 answers 2>/dev/null) || rc=$?
   assert_equals 1 "$rc" "answers did not pass the exit code through"
   assert_equals "skipped: task-1 (already closed)" "$out" "answers did not pass stdout through"
-  assert_grep 'argv=answers --source topic-board' "$sm/captured" "answers called fm-captain-hold.sh with the wrong argv"
+  assert_grep 'argv=answers --source myshape' "$sm/captured" "answers called fm-captain-hold.sh with the wrong argv"
   assert_grep "home=$sm" "$sm/captured" "answers ran against the wrong home"
   assert_grep "$(printf 'stdin=task-1\tyes\tyes\trelease')" "$sm/captured" "answers did not forward stdin"
   pass "--in-home answers forwards stdin, output, and exit code unchanged"
