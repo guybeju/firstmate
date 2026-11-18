@@ -174,20 +174,37 @@ function lastEvents(events) {
         last.set(`${event.home}\n${event.task}`, event);
     return last;
 }
-/** The run each (home, task) is on: everything since its latest dispatch. */
+/** Ledger events only a worker's lifecycle writes: spawn, PR registration, merge, and teardown. */
+const LIFECYCLE = new Set(["task.dispatched", "task.pr_ready", "task.merged", "task.cleaned_up"]);
+/**
+ * The run each (home, task) is on: everything since its latest dispatch. Only
+ * a (home, task) with a lifecycle event has a run; a status log that no spawn
+ * or teardown ever touched, such as a remote mate's reply channel, has none.
+ */
 function currentRuns(events) {
     const runs = new Map();
     for (const event of events) {
+        if (!LIFECYCLE.has(event.event))
+            continue;
         const key = `${event.home}\n${event.task}`;
+        const run = runs.get(key) ?? { kind: "", merged: false };
         if (event.event === "task.dispatched") {
             const kind = event.fields["kind"];
             runs.set(key, { kind: typeof kind === "string" ? kind : "", merged: false });
         }
-        else if (event.event === "task.merged") {
-            runs.set(key, { kind: runs.get(key)?.kind ?? "", merged: true });
+        else {
+            runs.set(key, { ...run, merged: run.merged || event.event === "task.merged" });
         }
     }
     return runs;
+}
+/**
+ * Whether a task the home no longer has was work: the ledger saw it in a
+ * worker's lifecycle and its latest dispatch was not a secondmate's. A retired
+ * mate's own record and a reply channel are not; neither is shown as an agent.
+ */
+function wasWork(run) {
+    return run !== undefined && run.kind !== "secondmate";
 }
 const DISCARDED = { state: "discarded", detail: "已收掉，帳本裡沒有落地紀錄" };
 /**
@@ -205,7 +222,7 @@ function endedTask(event, run) {
 }
 /** Builds agent entries for one home; everything that does not vary per task is bound here. */
 function agentMaker(home, stale, placer, last) {
-    return (task, light) => {
+    return (task, light, finished) => {
         const placement = placer.current(home.id, task.id);
         const lastEvent = last.get(`${home.id}\n${task.id}`);
         return {
@@ -220,6 +237,7 @@ function agentMaker(home, stale, placer, last) {
             updated_at: lastEvent === undefined ? null : lastEvent.ts,
             stale,
             unstarted: task.unstarted,
+            finished,
         };
     };
 }
@@ -231,14 +249,17 @@ function agentsOf(home, stale, placer, last, runs) {
     const deciding = new Set(report.holds.filter((hold) => hold.hold_bucket === "live").map((hold) => hold.id));
     const running = report.tasks
         .filter((task) => task.kind !== "secondmate")
-        .map((task) => agent(task, deciding.has(task.id) ? "decide" : lightFor(task.state)));
+        .map((task) => agent(task, deciding.has(task.id) ? "decide" : lightFor(task.state), false));
     // A cleaned-up task is gone from the snapshot; its last ledger event says how it ended.
     const known = new Set(report.tasks.map((task) => task.id));
     const ended = [...last.values()]
         .filter((event) => event.home === home.id && !known.has(event.task))
-        .map((event) => {
-        const gone = endedTask(event, runs.get(`${event.home}\n${event.task}`));
-        return agent(gone.task, gone.light);
+        .flatMap((event) => {
+        const run = runs.get(`${event.home}\n${event.task}`);
+        if (!wasWork(run))
+            return [];
+        const gone = endedTask(event, run);
+        return [agent(gone.task, gone.light, true)];
     });
     return [...running, ...ended];
 }
@@ -294,6 +315,22 @@ function compareRanks(left, right) {
 }
 function holdOrder(view) {
     return (a, b) => compareRanks(holdRank(view, a), holdRank(view, b)) || a.view.task.localeCompare(b.view.task);
+}
+/**
+ * The worker questions of one home. A mate's own needs-decision line is its
+ * report to first mate, not a worker's question.
+ */
+function questionsOf(home, report, placer) {
+    const mates = new Set(report.tasks.filter((task) => task.kind === "secondmate").map((task) => task.id));
+    return report.status_decisions
+        .filter((question) => !mates.has(question.id))
+        .map((question) => ({
+        home,
+        task: question.id,
+        key: question.key,
+        summary: question.summary,
+        topic: placer.current(home, question.id).topic,
+    }));
 }
 function prOf(event) {
     const pr = event.fields["pr"];
@@ -409,15 +446,7 @@ export function buildView(input) {
                 waiting: waitingFor(home.id, item),
             });
         }
-        for (const question of home.report.status_decisions) {
-            view.questions.push({
-                home: home.id,
-                task: question.id,
-                key: question.key,
-                summary: question.summary,
-                topic: placer.current(home.id, question.id).topic,
-            });
-        }
+        view.questions.push(...questionsOf(home.id, home.report, placer));
     });
     view.holds = ranked.toSorted(holdOrder(view)).map((entry) => entry.view);
     return view;

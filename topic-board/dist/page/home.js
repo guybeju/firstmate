@@ -89,16 +89,31 @@ export function mergeConfirm(page, view, actions, key) {
     const into = topicName(view, String(pending.body["into"]));
     return h("div", { class: "confirm" }, `併入之後不能拆開，「${from}」的 agent 與更新都會顯示在「${into}」底下。`, h("div", { class: "btns" }, h("button", { class: "danger", onclick: () => actions.confirm(key) }, `併入「${into}」`), h("button", { onclick: () => actions.cancel(key) }, "取消")));
 }
+function unsortedRow(view, actions, agent) {
+    return h("div", { class: "row" }, h("span", { class: "grow" }, h("b", {}, agent.task), " ", h("span", { class: "note" }, UNSORTED_REASON[agent.unsorted_reason ?? ""] ?? "")), h("span", { class: "pill" }, agent.home), tagMenu(view, actions, agent));
+}
+/**
+ * Work, decisions, and questions that still need a topic, and below them,
+ * folded, finished work that never got one: it waits for nothing.
+ */
 function unsorted(page, view, actions) {
-    return section("未分類", view.agents
-        .filter((agent) => agent.topic === null)
-        .map((agent) => h("div", { class: "row" }, h("span", { class: "grow" }, h("b", {}, agent.task), " ", h("span", { class: "note" }, UNSORTED_REASON[agent.unsorted_reason ?? ""] ?? "")), h("span", { class: "pill" }, agent.home), tagMenu(view, actions, agent))), view.summaries
-        .filter((summary) => summary.topic === null)
-        .map((summary) => summaryRow(view, actions, summary, false)), view.holds
+    const open = view.agents.filter((agent) => agent.topic === null && !agent.finished);
+    const openTasks = new Set(open.map((agent) => `${agent.home}/${agent.task}`));
+    const summaries = view.summaries.filter((summary) => summary.topic === null);
+    const ofOpen = (summary) => openTasks.has(`${summary.home}/${summary.task}`);
+    return section("未分類", open.map((agent) => unsortedRow(view, actions, agent)), summaries.filter(ofOpen).map((summary) => summaryRow(view, actions, summary, false)), view.holds
         .filter((hold) => hold.topic === null && !hold.live)
         .map((hold) => holdCard(page, view, actions, hold, false)), view.questions
         .filter((question) => question.topic === null)
-        .map((question) => questionRow(view, actions, question, false)), untaggedList(view));
+        .map((question) => questionRow(view, actions, question, false)), untaggedList(view), finishedList(view, actions, summaries.filter((summary) => !ofOpen(summary))));
+}
+/** Finished work with no topic, folded: kept so its history can still be filed under a topic. */
+function finishedList(view, actions, summaries) {
+    const agents = view.agents.filter((agent) => agent.topic === null && agent.finished);
+    const tasks = new Set([...agents, ...summaries].map((entry) => `${entry.home}/${entry.task}`));
+    if (tasks.size === 0)
+        return null;
+    return h("details", { "data-key": "finished:untagged" }, h("summary", {}, `已結束、沒標議題 ${tasks.size}`), agents.map((agent) => unsortedRow(view, actions, agent)), summaries.map((summary) => summaryRow(view, actions, summary, false)));
 }
 /** Queued work nobody gave a topic, folded: it is there to be noticed, not to crowd the page. */
 function untaggedList(view) {

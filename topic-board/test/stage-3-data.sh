@@ -348,6 +348,79 @@ test_a_wrong_summary_can_be_retracted() {
   pass "a wrong summary can be retracted with a reason, and stated again later"
 }
 
+# Records that are not work items, next to finished work that has no topic:
+# a retired mate's own events (its id is the task, its dispatch kind is
+# secondmate), a live mate's needs-decision line, and a remote mate's reply
+# channel (a status log no spawn or teardown ever touched).
+add_records_that_are_not_work() {
+  ledger "$MAIN" \
+    '{"v":1,"ts":1782990000,"event":"task.dispatched","task":"old-mate","kind":"secondmate","project":"sample","harness":"claude","model":null}' \
+    '{"v":1,"ts":1782990100,"event":"task.status","task":"old-mate","state":"done","key":null,"text":" child far-work PR ready"}' \
+    '{"v":1,"ts":1782990200,"event":"task.cleaned_up","task":"old-mate"}' \
+    '{"v":1,"ts":1782990300,"event":"task.dispatched","task":"done-loose","kind":"ship","project":"sample","harness":"claude","model":null}' \
+    '{"v":1,"ts":1782990400,"event":"task.cleaned_up","task":"done-loose"}' \
+    '{"v":1,"ts":1782990500,"event":"task.dispatched","task":"done-own-id","kind":"scout","project":"sample","harness":"claude","model":null}' \
+    '{"v":1,"ts":1782990600,"event":"task.cleaned_up","task":"done-own-id"}'
+  tag_at "$MAIN" old-mate billing 2026-07-01T00:00:00Z
+  tag_at "$MAIN" done-own-id done-own-id 2026-07-01T00:00:00Z
+  fm_write_meta "$MAIN/state/sm1.meta" "window=firstmate:fm-sm1" "kind=secondmate" "harness=claude" "home=$LOCAL_SM"
+  printf '%s\n' "needs-decision: child sm-work asks which API" > "$MAIN/state/sm1.status"
+  printf '%s\n' "done: idle, nothing in flight" "done: re-read the rules" > "$REMOTE_SM/state/parent-replies.status"
+  ledger "$REMOTE_SM" \
+    '{"v":1,"ts":1782990700,"event":"task.status","task":"parent-replies","state":"done","key":null,"text":" idle, nothing in flight"}' \
+    '{"v":1,"ts":1782990800,"event":"task.status","task":"parent-replies","state":"done","key":null,"text":" re-read the rules"}' \
+    '{"v":1,"ts":1782990900,"event":"task.dispatched","task":"far-done","kind":"ship","project":"beta","harness":"claude","model":null}' \
+    '{"v":1,"ts":1782991000,"event":"task.cleaned_up","task":"far-done"}'
+  ledger "$LOCAL_SM" \
+    '{"v":1,"ts":1782991100,"event":"task.dispatched","task":"sm-done","kind":"ship","project":"alpha","harness":"claude","model":null}' \
+    '{"v":1,"ts":1782991200,"event":"task.cleaned_up","task":"sm-done"}'
+}
+
+test_only_work_items_are_agents() {
+  local out
+  add_records_that_are_not_work
+  out=$(view '.agents | map("\(.home)/\(.task)=\(.finished):\(.topic // .unsorted_reason)") | sort | join(" ")')
+  assert_not_contains "$out" "old-mate" "a retired mate's own events must not make it an agent, even when tagged"
+  assert_not_contains "$out" "parent-replies" "a remote mate's reply channel must not be an agent"
+  assert_not_contains "$out" "main/sm1" "a live mate must not be an agent"
+  assert_contains "$out" "main/ship-loose=false:no-tag" "untagged open work must stay listed, as open"
+  assert_contains "$out" "main/done-loose=true:no-tag" "untagged finished work must stay listed, as finished"
+  assert_contains "$out" "main/done-own-id=true:unknown-topic" "work tagged with a topic that does not exist must say so"
+  assert_contains "$out" "sm1/sm-done=true:no-tag" "a local secondmate's finished work must be listed with its home"
+  assert_contains "$out" "far1/far-done=true:no-tag" "a remote secondmate's finished work must be listed with its home"
+  assert_contains "$out" "main/gone-task=true:billing" "finished tagged work must keep its topic"
+  assert_equals "main/ship-b" "$(view '.questions | map("\(.home)/\(.task)") | join(" ")')" \
+    "a mate's own needs-decision line is not a worker question"
+  assert_equals "billing|null" \
+    "$(view '[([.updates[] | select(.task == "old-mate")][0].topic), ([.updates[] | select(.task == "parent-replies")][0].topic)] | map(tostring) | join("|")')" \
+    "the events of records that are not work stay in the updates, under their tag when they have one"
+  pass "only work items are agents; a mate's own records and a reply channel are not"
+}
+
+# A board already running when this code lands is replaced by the next board
+# command once the code root's commit moves. Nothing is migrated: the view is
+# computed again from the same journal and tag files.
+test_a_running_board_takes_the_new_rules_without_a_step() {
+  local before_pid events_sum tags_sum real_before
+  view >/dev/null
+  before_pid=$(tb_board_pid "$MAIN")
+  events_sum=$(cksum < "$MAIN/data/topic-board/events.jsonl")
+  tags_sum=$(cat "$MAIN"/data/*/topic "$LOCAL_SM"/data/*/topic "$REMOTE_SM"/data/*/topic | cksum)
+  real_before=$(tb_op "$MAIN" dump | jq -r '.agents | map("\(.home)/\(.task)=\(.topic)") | sort | join(" ")')
+  git -C "$CODE_ROOT" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -q --allow-empty -m "the new code lands"
+  assert_equals "Billing：" "$(t which ship-a)" "a board command must still answer while the board is replaced"
+  [ "$(tb_board_pid "$MAIN")" != "$before_pid" ] || fail "a board on an older commit must be replaced by the next command"
+  assert_equals "$events_sum" "$(cksum < "$MAIN/data/topic-board/events.jsonl")" "replacing the board must not rewrite the journal"
+  assert_equals "$tags_sum" "$(cat "$MAIN"/data/*/topic "$LOCAL_SM"/data/*/topic "$REMOTE_SM"/data/*/topic | cksum)" \
+    "replacing the board must not touch any tag file"
+  assert_equals "$real_before" "$(view '.agents | map("\(.home)/\(.task)=\(.topic)") | sort | join(" ")')" \
+    "every work item must keep its topic across the replacement"
+  assert_present "$MAIN/data/old-mate/topic" "the tag placed on a mate's own record must stay on file"
+  assert_not_contains "$real_before" "old-mate" "the mate's record must not come back as an agent"
+  pass "a running board takes the work-item rule at its next replacement, losing no record or tag"
+}
+
 setup_fleet
 last_topic() {  # <home> <task>: the topic the task is tagged with now
   tail -n 1 "$1/data/$2/topic" | cut -d' ' -f1
@@ -492,5 +565,6 @@ fm_test_run test_agents_lights_and_placement test_holds_are_placed_and_ordered t
   test_event_follows_the_tag_in_effect test_ledger_is_stored_once_and_survives_rewrites test_home_status \
   test_polling_follows_viewers test_summary_and_which test_summary_on_a_cold_board_reads_the_main_home_first \
   test_dump_is_test_only test_which_follows_a_retag_nobody_is_watching \
-  test_a_wrong_summary_can_be_retracted test_split_moves_the_named_tasks_to_a_new_topic \
+  test_a_wrong_summary_can_be_retracted test_only_work_items_are_agents \
+  test_a_running_board_takes_the_new_rules_without_a_step test_split_moves_the_named_tasks_to_a_new_topic \
   test_find_traces_renames_merges_and_tasks test_find_says_who_and_why

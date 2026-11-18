@@ -55,6 +55,26 @@ export default async function run(page) {
     throw new Error("a hold with its own card and tagged work must not be listed as untagged");
   await page.waitFor("the loose call as a decision card", has("這個要不要做？"));
 
+  // 未分類 lists what still needs a topic; finished work without one is folded below it,
+  // still taggable. A mate's own record is not work and appears nowhere.
+  const unsortedSection = `${untagged}.closest("section")`;
+  const finished = `document.querySelector('details[data-key="finished:untagged"]')`;
+  const openText = `[...${unsortedSection}.children].filter((child) => child.tagName !== "DETAILS").map((child) => child.innerText).join("\\n")`;
+  await page.waitFor("the open untagged worker", `${openText}.includes("open-1") && ${openText}.includes("沒有標記")`);
+  if (await page.evaluate(`${openText}.includes("done-1") || ${openText}.includes("done-2") || ${openText}.includes("已落地")`))
+    throw new Error("finished work must not read as needing a topic");
+  if (await page.evaluate(has("old-mate"))) throw new Error("a mate's own record is not a work item");
+  if ((await page.evaluate(`${finished}.querySelector("summary").textContent`)) !== "已結束、沒標議題 2")
+    throw new Error("the folded list counts finished items without a topic");
+  if (await page.evaluate(`${finished}.open`)) throw new Error("the finished list starts folded");
+  await page.click('details[data-key="finished:untagged"] summary', "已結束、沒標議題");
+  await page.waitFor(
+    "the finished items with their reasons",
+    `${finished}.innerText.includes("done-1") && ${finished}.innerText.includes("沒有標記") && ${finished}.innerText.includes("done-2") && ${finished}.innerText.includes("標記的議題不存在") && ${finished}.innerText.includes("已落地，沒人標議題。")`,
+  );
+  if ((await page.evaluate(`${finished}.querySelectorAll("select").length`)) !== 2)
+    throw new Error("each finished item can still be filed under a topic");
+
   // Something the captain has to do by hand: its own section, the commands exactly as written,
   // a copy button, and a claim that firstmate checks before the item goes away.
   const COMMAND = 'sudo x --now "a b" && echo $HOME `date`\n\tps | grep x';
