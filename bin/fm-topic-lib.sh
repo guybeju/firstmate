@@ -2,8 +2,7 @@
 # The topic board's own shell helpers: id checks, error exits, and reading
 # which live topic an id names. Sourced only; defines functions, has no side
 # effects on source, and sources nothing. bin/fm-topic.sh needs no other
-# library; Firstmate's side of the board (bin/fm-board.sh,
-# bin/fm-dispatch-plan.sh, bin/fm-topic-board-read.sh) sources it too.
+# library; Firstmate's side of the board sources it too.
 
 # tb_valid_id <value>: 0 when <value> is a usable task id or topic id. The
 # grammar is the one topic ids share with task ids: [A-Za-z0-9._-], at most 128
@@ -25,7 +24,7 @@ tb_die() {
 }
 
 # tb_jq_install_hint: the install line used when jq is missing, worded like
-# upstream fm-bootstrap.sh's install_cmd.
+# the install lines upstream's bootstrap prints.
 tb_jq_install_hint() {
   printf '%s\n' "brew install jq  # or the platform's package manager"
 }
