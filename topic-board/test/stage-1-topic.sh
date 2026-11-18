@@ -79,8 +79,8 @@ test_old_forms_name_the_new_command() {
     assert_equals 2 "$rc" "the old form '$form' must be a usage error"
     assert_equals "fm-topic.sh: ${expected}（fm-topic.sh --help 看用法）" "$out" "the old form '$form' must name its new command"
   done <<'EOF'
-tag task-1 billing|沒有 tag 了：改用 bin/fm-board.sh tag <task-id> <議題 id>
-tag task-1 --from old|沒有 tag 了：改用 bin/fm-board.sh tag <task-id> <議題 id>
+tag task-1 billing|沒有 tag 了：議題標記由 first mate 的指令寫，改用 bin/fm-board.sh tag <task-id> <議題 id>
+tag task-1 --from old|沒有 tag 了：議題標記由 first mate 的指令寫，改用 bin/fm-board.sh tag <task-id> <議題 id>
 --in-home sm1 tag task-1 billing|沒有 --in-home 了：改用 bin/fm-board.sh --in-home <id> <tag|answers|setup> …
 --in-home sm1 answers|沒有 --in-home 了：改用 bin/fm-board.sh --in-home <id> <tag|answers|setup> …
 setup|沒有 setup 了：改用 bin/fm-board.sh setup

@@ -395,7 +395,7 @@ refuse_old_form() {  # <subcommand> <arguments...>
   local sub=$1
   shift
   case "$sub" in
-    tag) usage_error "沒有 tag 了：改用 bin/fm-board.sh tag <task-id> <議題 id>" ;;
+    tag) usage_error "沒有 tag 了：議題標記由 first mate 的指令寫，改用 bin/fm-board.sh tag <task-id> <議題 id>" ;;
     --in-home) usage_error "沒有 --in-home 了：改用 bin/fm-board.sh --in-home <id> <tag|answers|setup> …" ;;
     setup) usage_error "沒有 setup 了：改用 bin/fm-board.sh setup" ;;
     install-rules) usage_error "沒有 install-rules 了：改用 bin/fm-board.sh install-rules" ;;

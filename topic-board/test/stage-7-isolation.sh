@@ -58,7 +58,7 @@ bin/fm-topic.sh	report=$("$SCRIPT_DIR/fm-topic-board-read.sh" 0 -) || tb_die 1 "
 bin/fm-topic.sh	"$SCRIPT_DIR/fm-captain-hold.sh" hold "${words[0]}" --title "${words[1]}" --reason "$text" \
 bin/fm-topic.sh	"$SCRIPT_DIR/fm-board.sh" tag "${words[0]}" "$topic" >/dev/null ||
 bin/fm-topic.sh	"$SCRIPT_DIR/fm-captain-hold.sh" answers --source topic-board) ||
-bin/fm-topic.sh	tag) usage_error "沒有 tag 了：改用 bin/fm-board.sh tag <task-id> <議題 id>" ;;
+bin/fm-topic.sh	tag) usage_error "沒有 tag 了：議題標記由 first mate 的指令寫，改用 bin/fm-board.sh tag <task-id> <議題 id>" ;;
 bin/fm-topic.sh	--in-home) usage_error "沒有 --in-home 了：改用 bin/fm-board.sh --in-home <id> <tag|answers|setup> …" ;;
 bin/fm-topic.sh	setup) usage_error "沒有 setup 了：改用 bin/fm-board.sh setup" ;;
 bin/fm-topic.sh	install-rules) usage_error "沒有 install-rules 了：改用 bin/fm-board.sh install-rules" ;;

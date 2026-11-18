@@ -422,7 +422,7 @@ first mate 用 `propose` 開的議題停在提議中，要等使用者在頁面�
 - 看板服務的白名單 W5、W7、W8、W9 改跑 `fm-board.sh`；帳本未開的提示也改成 `fm-board.sh setup`。
   缺編譯結果時的錯誤不再叫人跑 `/updatefirstmate`。
 - `todo add` 與 `todo done` 在看板自己存這些項目之前（B3）仍執行四個 first mate 的指令，只執行、不 source。
-- 主 home 規則範本升到 v9、共用的升到 v3：指令名稱換成新的，`order` 那一句多一句「看板通知議題可派時也照做」。
+- 主 home 規則範本升到 v9、共用的升到 v3：指令名稱換成新的，`order` 那一句多一句「看板通知議題可派時也重新評估」。
   為了留在 1450 token 的上限內（約 1445），拿掉了 `split` 那一句的「中途失敗就原樣再跑一次」（指令失敗時自己會這樣說）、第一行的「fork 裡的」，與兩處 `bin/`。
   真的 home 要由使用者明講之後在主 home 重跑 `bin/fm-board.sh install-rules`。
 - 新的第七段從只有看板自己的檔的副本跑看板：乾淨的環境、只有系統目錄的 `PATH`、每支其他 first mate 腳本的絆線，以及升級時跑著的看板不需要任何手動步驟。
