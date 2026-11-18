@@ -689,14 +689,73 @@ describe("hands-on items", () => {
       ]),
     );
 
-  it("splits a hands-on hold into what to do and its commands, kept exactly", () => {
+  it("shows a record from before the labels as it always did: the rest as one command", () => {
     expect(parseTodo(`動手：重啟 x（路由卡住）\n${COMMAND}\n`)).toEqual({
       what: "重啟 x（路由卡住）",
-      command: COMMAND,
+      guidance: "",
+      commands: [COMMAND],
     });
-    expect(parseTodo("動手： 登入 App Store ")).toEqual({ what: "登入 App Store", command: "" });
+    expect(parseTodo("動手：開 NAS 的兩步驟驗證\n只在你人在電腦前時做。")).toEqual({
+      what: "開 NAS 的兩步驟驗證",
+      guidance: "",
+      commands: ["只在你人在電腦前時做。"],
+    });
+    expect(parseTodo("動手：查路由器的轉址")).toEqual({
+      what: "查路由器的轉址",
+      guidance: "",
+      commands: [],
+    });
+    expect(parseTodo("動手： 登入 App Store \n\n")).toEqual({
+      what: "登入 App Store",
+      guidance: "",
+      commands: [],
+    });
     expect(parseTodo("請決定\n動手：不是開頭")).toBeNull();
     expect(parseTodo("")).toBeNull();
+  });
+
+  it("reads the labelled parts todo add writes, each command kept exactly", () => {
+    expect(parseTodo("動手：開 NAS 的兩步驟驗證\n說明：只在你人在電腦前時做。\n\n")).toEqual({
+      what: "開 NAS 的兩步驟驗證",
+      guidance: "只在你人在電腦前時做。",
+      commands: [],
+    });
+    expect(
+      parseTodo(
+        [
+          "動手：裝新的設定",
+          "說明：先關掉 VPN。",
+          "說明：  第二行說明",
+          "指令：sudo tee /etc/x.conf <<'EOF'",
+          "續：\tkey = 1",
+          "續：",
+          "續：指令：這一行是 here-document 的內容",
+          "續：EOF",
+          "指令：sudo systemctl restart x \\",
+          "續：  --now",
+          "指令：說明：也只是指令",
+        ].join("\n"),
+      ),
+    ).toEqual({
+      what: "裝新的設定",
+      guidance: "先關掉 VPN。\n  第二行說明",
+      commands: [
+        "sudo tee /etc/x.conf <<'EOF'\n\tkey = 1\n\n指令：這一行是 here-document 的內容\nEOF",
+        "sudo systemctl restart x \\\n  --now",
+        "說明：也只是指令",
+      ],
+    });
+  });
+
+  it("treats a record with any unlabelled line as one from before the labels", () => {
+    const old = "動手：重啟 x\n說明：看起來像新的\nsudo x --now";
+    expect(parseTodo(old)).toEqual({
+      what: "重啟 x",
+      guidance: "",
+      commands: ["說明：看起來像新的\nsudo x --now"],
+    });
+    expect(parseTodo("動手：重啟 x\n續：沒有前面的指令")?.commands).toEqual(["續：沒有前面的指令"]);
+    expect(parseTodo("動手：重啟 x\n說明：a\n續：b")?.commands).toEqual(["說明：a\n續：b"]);
   });
 
   it("shows the mark firstmate or the captain left, and no option buttons", () => {
@@ -706,6 +765,7 @@ describe("hands-on items", () => {
       rejected: { state: "rejected", at: "t", reason: "沒起來" },
       obsolete: { state: "obsolete", at: "t", reason: "不用了" },
       plain: { state: "claimed", at: "t" },
+      labelled: { state: "rejected", at: "t", reason: "還是不行" },
     };
     state.doc.todos["constructor"] = { state: "claimed", at: "t" };
     const holds = built(state, [
@@ -718,22 +778,31 @@ describe("hands-on items", () => {
             todoHold("obsolete"),
             hold("plain"),
             todoHold("toString"),
+            todoHold("labelled", "動手：登入\n說明：用公司的帳號"),
           ],
         }),
       }),
     ]);
     expect(holds["main/open"]?.todo).toEqual({
       what: "選一個",
-      command: "選項：甲 | 乙",
+      guidance: "",
+      commands: ["選項：甲 | 乙"],
       state: "open",
       reason: null,
     });
     expect(holds["main/open"]?.options).toEqual([]);
-    expect(holds["main/claimed"]?.todo).toMatchObject({ state: "claimed", command: COMMAND });
+    expect(holds["main/claimed"]?.todo).toMatchObject({ state: "claimed", commands: [COMMAND] });
     expect(holds["main/rejected"]?.todo).toMatchObject({ state: "rejected", reason: "沒起來" });
     expect(holds["main/obsolete"]?.todo).toMatchObject({ state: "obsolete", reason: "不用了" });
     expect(holds["main/plain"]?.todo).toBeNull();
     expect(holds["main/toString"]?.todo?.state).toBe("open");
+    expect(holds["main/labelled"]?.todo).toEqual({
+      what: "登入",
+      guidance: "用公司的帳號",
+      commands: [],
+      state: "rejected",
+      reason: "還是不行",
+    });
   });
 
   it("answers as the hold recorded, else releases, except a main-home hands-on item", () => {

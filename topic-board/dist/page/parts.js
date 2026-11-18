@@ -110,16 +110,19 @@ export function liveTodos(view, topic) {
     const todos = view.holds.filter((hold) => hold.todo !== null && hold.live && (topic === undefined || hold.topic === topic));
     return [...todos.filter(needsCaptain), ...todos.filter((hold) => !needsCaptain(hold))];
 }
-/** Copies the commands; a browser that refuses gets them selected, ready for the copy key. */
-function copyCommand(command, button) {
+/** Copies one command; a browser that refuses gets that block selected, ready for the copy key. */
+function copyCommand(command, block, button) {
     navigator.clipboard.writeText(command).then(() => {
         button.textContent = "已複製";
     }, () => {
-        const block = button.parentElement?.querySelector("pre");
-        if (block !== null && block !== undefined)
-            getSelection()?.selectAllChildren(block);
+        getSelection()?.selectAllChildren(block);
         button.textContent = "已選取，請按 Ctrl+C（Mac 是 ⌘C）";
     });
+}
+/** One command in its own block, with a button that copies exactly that command. */
+function commandBlock(command) {
+    const block = h("pre", { class: "cmd" }, command);
+    return h("div", { class: "cmd-row" }, block, h("button", { onclick: (event) => copyCommand(command, block, event.currentTarget) }, "複製指令"));
 }
 const TODO_NOTE = {
     open: () => null,
@@ -141,14 +144,10 @@ function todoConfirm(page, actions, key) {
         return null;
     return h("div", { class: "confirm" }, `會記成你的答覆「${String(pending.body["answer"])}」，這一項就從看板拿掉，並通知 first mate。`, h("div", { class: "btns" }, h("button", { class: "danger", onclick: () => actions.confirm(key) }, "確定"), h("button", { onclick: () => actions.cancel(key) }, "取消")));
 }
-/** Something the captain has to do by hand: what, the commands to copy, and where it stands. */
+/** Something the captain has to do by hand: what, any guidance, each command to copy, and where it stands. */
 function todoCard(page, view, actions, hold, todo, showTopic) {
     const key = `answer:${hold.home}/${hold.task}`;
-    return h("div", { class: "card todo", "data-todo": hold.task }, holdMeta(view, actions, hold, showTopic), h("b", {}, hold.title), TODO_NOTE[todo.state](todo.reason ?? ""), h("div", {}, todo.what), todo.command === ""
-        ? null
-        : h("div", {}, h("pre", { class: "cmd" }, todo.command), h("button", {
-            onclick: (event) => copyCommand(todo.command, event.currentTarget),
-        }, "複製指令")), todoButtons(actions, hold, todo, key), todoConfirm(page, actions, key), writeRows(page, actions, (write) => write.kind === "answer" && write.home === hold.home && write.task === hold.task));
+    return h("div", { class: "card todo", "data-todo": hold.task }, holdMeta(view, actions, hold, showTopic), h("b", {}, hold.title), TODO_NOTE[todo.state](todo.reason ?? ""), h("div", {}, todo.what), todo.guidance === "" ? null : h("div", { class: "guide" }, todo.guidance), todo.commands.map(commandBlock), todoButtons(actions, hold, todo, key), todoConfirm(page, actions, key), writeRows(page, actions, (write) => write.kind === "answer" && write.home === hold.home && write.task === hold.task));
 }
 export function holdCard(page, view, actions, hold, showTopic) {
     if (hold.todo !== null)

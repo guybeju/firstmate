@@ -78,21 +78,42 @@ export default async function run(page) {
   if ((await page.evaluate(`${finished}.querySelectorAll("select").length`)) !== 2)
     throw new Error("each finished item can still be filed under a topic");
 
-  // Something the captain has to do by hand: its own section, the commands exactly as written,
-  // a copy button, and a claim that firstmate checks before the item goes away.
+  // Something the captain has to do by hand: its own section, guidance as plain text, each
+  // command exactly as written with its own copy button, and a claim that firstmate checks
+  // before the item goes away.
   const COMMAND = 'sudo x --now "a b" && echo $HOME `date`\n\tps | grep x';
+  const SECOND = "echo two";
   const todo = (expression) => `(() => { const card = document.querySelector('[data-todo="todo-1"]'); return ${expression}; })()`;
   const todoButtons = todo(`[...card.querySelectorAll("button")].map((button) => button.textContent).join("|")`);
   const cardOf = (name) =>
     `[...document.querySelectorAll(".topic")].find((card) => card.innerText.includes(${JSON.stringify(name)})).innerText`;
   await page.waitFor("the hands-on section", has("要你動手"));
-  if ((await page.evaluate(todo(`card.querySelector("pre.cmd").textContent`))) !== COMMAND)
-    throw new Error("the commands must be shown exactly as written");
+  const blocks = await page.evaluate(todo(`JSON.stringify([...card.querySelectorAll("pre.cmd")].map((pre) => pre.textContent))`));
+  if (blocks !== JSON.stringify([COMMAND, SECOND])) throw new Error(`each command must be its own block, exactly as written, got ${blocks}`);
+  if ((await page.evaluate(todo(`card.querySelectorAll(".cmd-row button").length`))) !== 2)
+    throw new Error("each command must have its own copy button");
+  if ((await page.evaluate(todo(`card.querySelector(".guide")?.textContent ?? ""`))) !== "只在你人在電腦前時做。")
+    throw new Error("the guidance must be shown as plain text, apart from the commands");
+  const shapeOf = (id) =>
+    `(() => { const card = document.querySelector('[data-todo="${id}"]'); return JSON.stringify([[...card.querySelectorAll("pre.cmd")].map((pre) => pre.textContent), card.querySelectorAll(".cmd-row button").length, card.querySelector(".guide")?.textContent ?? null]); })()`;
+  const shapes = {
+    "old-note": [["只在你人在電腦前時做。"], 1, null],
+    "old-only": [[], 0, null],
+    "new-note": [[], 0, "只在你人在電腦前時做。"],
+  };
+  for (const [id, expected] of Object.entries(shapes)) {
+    await page.waitFor(`the item ${id}`, `document.querySelector('[data-todo="${id}"]') !== null`);
+    const shape = await page.evaluate(shapeOf(id));
+    if (shape !== JSON.stringify(expected)) throw new Error(`${id} must show ${JSON.stringify(expected)}, got ${shape}`);
+  }
   if (!(await page.evaluate(todo(`card.closest("section").querySelector("h2").textContent === "要你動手"`))))
     throw new Error("a hands-on item belongs in its own section, not among the decisions");
   await page.waitFor("the count on the topic card", `${cardOf("Login")}.includes("要你動手 1")`);
   await page.click('[data-todo="todo-1"] button', "複製指令");
   await page.waitFor("the commands selected when the browser refuses to copy", `getSelection().toString() === ${JSON.stringify(COMMAND)}`);
+  await page.evaluate("getSelection().removeAllRanges()");
+  await page.evaluate(todo(`card.querySelectorAll(".cmd-row button")[1].click()`));
+  await page.waitFor("only the second command selected", `getSelection().toString() === ${JSON.stringify(SECOND)}`);
   await page.evaluate("getSelection().removeAllRanges()");
   await page.pointerClick('[data-todo="todo-1"] button', "已選取");
   await page.waitFor("the copy confirmed after a real click", todo(`card.innerText.includes("已複製")`));

@@ -73,13 +73,18 @@ export interface QueuedView {
 }
 
 /**
- * A hold that asks the captain to do something by hand instead of to decide:
- * what to do, the commands to run (kept exactly as written), and where it
- * stands. "open" is still to do.
+ * What a hands-on hold asks for: the action (one line), guidance that is not
+ * a command (empty when there is none), and the commands to copy, each kept
+ * exactly as written. An item with nothing to run has no commands.
  */
-export interface TodoView {
+export interface TodoText {
   what: string;
-  command: string;
+  guidance: string;
+  commands: string[];
+}
+
+/** A hands-on hold as the page shows it, with where it stands. "open" is still to do. */
+export interface TodoView extends TodoText {
   state: "open" | TodoState;
   reason: string | null;
 }
@@ -161,11 +166,50 @@ const OPTION_MARKER = "選項：";
 /** A hold reason that starts with this asks the captain to do something by hand. */
 export const TODO_MARKER = "動手：";
 
-/** Splits a hands-on hold's reason into what to do (its first line) and the commands (the rest). */
-export function parseTodo(question: string): { what: string; command: string } | null {
+/**
+ * Labels `fm-topic.sh todo add` puts on every line after the action: a line of
+ * guidance, the first line of a command, and each further line of that command.
+ */
+export const TODO_LABELS = { guidance: "說明：", command: "指令：", more: "續：" } as const;
+
+/**
+ * Reads the lines after the action of a record `todo add` wrote, where every
+ * line carries a label. Null when any line does not, which is how a record
+ * written before the labels is told apart.
+ */
+function labelledTodo(what: string, lines: string[]): TodoText | null {
+  const guidance: string[] = [];
+  const commands: string[][] = [];
+  for (const line of lines) {
+    const last = commands[commands.length - 1];
+    if (line.startsWith(TODO_LABELS.guidance))
+      guidance.push(line.slice(TODO_LABELS.guidance.length));
+    else if (line.startsWith(TODO_LABELS.command))
+      commands.push([line.slice(TODO_LABELS.command.length)]);
+    else if (line.startsWith(TODO_LABELS.more) && last !== undefined)
+      last.push(line.slice(TODO_LABELS.more.length));
+    else return null;
+  }
+  return {
+    what,
+    guidance: guidance.join("\n"),
+    commands: commands.map((command) => command.join("\n")),
+  };
+}
+
+/**
+ * Splits a hands-on hold's reason into its action (the first line), guidance,
+ * and commands. A record from before the labels has no guidance and shows
+ * everything after its first line as one command, as it always did.
+ */
+export function parseTodo(question: string): TodoText | null {
   if (!question.startsWith(TODO_MARKER)) return null;
-  const [first = "", ...rest] = question.slice(TODO_MARKER.length).split("\n");
-  return { what: first.trim(), command: rest.join("\n").replace(/\s+$/, "") };
+  const [first = "", ...rest] = question.slice(TODO_MARKER.length).replace(/\n+$/, "").split("\n");
+  const what = first.trim();
+  const labelled = labelledTodo(what, rest);
+  if (labelled !== null) return labelled;
+  const block = rest.join("\n").replace(/\s+$/, "");
+  return { what, guidance: "", commands: block === "" ? [] : [block] };
 }
 
 /**

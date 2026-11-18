@@ -207,17 +207,31 @@ export function liveTodos(view: View, topic?: string): HoldView[] {
   return [...todos.filter(needsCaptain), ...todos.filter((hold) => !needsCaptain(hold))];
 }
 
-/** Copies the commands; a browser that refuses gets them selected, ready for the copy key. */
-function copyCommand(command: string, button: HTMLElement): void {
+/** Copies one command; a browser that refuses gets that block selected, ready for the copy key. */
+function copyCommand(command: string, block: HTMLElement, button: HTMLElement): void {
   navigator.clipboard.writeText(command).then(
     () => {
       button.textContent = "已複製";
     },
     () => {
-      const block = button.parentElement?.querySelector("pre");
-      if (block !== null && block !== undefined) getSelection()?.selectAllChildren(block);
+      getSelection()?.selectAllChildren(block);
       button.textContent = "已選取，請按 Ctrl+C（Mac 是 ⌘C）";
     },
+  );
+}
+
+/** One command in its own block, with a button that copies exactly that command. */
+function commandBlock(command: string): Child {
+  const block = h("pre", { class: "cmd" }, command);
+  return h(
+    "div",
+    { class: "cmd-row" },
+    block,
+    h(
+      "button",
+      { onclick: (event) => copyCommand(command, block, event.currentTarget as HTMLElement) },
+      "複製指令",
+    ),
   );
 }
 
@@ -258,7 +272,7 @@ function todoConfirm(page: Page, actions: Actions, key: string): Child {
   );
 }
 
-/** Something the captain has to do by hand: what, the commands to copy, and where it stands. */
+/** Something the captain has to do by hand: what, any guidance, each command to copy, and where it stands. */
 function todoCard(
   page: Page,
   view: View,
@@ -275,20 +289,8 @@ function todoCard(
     h("b", {}, hold.title),
     TODO_NOTE[todo.state](todo.reason ?? ""),
     h("div", {}, todo.what),
-    todo.command === ""
-      ? null
-      : h(
-          "div",
-          {},
-          h("pre", { class: "cmd" }, todo.command),
-          h(
-            "button",
-            {
-              onclick: (event) => copyCommand(todo.command, event.currentTarget as HTMLElement),
-            },
-            "複製指令",
-          ),
-        ),
+    todo.guidance === "" ? null : h("div", { class: "guide" }, todo.guidance),
+    todo.commands.map(commandBlock),
     todoButtons(actions, hold, todo, key),
     todoConfirm(page, actions, key),
     writeRows(
