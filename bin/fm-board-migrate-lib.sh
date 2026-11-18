@@ -23,6 +23,11 @@
 #   S4  mv data/topic-board data/myshape
 #   S5  mv config/topic-board-port config/myshape-port
 #   S6  recompute the manifest over the new directories; it must equal S0's
+#   S7  re-hold each backlog item whose hold reason starts with the board's
+#       old prefix topic-board： with the same reason under the new prefix
+#       看板佇列： (bin/fm-tasks-axi.sh hold, which replaces the reason with no
+#       gap); the old reason is saved for --undo. A hold that has a kind is
+#       left as it is and reported, because re-holding drops the kind.
 #   S8  replace each rules block that still has the old marker (install-rules'
 #       own replacement); a file without one is left alone
 #   S9  move topic-board/{node_modules,coverage,.metrics} of the code root
@@ -36,7 +41,8 @@
 # an interruption finishes the job and repeats nothing: a move whose source is
 # gone and whose target exists is done. --undo reverses what the journal says
 # was begun, newest first, again checking the files: a directory is moved back
-# only when the new name holds it and the old name is free, a rules file whose
+# only when the new name holds it and the old name is free, a hold only when
+# it still has exactly the reason S7 gave it, a rules file whose
 # bytes are still what S8 wrote gets its backup back whole, and one changed
 # since gets only its old block back in place of the new one. It stops the
 # board first and deletes the journal once everything is reversed.
@@ -49,9 +55,12 @@ MIG_JOURNAL=$MIG_DIR/migrate-myshape.journal
 MIG_LOCK=$MIG_DIR/migrate-myshape.lock
 MIG_SAVE=$MIG_DIR/migrate-myshape.d
 MIG_CODE_LEFTOVERS="node_modules coverage .metrics"
+MIG_OLD_HOLD='topic-board：'
+MIG_NEW_HOLD='看板佇列：'
 MIG_FAILED=0
 MIG_PARTIAL=0
 MIG_CHECKED=0
+MIG_NEEDS_TASKS=0
 
 mig_say() {
   printf '%s\n' "$*"
@@ -261,6 +270,79 @@ mig_check_manifest() {
   mig_say "S6：$(wc -l < "$MIG_SAVE/manifest" | tr -d ' ') 個檔的校驗碼和搬之前相同"
 }
 
+# --- holds -------------------------------------------------------------------
+
+# mig_snapshot <file>: this home's fleet snapshot, the backlog with every
+# record's hold reason and kind, written to <file>.
+mig_snapshot() {
+  FM_HOME="$FM_HOME" FM_SNAPSHOT_SECONDMATES=1 FM_SNAPSHOT_BUDGET=1 FM_CREW_STATE_NO_FORGE=1 \
+    "$SCRIPT_DIR/fm-fleet-snapshot.sh" --json > "$1" 2>/dev/null && [ -s "$1" ]
+}
+
+# mig_old_holds <snapshot>: "<id> <kind or ->" for each record whose hold
+# reason still starts with the old prefix.
+mig_old_holds() {
+  jq -r --arg old "$MIG_OLD_HOLD" '.backlog.records[]
+    | select((.hold_reason // "") | startswith($old)) | "\(.id) \(.hold_kind // "-")"' "$1"
+}
+
+# mig_hold_reason <snapshot> <id>: that record's hold reason, exactly.
+mig_hold_reason() {
+  jq -j --arg id "$2" '[.backlog.records[] | select(.id == $id)][0].hold_reason // ""' "$1"
+}
+
+mig_read_exact() {  # <file>: its bytes, trailing newlines too.
+  local text
+  text=$(cat "$1"; printf x)
+  printf '%s' "${text%x}"
+}
+
+# S7: the board's own holds take the new prefix.
+mig_rehold() {
+  local snapshot=$MIG_SAVE/snapshot.json id kind old
+  mkdir -p "$MIG_SAVE"
+  mig_snapshot "$snapshot" || { mig_fail "S7：讀不到 backlog，hold 的開頭沒有換；修好後原樣再跑一次。"; return 0; }
+  while read -r id kind; do
+    [ -n "$id" ] || continue
+    if [ "$kind" != - ]; then
+      mig_fail "S7：$id 的 hold 有種類（${kind}），重新 hold 會拿掉種類，沒有換；請手動把開頭改成 ${MIG_NEW_HOLD}"
+      continue
+    fi
+    tb_valid_id "$id" || { mig_fail "S7：看不懂的 id：$id"; continue; }
+    mig_hold_reason "$snapshot" "$id" > "$MIG_SAVE/hold.$id.old"
+    old=$(mig_read_exact "$MIG_SAVE/hold.$id.old")
+    printf '%s' "$MIG_NEW_HOLD${old#"$MIG_OLD_HOLD"}" > "$MIG_SAVE/hold.$id.new"
+    mig_journal "begin S7 $id"
+    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-tasks-axi.sh" hold "$id" --reason "$(mig_read_exact "$MIG_SAVE/hold.$id.new")" >/dev/null ||
+      { mig_fail "S7：$id 沒有換成功；原樣再跑一次。"; continue; }
+    mig_say "S7：$id 的 hold 改成「$(mig_read_exact "$MIG_SAVE/hold.$id.new")」"
+  done <<< "$(mig_old_holds "$snapshot")"
+}
+
+# mig_unhold_back <snapshot> <id>: S7 undone for one item, when it is still
+# held, has no kind, and has exactly the reason S7 gave it.
+mig_unhold_back() {
+  local snapshot=$1 id=$2 now
+  [ -f "$MIG_SAVE/hold.$id.new" ] || return 0
+  now=$(jq -r --arg id "$id" '[.backlog.records[] | select(.id == $id)][0] | "\(.hold_kind // "-")"' "$snapshot")
+  if [ "$now" != - ] || [ "$(mig_hold_reason "$snapshot" "$id")" != "$(mig_read_exact "$MIG_SAVE/hold.$id.new")" ]; then
+    mig_say "還原 S7：$id 現在的 hold 不是搬家時寫的那一個，沒有動"
+    return 0
+  fi
+  FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-tasks-axi.sh" hold "$id" --reason "$(mig_read_exact "$MIG_SAVE/hold.$id.old")" >/dev/null ||
+    { mig_fail "還原 S7：$id 沒有換回去。"; return 0; }
+  mig_say "還原 S7：$id 的 hold 換回原本的原因"
+}
+
+mig_undo_holds() {
+  local line snapshot=$MIG_SAVE/snapshot.undo.json
+  grep -q '^begin S7 ' "$MIG_JOURNAL" || return 0
+  mig_snapshot "$snapshot" || { mig_fail "還原 S7：讀不到 backlog，hold 沒有換回去。"; return 0; }
+  while IFS= read -r line; do
+    case "$line" in "begin S7 "*) mig_unhold_back "$snapshot" "${line#begin S7 }" ;; esac
+  done <<< "$(mig_journal_newest_first)"
+}
+
 # --- rules -------------------------------------------------------------------
 
 # mig_rules_kind <file>: none, old, new, both, or broken, by its markers.
@@ -385,6 +467,7 @@ mig_preflight() {
     esac
     mig_check_rules captain.md
     mig_check_rules captain-shared.md
+    mig_check_holds
     mig_check_tools || refused=1
   fi
   if [ -d "$FM_ROOT/topic-board" ]; then
@@ -394,9 +477,30 @@ mig_preflight() {
   return "$refused"
 }
 
+# mig_check_holds: the holds S7 would change, and the ones it would leave.
+mig_check_holds() {
+  local snapshot id kind ids="" kinded=""
+  command -v jq >/dev/null 2>&1 || return 0
+  snapshot=$(mktemp "${TMPDIR:-/tmp}/fm-board-migrate.XXXXXX")
+  if ! mig_snapshot "$snapshot"; then
+    rm -f "$snapshot"
+    mig_say "讀不到 backlog：看不出有沒有要換開頭的 hold"
+    MIG_PARTIAL=1
+    return 0
+  fi
+  while read -r id kind; do
+    [ -n "$id" ] || continue
+    if [ "$kind" = - ]; then ids="$ids $id"; else kinded="$kinded $id"; fi
+  done <<< "$(mig_old_holds "$snapshot")"
+  rm -f "$snapshot"
+  [ -z "$ids" ] || { mig_say "要換：hold 的開頭 ${MIG_OLD_HOLD} → ${MIG_NEW_HOLD}：${ids# }"; MIG_NEEDS_TASKS=1; }
+  [ -z "$kinded" ] || { mig_say "不能換：有種類的 hold 不會換（重新 hold 會拿掉種類）：${kinded# }"; MIG_PARTIAL=1; }
+}
+
 mig_check_tools() {
   local missing=""
   command -v jq >/dev/null 2>&1 || missing="$missing jq"
+  [ "$MIG_NEEDS_TASKS" -eq 0 ] || command -v tasks-axi >/dev/null 2>&1 || missing="$missing tasks-axi"
   if [ -e "$STATE/topic-board/token" ] || [ -e "$STATE/myshape/token" ]; then
     command -v node >/dev/null 2>&1 || missing="$missing node"
   fi
@@ -413,6 +517,18 @@ mig_done_already() {
   case "$(mig_rules_kind "$DATA/captain.md")|$(mig_rules_kind "$DATA/captain-shared.md")" in
     *old* | *both* | *broken*) return 1 ;;
   esac
+  mig_no_old_holds
+}
+
+# mig_no_old_holds: 0 when no hold in this home's backlog has the old prefix.
+mig_no_old_holds() {
+  local snapshot rc=0
+  snapshot=$(mktemp "${TMPDIR:-/tmp}/fm-board-migrate.XXXXXX")
+  if ! mig_snapshot "$snapshot" || [ -n "$(mig_old_holds "$snapshot")" ]; then
+    rc=1
+  fi
+  rm -f "$snapshot"
+  return "$rc"
 }
 
 # --- the proof ---------------------------------------------------------------
@@ -508,6 +624,7 @@ mig_undo() {
   while IFS= read -r line; do
     case "$line" in "S9 "* | "S8 "*) mig_undo_line "$line" ;; esac
   done <<< "$(mig_journal_newest_first)"
+  mig_undo_holds
   mig_move_back S5 "$CONFIG/topic-board-port" "$CONFIG/myshape-port"
   mig_move_back S4 "$DATA/topic-board" "$DATA/myshape"
   mig_move_back S3 "$STATE/topic-board" "$STATE/myshape"
@@ -550,6 +667,7 @@ mig_run() {
     mig_move S4 "$DATA/topic-board" "$DATA/myshape" || exit 1
     mig_move S5 "$CONFIG/topic-board-port" "$CONFIG/myshape-port" || exit 1
     mig_check_manifest || exit 1
+    mig_rehold
     mig_install_rules
   fi
   mig_tidy_code_root
