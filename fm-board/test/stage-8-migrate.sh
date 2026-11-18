@@ -12,6 +12,8 @@
 # shellcheck disable=SC2016 # jq filters are literal text.
 set -u
 
+"${BASH:-bash}" "$(dirname "${BASH_SOURCE[0]}")/check-signals.sh" >/dev/null || exit 1
+
 # shellcheck source=tests/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tests/lib.sh"
 # shellcheck source=myshape/test/helpers.sh
@@ -20,7 +22,22 @@ set -u
 BASE=5324261c
 BASE_BOARD_FILES="bin/fm-topic.sh bin/fm-topic-lib.sh topic-board/dist topic-board/public topic-board/package.json"
 LIVE_BOARD_PORT=47819
-for tool in jq node git; do
+
+# FM_TEST_SIGNAL_DRY_RUN=1: the guarded helper sends nothing and instead writes
+# one line per call to FM_TEST_SIGNAL_LOG (an absolute path), so the targets
+# can be read before a real run; the assertions that need a killed run are
+# skipped, and every shim and migration ends by itself.
+signal_dry_run() {
+  [ "${FM_TEST_SIGNAL_DRY_RUN:-}" = 1 ]
+}
+if signal_dry_run; then
+  case "${FM_TEST_SIGNAL_LOG:-}" in
+    /*) ;;
+    *) echo "not ok - FM_TEST_SIGNAL_DRY_RUN=1 needs FM_TEST_SIGNAL_LOG, an absolute path for its log" >&2; exit 1 ;;
+  esac
+  printf '# signal dry run: nothing is signalled; each target is logged to %s\n' "$FM_TEST_SIGNAL_LOG"
+fi
+for tool in jq node git tasks-axi; do
   command -v "$tool" >/dev/null 2>&1 || { echo "skip: $tool not found"; exit 0; }
 done
 git -C "$ROOT" cat-file -e "$BASE^{commit}" 2>/dev/null || { echo "not ok - base $BASE is not in this checkout" >&2; exit 1; }
@@ -88,9 +105,19 @@ old() {
   env -u FM_ROOT_OVERRIDE FM_HOME="$home" FM_TOPIC_BOARD_LOCAL_MS=300 "$OLD_ROOT/bin/fm-topic.sh" "$@"
 }
 
+# backlog <home> <tasks-axi arguments...>: this home's backlog, through Firstmate's wrapper.
+backlog() {
+  local home=$1
+  shift
+  assert_scratch "$home"
+  FM_HOME="$home" "$ROOT/bin/fm-tasks-axi.sh" "$@"
+}
+
 # old_home <name>: a main home the base's board has run in, with its port
 # under both names, topics, a summary, the base's rules blocks under the old
-# marker, two rules backups the base's installer left, and a backlog.
+# marker, two rules backups the base's installer left, and a backlog: q1 and
+# q4 held by the board under the old prefix (q1 tagged with a parked topic),
+# o1 held for another reason.
 old_home() {
   local home port
   home=$(tb_make_home "$1")
@@ -98,6 +125,14 @@ old_home() {
   printf '%s\n' "$port" > "$home/config/topic-board-port"
   printf '%s\n' "$port" > "$home/config/myshape-port"
   printf '## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
+  backlog "$home" add q1 "Parked work" >/dev/null || fail "tasks-axi add failed in $home"
+  backlog "$home" add q4 "More parked work" >/dev/null
+  backlog "$home" add o1 "Other hold" >/dev/null
+  backlog "$home" hold q1 --reason "topic-board：議題 old-b 在待辦" >/dev/null
+  backlog "$home" hold q4 --reason "topic-board：議題 old-b 在待辦" >/dev/null
+  backlog "$home" hold o1 --reason "waiting for a vendor" >/dev/null
+  mkdir -p "$home/data/q1"
+  printf 'old-b 2026-11-01T00:00:00Z\n' > "$home/data/q1/topic"
   old "$home" open >/dev/null || fail "the old board did not start in $home"
   old "$home" create "Old A" --goal a --id old-a >/dev/null || fail "the old board did not create a topic"
   old "$home" create "Old B" --goal b --id old-b --queue later >/dev/null
@@ -154,9 +189,23 @@ home_sums() {
   }
 }
 
-# mv_shim <mode> <n>: the n-th mv the migration runs ends the migration there:
+# A shim never signals anything. At its cut point it writes cut.reached and
+# waits, doing nothing, until cut_run has ended the migration and writes
+# cut.release, or a minute has passed; then it writes cut.left and exits.
+cut_point() {
+  cat <<SH
+: > "$SHIMS/cut.reached"
+i=0
+while [ ! -e "$SHIMS/cut.release" ] && [ "\$i" -lt 600 ]; do sleep 0.1; i=\$((i + 1)); done
+: > "$SHIMS/cut.left"
+exit 1
+SH
+}
+
+# mv_shim <mode> <n>: the n-th mv the migration runs is its cut point:
 # "after" does that mv first, "before" does not, "corrupt" does it and then
-# appends to a moved events file, as if the move had not kept it.
+# appends to a moved events file, as if the move had not kept it, and lets
+# the migration go on.
 mv_shim() {
   printf '0\n' > "$SHIMS/mv.count"
   cat > "$SHIMS/mv" <<SH
@@ -165,16 +214,114 @@ n=\$((\$(cat "$SHIMS/mv.count") + 1))
 printf '%s\n' "\$n" > "$SHIMS/mv.count"
 if [ "\$n" -ne $2 ]; then exec /bin/mv "\$@"; fi
 case "$1" in
-  before) kill -KILL "\$PPID"; exit 1 ;;
-  after) /bin/mv "\$@"; kill -KILL "\$PPID"; exit 0 ;;
+  before) ;;
+  after) /bin/mv "\$@" ;;
   corrupt) /bin/mv "\$@"; for f in "\$@"; do :; done; printf 'x\n' >> "\$f/events.jsonl"; exit 0 ;;
 esac
+$(cut_point)
 SH
   chmod +x "$SHIMS/mv"
 }
 
+# tasks_axi_shim: the first hold the migration runs is made, and is its cut point.
+tasks_axi_shim() {
+  local real
+  real=$(command -v tasks-axi)
+  cat > "$SHIMS/tasks-axi" <<SH
+#!/bin/sh
+"$real" "\$@" || exit \$?
+[ "\$1" = hold ] || exit 0
+$(cut_point)
+SH
+  chmod +x "$SHIMS/tasks-axi"
+}
+
 no_shims() {
-  rm -f "$SHIMS/mv" "$SHIMS/mv.count"
+  rm -f "$SHIMS/mv" "$SHIMS/mv.count" "$SHIMS/tasks-axi" "$SHIMS/cut.reached" "$SHIMS/cut.release" "$SHIMS/cut.left"
+}
+
+# signal_refusal <pid>: why the guard refuses <pid>, or nothing when it is a
+# direct child of this test script. $$ is the script's own pid even inside a
+# command substitution, and every child the test signals is started by the
+# script's own shell.
+signal_refusal() {
+  local pid=$1 parent command
+  case "$pid" in '' | *[!0-9]*) printf "'%s' is not a pid" "$pid"; return 0 ;; esac
+  if [ "$pid" -le 1 ]; then printf 'pid %s is 1 or less' "$pid"; return 0; fi
+  if [ "$pid" = "$$" ]; then printf "pid %s is this test script's own" "$pid"; return 0; fi
+  parent=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+  if [ "$parent" != "$$" ]; then
+    printf 'pid %s is not a child of this test script %s (its parent: %s)' "$pid" "$$" "${parent:-none}"
+    return 0
+  fi
+  command=$(ps -o args= -p "$pid" 2>/dev/null || true)
+  case "$command" in *systemd*) printf 'pid %s is %s' "$pid" "$command" ;; esac
+}
+
+# signal_ancestry <pid>: "<pid> <command>" for each level from <pid> up to pid 1.
+signal_ancestry() {
+  local pid=$1 levels=0 line=""
+  while [ -n "$pid" ] && [ "$levels" -lt 64 ]; do
+    line="$line < $pid $(ps -o args= -p "$pid" 2>/dev/null || printf '(gone)')"
+    [ "$pid" -gt 1 ] 2>/dev/null || break
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    levels=$((levels + 1))
+  done
+  printf '%s' "${line# < }"
+}
+
+# kill_own_child <pid>: the only place this test sends a signal, and only to
+# a pid signal_refusal accepts; anything else fails the test unsent. In a dry
+# run it sends nothing and logs what it would have done.
+kill_own_child() {
+  local pid=$1 refusal verdict
+  refusal=$(signal_refusal "$pid")
+  if signal_dry_run; then
+    verdict=accepted
+    [ -z "$refusal" ] || verdict="refused: $refusal"
+    printf 'would send KILL to pid %s (%s); checks: %s; ancestry: %s\n' "$pid" \
+      "$(ps -o args= -p "$pid" 2>/dev/null || printf '(gone)')" "$verdict" "$(signal_ancestry "$pid")" >> "$FM_TEST_SIGNAL_LOG"
+    return 0
+  fi
+  [ -z "$refusal" ] || fail "signal guard: $refusal"
+  kill -KILL "$pid"
+}
+
+# cut_run <home> <code-root>: run the migration with the shims in place, end it
+# while a shim waits at its cut point, and leave its exit code in CUT_RC. The
+# migration is started here in the background, so its pid comes from $!.
+cut_run() {
+  local home=$1 root=$2 pid i=0
+  assert_scratch "$home"
+  rm -f "$SHIMS/cut.reached" "$SHIMS/cut.release" "$SHIMS/cut.left"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$SHIMS:$PATH" "$BOARD" migrate-myshape >/dev/null 2>&1 &
+  pid=$!
+  while [ ! -e "$SHIMS/cut.reached" ] && [ "$i" -lt 600 ]; do
+    case "$(ps -o stat= -p "$pid" 2>/dev/null)" in '' | Z*) break ;; esac
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if [ ! -e "$SHIMS/cut.reached" ]; then
+    kill_own_child "$pid"
+    signal_dry_run || wait "$pid" 2>/dev/null || true
+    fail "the migration did not reach the shim's cut point"
+  fi
+  kill_own_child "$pid"
+  if signal_dry_run; then
+    : > "$SHIMS/cut.release"
+    CUT_RC=0
+    wait "$pid" 2>/dev/null || CUT_RC=$?
+    return 0
+  fi
+  CUT_RC=0
+  wait "$pid" 2>/dev/null || CUT_RC=$?
+  : > "$SHIMS/cut.release"
+  i=0
+  while [ ! -e "$SHIMS/cut.left" ] && [ "$i" -lt 100 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -e "$SHIMS/cut.left" ] || fail "the shim did not leave after it was released"
 }
 
 assert_moved() {  # <home> <code-root> <old-pid>
@@ -209,6 +356,7 @@ test_moves_a_home_end_to_end() {
   assert_contains "$out" "要停：舊的看板服務（pid $pid）" "--check must name the running service"
   assert_contains "$out" "要換：captain.md 裡舊標記的規則區塊" "--check must list the rules"
   assert_contains "$out" "要清：$root/topic-board 裡的" "--check must list the leftovers"
+  assert_contains "$out" "要換：hold 的開頭 topic-board： → 看板佇列：：q1 q4" "--check must list the holds"
   kill -0 "$pid" 2>/dev/null || fail "--check must not stop the service"
   assert_equals "$before" "$(tree_sums "$home/data"; tree_sums "$home/config")" "--check must write nothing"
   assert_absent "$home/state/fm-board" "--check must write nothing"
@@ -227,6 +375,13 @@ test_moves_a_home_end_to_end() {
   assert_absent "$home/state/myshape/rules-backup" "no rules backup may be left in the board's directory"
   assert_absent "$root/topic-board" "the code root's old directory must be gone"
   assert_equals "module" "$(cat "$root/myshape/node_modules/pkg/index.js")" "the leftovers must have moved"
+  assert_contains "$(cat "$home/data/backlog.md")" "(hold: 看板佇列：議題 old-b 在待辦)" "the board's holds must take the new prefix"
+  assert_not_contains "$(cat "$home/data/backlog.md")" "topic-board：" "no hold may keep the old prefix"
+  assert_contains "$(cat "$home/data/backlog.md")" "(hold: waiting for a vendor)" "another hold must be left as it was"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$ROOT/bin/fm-dispatch-plan.sh" order)
+  assert_not_contains "$out" "舊標記" "order must not warn after the move"
+  assert_contains "$(printf '%s\n' "$out" | awk '/^停著：/ { on = 1; next } /^[^ ]/ { on = 0 } on')" "q1" \
+    "order must park the rewritten hold of a parked topic"
   assert_equals "# 我的偏好" "$(head -n 1 "$home/data/captain.md")" "the captain's own lines must be kept"
   assert_equals "- 最後一行" "$(tail -n 1 "$home/data/captain.md")" "the captain's own lines must be kept"
   out=$(mig "$home" "$root") || fail "a second run failed: $out"
@@ -295,7 +450,13 @@ interrupted() {
   old "$home" stop >/dev/null
   ready_to_migrate "$home"
   mv_shim "$2" "$3"
-  rc=$(mig_code "$home" "$root")
+  cut_run "$home" "$root"
+  rc=$CUT_RC
+  if signal_dry_run; then
+    no_shims
+    new "$home" "$root" stop >/dev/null 2>&1 || true
+    return 0
+  fi
   assert_equals "$3" "$(cat "$SHIMS/mv.count")" "the run must have reached the mv it is cut at ($4)"
   no_shims
   assert_not_equals 0 "$rc" "the run interrupted $4 must not succeed"
@@ -324,17 +485,39 @@ test_a_rerun_finishes_after_each_interruption() {
   interrupted cut-s5 after 6 "after S5" config/myshape-port config/topic-board-port 2
   interrupted cut-s8 after 7 "inside S8" config/myshape-port state/myshape/pid 1
   interrupted cut-s10 after 11 "before S10" state/myshape/token state/myshape/pid 0
+  home=$(old_home cut-s7)
+  root=$(make_code_root cut-s7-root)
+  old "$home" stop >/dev/null
+  ready_to_migrate "$home"
+  tasks_axi_shim
+  cut_run "$home" "$root"
+  no_shims
+  if ! signal_dry_run; then
+    assert_equals 1 "$(grep -c '(hold: 看板佇列：' "$home/data/backlog.md")" "the run must have stopped inside S7"
+    assert_contains "$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$ROOT/bin/fm-dispatch-plan.sh" order | head -n 1)" \
+      "有 1 個舊標記的 hold，先跑 bin/fm-board.sh migrate-myshape" "order must warn about the hold left"
+    assert_contains "$(mig "$home" "$root")" "已搬完" "the rerun after an interruption inside S7 must finish"
+    assert_equals 2 "$(grep -c '(hold: 看板佇列：' "$home/data/backlog.md")" "the rerun must convert only the hold left"
+    new "$home" "$root" stop >/dev/null
+  else
+    new "$home" "$root" stop >/dev/null 2>&1 || true
+  fi
   home=$(old_home cut-midway)
   root=$(make_code_root cut-midway-root)
   old "$home" stop >/dev/null
   ready_to_migrate "$home"
   mv_shim after 4
-  mig_code "$home" "$root" >/dev/null
+  cut_run "$home" "$root"
   no_shims
+  if signal_dry_run; then
+    new "$home" "$root" stop >/dev/null 2>&1 || true
+    pass "dry run: the interrupted runs were logged, not killed; their assertions were skipped"
+    return 0
+  fi
   rc=0
   new "$home" "$root" list >/dev/null 2>&1 || rc=$?
   assert_equals 69 "$rc" "the board must refuse while an old name is left"
-  pass "a run killed after S1, after each single move, inside S8 or before S10 is finished by running it again"
+  pass "a run killed after S1, after each single move, inside S7, inside S8 or before S10 is finished by running it again"
 }
 
 test_a_changed_file_stops_the_move() {
@@ -389,7 +572,7 @@ test_both_markers_and_a_broken_marker() {
 }
 
 test_refusals_change_nothing() {
-  local home root before out rc
+  local home root before out rc sleeper
   home=$(old_home refuse)
   root=$(make_code_root refuse-root)
   old "$home" stop >/dev/null
@@ -405,23 +588,31 @@ test_refusals_change_nothing() {
   rmdir "$home/state/myshape"
   ready_to_migrate "$home"
   sleep 300 &
-  printf '%s\n' "$!" > "$home/state/topic-board/pid"
+  sleeper=$!
+  printf '%s\n' "$sleeper" > "$home/state/topic-board/pid"
   rc=0
   out=$(mig "$home" "$root" 2>&1) || rc=$?
-  kill "$(cat "$home/state/topic-board/pid")" 2>/dev/null || true
+  kill_own_child "$sleeper"
+  signal_dry_run || wait "$sleeper" 2>/dev/null || true
   assert_equals 1 "$rc" "a pid file naming another process must be refused"
   assert_contains "$out" "不能停：state/topic-board/pid 指的是別的程序" "the refusal must say why"
   assert_present "$home/state/topic-board/token" "nothing may move after that refusal"
   rm "$home/state/topic-board/pid"
   mkdir -p "$home/state/fm-board/migrate-myshape.lock"
   sleep 300 &
-  printf '%s\n' "$!" > "$home/state/fm-board/migrate-myshape.lock/pid"
+  sleeper=$!
+  printf '%s\n' "$sleeper" > "$home/state/fm-board/migrate-myshape.lock/pid"
   rc=0
   out=$(mig "$home" "$root" 2>&1) || rc=$?
-  kill "$(cat "$home/state/fm-board/migrate-myshape.lock/pid")" 2>/dev/null || true
+  kill_own_child "$sleeper"
+  signal_dry_run || wait "$sleeper" 2>/dev/null || true
   assert_equals 1 "$rc" "a second run at the same time must be refused"
   assert_contains "$out" "另一個 migrate-myshape" "the lock refusal must say why"
   assert_present "$home/state/topic-board/token" "nothing may move while the lock is held"
+  if signal_dry_run; then
+    pass "dry run: the lock holder was logged, not killed, so the takeover was skipped"
+    return 0
+  fi
   assert_contains "$(mig "$home" "$root")" "已搬完" "once the holder is gone the lock is taken over"
   new "$home" "$root" stop >/dev/null
   expect_code 2 "$(mig_code "$home" "$root" --frobnicate)" "an unknown option"
@@ -446,6 +637,41 @@ test_a_secondmate_home_only_tidies_the_checkout() {
   mig "$home" "$root" --undo >/dev/null || fail "--undo failed in a secondmate home"
   assert_equals "module" "$(cat "$root/topic-board/node_modules/pkg/index.js")" "--undo must move the leftovers back"
   pass "in a secondmate home only the checkout is tidied, and --undo moves the leftovers back"
+}
+
+# A hold under the old prefix that has a kind is left: re-holding would drop it.
+test_a_hold_with_a_kind_is_left() {
+  local home root out rc=0
+  home=$(old_home kinded)
+  root=$(make_code_root kinded-root)
+  old "$home" stop >/dev/null
+  ready_to_migrate "$home"
+  backlog "$home" add k1 "Kinded" >/dev/null
+  backlog "$home" hold k1 --reason "topic-board：議題 old-b 在待辦" --kind captain >/dev/null
+  assert_contains "$(mig "$home" "$root" --check)" "不能換：有種類的 hold 不會換（重新 hold 會拿掉種類）：k1" "--check must name the kinded hold"
+  out=$(mig "$home" "$root" 2>&1) || rc=$?
+  assert_equals 1 "$rc" "a hold left behind must fail the run"
+  assert_not_contains "$out" "已搬完" "a run that left a hold must not say 已搬完"
+  assert_contains "$(cat "$home/data/backlog.md")" "(hold: topic-board：議題 old-b 在待辦) (hold-kind: captain)" "the kinded hold must be left as it was"
+  assert_equals 2 "$(grep -c '(hold: 看板佇列：' "$home/data/backlog.md")" "the kindless holds must still be converted"
+  new "$home" "$root" stop >/dev/null
+  pass "a board hold that has a kind is left as it was and reported, and the run does not claim to be done"
+}
+
+# A hold changed after the move is not put back by --undo.
+test_undo_leaves_a_hold_changed_since() {
+  local home root out
+  home=$(old_home undo-hold)
+  root=$(make_code_root undo-hold-root)
+  old "$home" stop >/dev/null
+  ready_to_migrate "$home"
+  mig "$home" "$root" >/dev/null || fail "the migration failed"
+  backlog "$home" unhold q4 >/dev/null
+  out=$(mig "$home" "$root" --undo) || fail "--undo failed: $out"
+  assert_contains "$out" "還原 S7：q4 現在的 hold 不是搬家時寫的那一個，沒有動" "--undo must report the hold it left"
+  assert_contains "$(cat "$home/data/backlog.md")" "(hold: topic-board：議題 old-b 在待辦)" "q1 must get its old reason back"
+  assert_equals 1 "$(grep -c '(hold: topic-board：' "$home/data/backlog.md")" "q4, released since, must stay released"
+  pass "--undo gives back the old reason only to a hold that still has the one the move wrote"
 }
 
 test_a_home_without_a_board_gets_no_board() {
@@ -476,4 +702,5 @@ test_variables_are_braced_before_wide_characters() {
 
 fm_test_run test_variables_are_braced_before_wide_characters test_moves_a_home_end_to_end test_undo_puts_everything_back test_undo_keeps_later_edits_outside_the_block \
   test_a_rerun_finishes_after_each_interruption test_a_changed_file_stops_the_move test_both_markers_and_a_broken_marker \
-  test_refusals_change_nothing test_a_secondmate_home_only_tidies_the_checkout test_a_home_without_a_board_gets_no_board
+  test_refusals_change_nothing test_a_secondmate_home_only_tidies_the_checkout test_a_hold_with_a_kind_is_left \
+  test_undo_leaves_a_hold_changed_since test_a_home_without_a_board_gets_no_board
