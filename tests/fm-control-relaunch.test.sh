@@ -3164,6 +3164,8 @@ test_herdr_relaunch_resumes_only_the_registered_pi_session() {
       return 0
     }
     dir=$HERDR_CASE_DIR
+    printf '#!/usr/bin/env bash\nprintf "Options: --tui-mode\\n"\n' > "$dir/fakebin/pi"
+    chmod +x "$dir/fakebin/pi"
     rm -f "$dir/fake/herdr-stopped"
     sed -i 's/^harness=claude$/harness=pi/' "$dir/home/state/resume-$registered.meta"
     # Keep the pane's status authority registered to an existing Pi session,
