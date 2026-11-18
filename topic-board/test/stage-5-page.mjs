@@ -63,7 +63,8 @@ export default async function run(page) {
   await page.waitFor("the open untagged worker", `${openText}.includes("open-1") && ${openText}.includes("沒有標記")`);
   if (await page.evaluate(`${openText}.includes("done-1") || ${openText}.includes("done-2") || ${openText}.includes("已落地")`))
     throw new Error("finished work must not read as needing a topic");
-  if (await page.evaluate(has("old-mate"))) throw new Error("a mate's own record is not a work item");
+  if (await page.evaluate(`${unsortedSection}.innerText.includes("old-mate") || ${unsortedSection}.innerText.includes("一個 mate 的回報")`))
+    throw new Error("a mate's own record, and a summary filed under it, are not work waiting for a topic");
   if ((await page.evaluate(`${finished}.querySelector("summary").textContent`)) !== "已結束、沒標議題 2")
     throw new Error("the folded list counts finished items without a topic");
   if (await page.evaluate(`${finished}.open`)) throw new Error("the finished list starts folded");
@@ -72,6 +73,8 @@ export default async function run(page) {
     "the finished items with their reasons",
     `${finished}.innerText.includes("done-1") && ${finished}.innerText.includes("沒有標記") && ${finished}.innerText.includes("done-2") && ${finished}.innerText.includes("標記的議題不存在") && ${finished}.innerText.includes("已落地，沒人標議題。")`,
   );
+  if (await page.evaluate(`${finished}.innerText.includes("一個 mate 的回報")`))
+    throw new Error("only the summaries of the listed finished work are folded with it");
   if ((await page.evaluate(`${finished}.querySelectorAll("select").length`)) !== 2)
     throw new Error("each finished item can still be filed under a topic");
 

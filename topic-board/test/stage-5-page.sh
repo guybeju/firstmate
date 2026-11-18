@@ -88,6 +88,8 @@ for finished in done-1:ship done-2:scout old-mate:secondmate; do
   printf '{"v":1,"ts":1782864100,"event":"task.cleaned_up","task":"%s"}\n' "${finished%%:*}"
 done >> "$MAIN/state/fleet-ledger.jsonl"
 printf '已落地，沒人標議題。' | "$TB_TOPIC" summary done-1 landed - >/dev/null
+# A summary filed under a record that is not work must not bring it back.
+printf '一個 mate 的回報。' | "$TB_TOPIC" summary old-mate report - >/dev/null
 printf 'PR 開好了，等你看。' | "$TB_TOPIC" summary ship-a ready - >/dev/null
 "$TB_TOPIC" create "Side idea" --goal "merge me" --id side >/dev/null
 

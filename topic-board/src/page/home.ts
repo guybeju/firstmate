@@ -235,20 +235,33 @@ function unsortedRow(view: View, actions: Actions, agent: AgentView): Child {
   );
 }
 
+/** The agents with no valid topic, split into running and finished. */
+function untaggedAgents(view: View): { open: AgentView[]; finished: AgentView[] } {
+  const untagged = view.agents.filter((agent) => agent.topic === null);
+  return {
+    open: untagged.filter((agent) => !agent.finished),
+    finished: untagged.filter((agent) => agent.finished),
+  };
+}
+
+/** The summaries with no topic that belong to one of `agents`. */
+function summariesOf(view: View, agents: AgentView[]): SummaryView[] {
+  const tasks = new Set(agents.map((agent) => `${agent.home}/${agent.task}`));
+  return view.summaries.filter(
+    (summary) => summary.topic === null && tasks.has(`${summary.home}/${summary.task}`),
+  );
+}
+
 /**
  * Work, decisions, and questions that still need a topic, and below them,
  * folded, finished work that never got one: it waits for nothing.
  */
 function unsorted(page: Page, view: View, actions: Actions): Child {
-  const open = view.agents.filter((agent) => agent.topic === null && !agent.finished);
-  const openTasks = new Set(open.map((agent) => `${agent.home}/${agent.task}`));
-  const summaries = view.summaries.filter((summary) => summary.topic === null);
-  const ofOpen = (summary: SummaryView): boolean =>
-    openTasks.has(`${summary.home}/${summary.task}`);
+  const { open, finished } = untaggedAgents(view);
   return section(
     "未分類",
     open.map((agent) => unsortedRow(view, actions, agent)),
-    summaries.filter(ofOpen).map((summary) => summaryRow(view, actions, summary, false)),
+    summariesOf(view, open).map((summary) => summaryRow(view, actions, summary, false)),
     view.holds
       .filter((hold) => hold.topic === null && !hold.live)
       .map((hold) => holdCard(page, view, actions, hold, false)),
@@ -256,25 +269,19 @@ function unsorted(page: Page, view: View, actions: Actions): Child {
       .filter((question) => question.topic === null)
       .map((question) => questionRow(view, actions, question, false)),
     untaggedList(view),
-    finishedList(
-      view,
-      actions,
-      summaries.filter((summary) => !ofOpen(summary)),
-    ),
+    finishedList(view, actions, finished),
   );
 }
 
 /** Finished work with no topic, folded: kept so its history can still be filed under a topic. */
-function finishedList(view: View, actions: Actions, summaries: SummaryView[]): Child {
-  const agents = view.agents.filter((agent) => agent.topic === null && agent.finished);
-  const tasks = new Set([...agents, ...summaries].map((entry) => `${entry.home}/${entry.task}`));
-  if (tasks.size === 0) return null;
+function finishedList(view: View, actions: Actions, agents: AgentView[]): Child {
+  if (agents.length === 0) return null;
   return h(
     "details",
     { "data-key": "finished:untagged" },
-    h("summary", {}, `已結束、沒標議題 ${tasks.size}`),
+    h("summary", {}, `已結束、沒標議題 ${agents.length}`),
     agents.map((agent) => unsortedRow(view, actions, agent)),
-    summaries.map((summary) => summaryRow(view, actions, summary, false)),
+    summariesOf(view, agents).map((summary) => summaryRow(view, actions, summary, false)),
   );
 }
 

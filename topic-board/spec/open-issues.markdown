@@ -345,7 +345,7 @@ first mate 用 `propose` 開的議題停在提議中，要等使用者在頁面�
 另外兩項根本不是工作：一個退役的 secondmate（主 home 帳本裡 task 是 mate 自己的 id、派工的 `kind` 是 secondmate），和遠端 secondmate 的回報通道 `parent-replies`（上游把遠端 home 的 `state/parent-replies.status` 當成回報通道，帳本照樣把它記成狀態行）。
 看板原本把 home 已經沒有、帳本裡有事件的每一個 (home, task) 都列成已結束的 agent，所以兩種都進了未分類區。
 還在跑的 secondmate 自己的 `needs-decision` 行也會被當成 worker 提問。
-**做法**（使用者 2026-11-18 定了已結束的部分，選 B）：
+**做法**（已結束的部分由主 first mate 2026-11-18 依這裡的證據定為選項 B，隨 PR 一起審）：
 
 - 什麼算 agent 寫在 [contracts](contracts.markdown) 第 1 節：home 已經沒有的 task，帳本要記過它的 worker 生命週期，而且最近一次派工不是 secondmate。
   判斷用的是帳本事件的種類與派工的 `kind`，不是名單。
