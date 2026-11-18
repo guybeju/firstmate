@@ -87,16 +87,14 @@ play() {  # <play key> <step>...
   printf '%b\n' "$@" > "$TB_PLAY/$key"
 }
 
-hold_backlog() {  # <home> <task>
-  cat > "$1/data/backlog.md" <<EOF
-## In flight
-
-## Queued
-- [ ] $2 - A call (repo: sample) (kind: captain) (hold: 要合併嗎？ 選項：合併 | 先不要) (hold-kind: captain)
-  Captain hold set: 2026-07-24T00:00:00Z
-
-## Done
-EOF
+hold_backlog() {  # <home> <task> [close|release]: the outcome the hold records, none when omitted
+  {
+    printf '## In flight\n\n## Queued\n'
+    printf -- '- [ ] %s - A call (repo: sample) (kind: captain) (hold: 要合併嗎？ 選項：合併 | 先不要) (hold-kind: captain)\n' "$2"
+    printf '  Captain hold set: 2026-07-24T00:00:00Z\n'
+    [ -z "${3:-}" ] || printf '  Captain hold on answer: %s\n' "$3"
+    printf '\n## Done\n'
+  } > "$1/data/backlog.md"
 }
 
 setup_fleet() {
@@ -105,8 +103,8 @@ setup_fleet() {
   t propose "Parked" --goal "later" --id parked --queue later >/dev/null
   t propose "Parked two" --goal "later too" --id parked2 --queue later >/dev/null
   for id in billing login parked parked2; do t confirm "$id" >/dev/null; done
-  hold_backlog "$MAIN" call-main
-  hold_backlog "$LOCAL_SM" call-sm
+  hold_backlog "$MAIN" call-main release
+  hold_backlog "$LOCAL_SM" call-sm close
   hold_backlog "$REMOTE_SM" call-far
   mkdir -p "$MAIN/data/call-main"
   printf 'billing 2026-07-01T00:00:00Z\n' > "$MAIN/data/call-main/topic"
@@ -189,10 +187,13 @@ test_retries_run_out() {
 test_answers() {
   local id notes
   notes=$(calls fm-inbox.sh)
-  id=$(write answer home main task call-main answer "合併" label "合併" mode release)
+  assert_equals "call-far=release call-main=release call-sm=close" \
+    "$(view '[.holds[] | select(.task | startswith("call-")) | "\(.task)=\(.on_answer)"] | sort | join(" ")')" \
+    "the page must get each hold's outcome: recorded release, recorded close, and release for none"
+  id=$(write answer home main task call-main answer "合併" label "合併" mode "done")
   settle "$id" delivered
   assert_contains "$(last_call fm-captain-hold.sh)" "argv=answers|--source|topic-board|	home=$MAIN	stdin=call-main	合併	合併	release" \
-    "a main-home answer must be one tab-separated line on stdin of fm-captain-hold.sh answers"
+    "a main-home answer must release as the hold recorded, whatever mode the request names"
   assert_contains "$(last_call fm-inbox.sh)" "argv=note|--request-id|tb-$id-note|-|" "the notice must derive its request id from the write"
   assert_contains "$(last_call fm-inbox.sh)" "已在看板回答 main/call-main：合併" "the notice must say what was answered"
   assert_equals $((notes + 1)) "$(calls fm-inbox.sh)" "an answer must notify firstmate exactly once"
@@ -200,27 +201,28 @@ test_answers() {
 
   notes=$(calls fm-inbox.sh)
   play fm-captain-hold.sh '1\tskipped: call-main (already closed)'
-  id=$(write answer home main task call-main answer "先不要" label "先不要" mode "done")
+  id=$(write answer home main task call-main answer "先不要" label "先不要")
   settle "$id" handled_elsewhere
   play fm-captain-hold.sh '1\trefused: call-main (away posture)'
-  id=$(write answer home main task call-main answer "先不要" label "先不要" mode release)
+  id=$(write answer home main task call-main answer "先不要" label "先不要")
   settle "$id" failed
   assert_equals "$notes" "$(calls fm-inbox.sh)" "an answer that did not land must not notify firstmate"
 
-  id=$(write answer home sm1 task call-sm answer "好" label "文字作答" mode "done")
+  id=$(write answer home sm1 task call-sm answer "好" label "文字作答")
   settle "$id" delivered
   assert_contains "$(last_call fm-captain-hold.sh)" "home=$LOCAL_SM	stdin=call-sm	好	文字作答	done" \
-    "a local secondmate's hold must be answered inside that home"
+    "a local secondmate's hold must be answered inside that home, closed as it recorded"
   play fm-on.sh.fm-captain-hold.sh '255' '0\tclosed: call-far'
-  id=$(write answer home far1 task call-far answer "好" label "文字作答" mode "done")
+  id=$(write answer home far1 task call-far answer "好" label "文字作答")
   settle "$id" delivered
   assert_contains "$(last_call fm-on.sh.fm-captain-hold.sh)" "argv=far1|answers|--source|topic-board|	" \
     "a remote hold must be answered through fm-on.sh --stdin"
+  assert_contains "$(last_call fm-on.sh.fm-captain-hold.sh)" "stdin=call-far	好	文字作答	release" \
+    "a remote hold that records no outcome must be released"
   assert_equals 2 "$(calls fm-on.sh.fm-captain-hold.sh)" "a transport failure must be retried by replaying the answer"
 
-  refused answer home main task call-main answer "a	b" label x mode "done" || fail "an answer with a tab must be refused"
-  refused answer home main task no-such-hold answer "x" label x mode "done" || fail "an answer to no hold must be refused"
-  refused answer home main task call-main answer "x" label x mode maybe || fail "an unknown mode must be refused"
+  refused answer home main task call-main answer "a	b" label x || fail "an answer with a tab must be refused"
+  refused answer home main task no-such-hold answer "x" label x || fail "an answer to no hold must be refused"
   pass "an answer is recorded on the hold first, then firstmate is told once"
 }
 
@@ -316,7 +318,7 @@ test_answer_notice_survives_a_restart() {
   play fm-inbox.sh '3'
   FM_TOPIC_BOARD_RETRY_MS=60000 t restart >/dev/null
   view >/dev/null
-  id=$(write answer home main task call-main answer "合併" label "合併" mode "done")
+  id=$(write answer home main task call-main answer "合併" label "合併")
   settle "$id" retrying
   pid=$(tb_board_pid "$MAIN")
   kill -KILL "$pid"
@@ -504,6 +506,8 @@ test_hands_on_commands() {
   assert_equals $((holds + 1)) "$(calls fm-captain-hold.sh)" "todo add must hold the task once"
   grep -q "^cmd=fm-captain-hold.sh	argv=hold|todo-new|--title|登入 App Store|--reason|動手：登入 App Store（更新要用）$" "$TB_LOG" ||
     fail "todo add must hold the task with the marker and the first line"
+  grep -q '^open -a "App Store"|--on-answer|close|' "$TB_LOG" ||
+    fail "todo add must record that answering a hands-on item closes it"
   grep -q '^open -a "App Store"|' "$TB_LOG" || fail "the commands must reach the hold exactly as written"
   assert_equals billing "$(cut -d' ' -f1 "$MAIN/data/todo-new/topic")" "todo add must tag the task with the topic"
 
@@ -551,7 +555,7 @@ test_hands_on_commands() {
 }
 
 test_hands_on_item_with_the_real_hold_tool() {
-  local home out
+  local home out HOLD_TOOL="$ROOT/bin/fm-captain-hold.sh"
   command -v tasks-axi >/dev/null 2>&1 || { pass "skip: tasks-axi not found"; return 0; }
   home=$(tb_make_home real-todo)
   printf '## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
@@ -565,8 +569,22 @@ test_hands_on_item_with_the_real_hold_tool() {
     fail "repeating todo add with new text failed"
   assert_equals "動手：second wording" "$(tb_run "$home" "$ROOT/bin/fm-topic-board-read.sh" 0 - | jq -r '.holds[0].question')" \
     "repeating todo add must update the text"
+  assert_equals close "$(tb_run "$home" "$ROOT/bin/fm-topic-board-read.sh" 0 - | jq -r '.holds[0].on_answer')" \
+    "todo add must record, through the real hold tool, that answering the item closes it"
   tb_run "$home" "$TOPIC" todo 'done' real-1 >/dev/null || fail "todo done failed against the real hold tool"
   assert_equals 0 "$(tb_run "$home" "$ROOT/bin/fm-topic-board-read.sh" 0 - | jq '.holds | length')" "todo done must close the hold"
+  tb_run "$home" "$HOLD_TOOL" hold real-merge --title "Merge x" --reason "可以合併嗎？" --on-answer release >/dev/null ||
+    fail "the real hold tool refused --on-answer"
+  tb_run "$home" "$HOLD_TOOL" hold real-merge --reason "現在可以合併嗎？" >/dev/null || fail "rewriting the reason failed"
+  tb_run "$home" "$HOLD_TOOL" hold real-old --title "Old call" --reason "選哪個？" >/dev/null || fail "a hold without an outcome failed"
+  assert_equals "real-merge=release real-old=null" \
+    "$(tb_run "$home" "$ROOT/bin/fm-topic-board-read.sh" 0 - | jq -r '[.holds[] | "\(.id)=\(.on_answer)"] | sort | join(" ")')" \
+    "the reader must report a recorded release that survived a rewritten reason, and null for no record"
+  printf 'real-merge\t合併\t合併\trelease\n' | tb_run "$home" "$HOLD_TOOL" answers --source topic-board >/dev/null ||
+    fail "the board's release line was not accepted by the real hold tool"
+  assert_equals "queued false" \
+    "$(tb_run "$home" "$ROOT/bin/fm-topic-board-read.sh" 0 - | jq -r '.queued[] | select(.id == "real-merge") | "queued \(.captain)"')" \
+    "a released item must go back to the queue, no longer held for the captain"
   expect_code 1 "$(tb_code "$home" "$TOPIC" todo 'done' real-1)" "todo done on an item that is already closed"
   expect_code 1 "$(tb_code "$home" "$TOPIC" todo 'done' never-existed)" "todo done on a task that never existed"
   pass "todo add and todo done work against the real hold tool"

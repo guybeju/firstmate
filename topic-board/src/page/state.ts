@@ -57,7 +57,7 @@ export interface Actions {
   move: (topic: string, queue: Queue, before: string | null) => void;
   /** Asks the board for a confirmation code; the action runs when `confirm` is called with the same key. */
   ask: (key: string, path: string, body: Record<string, unknown>) => void;
-  confirm: (key: string, extra?: Record<string, unknown>) => void;
+  confirm: (key: string) => void;
   cancel: (key: string) => void;
   /** Says a hands-on item is done; firstmate checks before it is closed. */
   claim: (task: string) => void;

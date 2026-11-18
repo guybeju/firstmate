@@ -565,8 +565,9 @@ todo_add() {
     tb_die 1 "${words[0]} 已經是等使用者決定的項目，不能改成要使用者動手的項目。"
   [ "$kind" != task ] ||
     tb_die 1 "${words[0]} 已經是一件工作，不能改成要使用者動手的項目；換一個 task id。"
+  # A hands-on item holds only the captain's own action, so answering it closes it.
   "$SCRIPT_DIR/fm-captain-hold.sh" hold "${words[0]}" --title "${words[1]}" --reason "$TODO_MARKER$text" \
-    >/dev/null || tb_die 1 "沒有建立 ${words[0]}；修好上面的問題後原樣再跑一次。"
+    --on-answer close >/dev/null || tb_die 1 "沒有建立 ${words[0]}；修好上面的問題後原樣再跑一次。"
   "$SELF" tag "${words[0]}" "$topic" >/dev/null ||
     tb_die 1 "${words[0]} 已建立但沒有標上議題；原樣再跑一次同一個指令。"
   # A rewritten item starts over: what the captain or firstmate said about the old text no longer holds.

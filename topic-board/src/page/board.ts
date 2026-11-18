@@ -222,18 +222,16 @@ const actions: Actions = {
       render();
     });
   },
-  confirm: (key, extra = {}) => {
+  confirm: (key) => {
     const pending = page.pending.get(key);
     if (pending === undefined) return;
     page.pending.delete(key);
     page.panel = null;
-    void post(pending.path, { ...pending.body, ...extra, confirm: pending.confirm }).then(
-      (data) => {
-        if (data !== null && key.startsWith("answer:"))
-          page.drafts.delete(key.replace("answer:", "answer-text:"));
-        render();
-      },
-    );
+    void post(pending.path, { ...pending.body, confirm: pending.confirm }).then((data) => {
+      if (data !== null && key.startsWith("answer:"))
+        page.drafts.delete(key.replace("answer:", "answer-text:"));
+      render();
+    });
   },
   cancel: (key) => {
     if (key === "notice") page.notice = null;

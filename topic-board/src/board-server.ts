@@ -542,14 +542,11 @@ async function testWrite(service: Service, args: Record<string, unknown>): Promi
         actions.tagAgent(context, field("home"), field("task"), field("topic"), "socket"),
       );
     case "answer": {
-      const mode = actions.ANSWER_MODES.find((name) => name === args["mode"]);
-      if (mode === undefined) return usage("mode 要是 done 或 release。");
       const input = {
         home: field("home"),
         task: field("task"),
         answer: field("answer"),
         label: field("label"),
-        mode,
       };
       return actionResponse(actions.answer(context, input, "socket"));
     }

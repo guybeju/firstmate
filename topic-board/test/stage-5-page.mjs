@@ -97,12 +97,27 @@ export default async function run(page) {
   if (await page.evaluate(`${rowOf("ship-a")}.includes("還沒開始第一輪")`))
     throw new Error("a worker that has started must not be marked as unstarted");
 
-  // Answer the pending decision: option, then the second step with a mode.
+  // Answer the pending decision: option, then one send that says what it will do.
   await page.click(".card button", "合併");
-  await page.waitFor("the second step", has("送出，讓工作繼續"));
+  await page.waitFor("the second step", has("送出後解除等待，這一項回到排隊中"));
   await page.waitFor("the confirmation wording", has("看板自己不會合併或捨棄"));
-  await page.click(".confirm button", "送出，讓工作繼續");
+  const sends = await page.evaluate(
+    `[...document.querySelectorAll(".confirm button")].map((el) => el.textContent).join("|")`,
+  );
+  if (sends !== "送出|取消") throw new Error(`the second step must offer one send and a cancel, got ${sends}`);
+  if (await page.evaluate(has("沒有註明"))) throw new Error("a recorded outcome must not be called the default");
+  await page.click(".confirm button", "送出");
   await page.waitFor("the answer to be delivered", has("已送達"));
+  const released = () => fs.readFileSync(process.env.TB_LOG, "utf8").includes("stdin=call-1\t合併\t合併\trelease");
+  for (let tries = 0; tries < 60 && !released(); tries += 1) await new Promise((resolve) => setTimeout(resolve, 150));
+  if (!released()) throw new Error("the answer must release the decision as it recorded");
+  // A decision that records no outcome: a typed answer says it will be released by default.
+  const looseCard = `[...document.querySelectorAll(".card")].find((card) => card.innerText.includes("這個要不要做？"))`;
+  await page.evaluate(`(() => { const input = ${looseCard}.querySelector("input"); input.value = "先給我更多資訊"; input.dispatchEvent(new Event("input", { bubbles: true })); return true; })()`);
+  await page.evaluate(`(() => { [...${looseCard}.querySelectorAll("button")].find((el) => el.textContent === "送出").click(); return true; })()`);
+  await page.waitFor("the default outcome", `${looseCard}.innerText.includes("回到排隊中") && ${looseCard}.innerText.includes("沒有註明")`);
+  await page.evaluate(`(() => { [...${looseCard}.querySelectorAll(".confirm button")].find((el) => el.textContent === "取消").click(); return true; })()`);
+  await page.waitFor("the cancelled confirmation", `!${looseCard}.innerText.includes("沒有註明")`);
 
   // Confirm one proposal, merge the other into a topic.
   await page.click("button", "確認（放「一般」）");

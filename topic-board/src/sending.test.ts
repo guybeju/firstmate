@@ -11,7 +11,7 @@ import type { AllowedCommand, CommandResult, Secondmate } from "./commands.js";
 import { ConfirmStore } from "./confirm.js";
 import type { ApiHandler } from "./http.js";
 import type { BoardResponse } from "./protocol.js";
-import type { HomeReport } from "./report.js";
+import type { HomeReport, ReportHold } from "./report.js";
 import { emptyState } from "./topics.js";
 import type { TopicState } from "./topics.js";
 import type { HomeSnapshot } from "./view.js";
@@ -81,7 +81,7 @@ function report(extra: Partial<HomeReport>): HomeReport {
   };
 }
 
-const hold = (id: string, origin = "") => ({
+const hold = (id: string, origin = "", extra: Partial<ReportHold> = {}): ReportHold => ({
   id,
   title: "T",
   question: `q of ${id}`,
@@ -90,6 +90,8 @@ const hold = (id: string, origin = "") => ({
   unresolved_blocker_ids: [],
   hold_age_days: 1,
   origin,
+  on_answer: "release",
+  ...extra,
 });
 
 function homes(): HomeSnapshot[] {
@@ -103,11 +105,26 @@ function homes(): HomeSnapshot[] {
   });
   return [
     snapshot("main", false, {
-      holds: [hold("call-1", "ship-a"), hold("call-origin", "ship-a"), hold("call-loose")],
+      holds: [
+        hold("call-1", "ship-a"),
+        hold("call-origin", "ship-a"),
+        hold("call-loose"),
+        hold("call-old", "", { on_answer: null }),
+        hold("todo-old", "", { question: "動手：登入", on_answer: null }),
+        hold("todo-kept", "", { question: "動手：登入" }),
+      ],
       topics: { "ship-a": "billing T", "call-1": "login T", tagged: "login T1\nbilling T2" },
     }),
-    snapshot("sm1", false, { holds: [hold("call-sm")] }),
-    snapshot("far1", true, { holds: [hold("call-far")], topics: { "far-work": "billing T" } }),
+    snapshot("sm1", false, {
+      holds: [
+        hold("call-sm", "", { on_answer: "close" }),
+        hold("todo-sm", "", { question: "動手：登入", on_answer: null }),
+      ],
+    }),
+    snapshot("far1", true, {
+      holds: [hold("call-far", "", { on_answer: null })],
+      topics: { "far-work": "billing T" },
+    }),
     {
       id: "down",
       remote: true,
@@ -365,7 +382,6 @@ describe("answer", () => {
     task: "call-1",
     answer: "合併",
     label: "合併",
-    mode: "release",
     ...extra,
   });
 
@@ -400,7 +416,7 @@ describe("answer", () => {
       exit(0, "closed: call-loose"),
     );
     const local = sent(
-      actions.answer(h.context, input({ home: "sm1", task: "call-sm", mode: "done" }), "browser"),
+      actions.answer(h.context, input({ home: "sm1", task: "call-sm" }), "browser"),
     );
     await settled(local, "delivered");
     const remote = sent(
@@ -435,6 +451,23 @@ describe("answer", () => {
       "［議題：Billing］已在看板回答 main/call-origin：合併",
       "［議題：未分類］已在看板回答 main/call-loose：合併",
     ]);
+  });
+
+  it("closes or releases as the hold recorded; unrecorded, only a main-home hands-on item closes", async () => {
+    const h = harness();
+    const modeOf = async (home: string, task: string): Promise<string | undefined> => {
+      h.script("answer", exit(0, `closed: ${task}`));
+      await settled(sent(actions.answer(h.context, input({ home, task }), "browser")), "delivered");
+      const last = h.calls.filter((call) => call.kind === "answer").at(-1);
+      return last?.kind === "answer" ? last.line.split("\t")[3] : undefined;
+    };
+    expect(await modeOf("main", "call-1")).toBe("release");
+    expect(await modeOf("sm1", "call-sm")).toBe("done");
+    expect(await modeOf("main", "call-old")).toBe("release");
+    expect(await modeOf("far1", "call-far")).toBe("release");
+    expect(await modeOf("main", "todo-old")).toBe("done");
+    expect(await modeOf("main", "todo-kept")).toBe("release");
+    expect(await modeOf("sm1", "todo-sm")).toBe("release");
   });
 
   it("reads the verdict line for its task, not the exit code", async () => {
@@ -524,7 +557,6 @@ describe("answer", () => {
       "選項",
     );
     expect(actions.answer(h.context, input({ answer: "x".repeat(1000) }), "browser").ok).toBe(true);
-    expect(actions.ANSWER_MODES).toEqual(["done", "release"]);
   });
 });
 
@@ -712,7 +744,7 @@ describe("restart", () => {
     const answered = sent(
       actions.answer(
         h.context,
-        { home: "main", task: "call-1", answer: "好", label: "好", mode: "done" },
+        { home: "main", task: "call-1", answer: "好", label: "好" },
         "browser",
       ),
     );
@@ -721,7 +753,7 @@ describe("restart", () => {
     const unanswered = sent(
       actions.answer(
         h.context,
-        { home: "far1", task: "call-far", answer: "好", label: "好", mode: "done" },
+        { home: "far1", task: "call-far", answer: "好", label: "好" },
         "browser",
       ),
     );
@@ -1006,31 +1038,33 @@ describe("api", () => {
     expect(seen).toEqual(['merge:{"from":"a","into":"b"}']);
   });
 
-  it("answers a hold only on the second request, with a mode", async () => {
+  it("answers a hold only on the second request, the way the hold recorded", async () => {
     const h = harness();
     h.script("answer", exit(0, "closed: call-1"));
     const { call } = api(h);
     const body = { home: "main", task: "call-1", answer: "合併", label: "合併" };
-    const code = (await call("POST holds/answer", body)).body["confirm"];
-    expect(h.calls).toEqual([]);
-    expect(await call("POST holds/answer", { ...body, confirm: code })).toEqual({
-      status: 400,
-      body: { error: "usage", message: "要選「這件事結束」或「讓工作繼續」。" },
-    });
     const other = (await call("POST holds/answer", body)).body["confirm"];
+    expect(h.calls).toEqual([]);
     expect(
-      (await call("POST holds/answer", { ...body, answer: "先不要", confirm: other, mode: "done" }))
-        .body["error"],
+      (await call("POST holds/answer", { ...body, answer: "先不要", confirm: other })).body[
+        "error"
+      ],
     ).toBe("confirm");
-    const changed = (await call("POST holds/answer", body)).body["confirm"];
     const firstHold = h.context.homes[0]?.report?.holds[0];
     if (firstHold === undefined) throw new Error("the fixture has no hold");
+    const changed = (await call("POST holds/answer", body)).body["confirm"];
     firstHold.question = "a different question";
-    expect(
-      (await call("POST holds/answer", { ...body, confirm: changed, mode: "done" })).body["error"],
-    ).toBe("confirm");
+    expect((await call("POST holds/answer", { ...body, confirm: changed })).body["error"]).toBe(
+      "confirm",
+    );
+    const flipped = (await call("POST holds/answer", body)).body["confirm"];
+    firstHold.on_answer = "close";
+    expect((await call("POST holds/answer", { ...body, confirm: flipped })).body["error"]).toBe(
+      "confirm",
+    );
+    firstHold.on_answer = "release";
     const good = (await call("POST holds/answer", body)).body["confirm"];
-    const done = await call("POST holds/answer", { ...body, confirm: good, mode: "release" });
+    const done = await call("POST holds/answer", { ...body, confirm: good, mode: "done" });
     expect(done).toEqual({
       status: 200,
       body: { ok: true, write_id: expect.stringMatching(/^w-/) },
@@ -1050,8 +1084,7 @@ describe("api", () => {
     expect((await call("POST holds/answer", { ...body, home: "nobody" })).status).toBe(409);
     const tabbed = (await call("POST holds/answer", { ...body, answer: "a\tb" })).body["confirm"];
     expect(
-      (await call("POST holds/answer", { ...body, answer: "a\tb", confirm: tabbed, mode: "done" }))
-        .status,
+      (await call("POST holds/answer", { ...body, answer: "a\tb", confirm: tabbed })).status,
     ).toBe(409);
   });
 

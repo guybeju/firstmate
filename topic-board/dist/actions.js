@@ -4,8 +4,7 @@ import crypto from "node:crypto";
 import { directTextProblem } from "./commands.js";
 import { MAIN_HOME } from "./journal.js";
 import { resolveTopicId } from "./topics.js";
-import { placeTask } from "./view.js";
-export const ANSWER_MODES = ["done", "release"];
+import { answerOutcome, placeTask } from "./view.js";
 const TASK_ID = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
 const MESSAGE_MAX = 4000;
 const ANSWER_MAX = 1000;
@@ -123,7 +122,11 @@ function holdTopic(context, home, task, origin) {
         return own;
     return placeTask(context.topics, context.homes, home, origin).topic;
 }
-/** An answer to a captain hold, followed by a note telling firstmate. */
+/** The close mode fm-captain-hold.sh answers takes for what answering `hold` does. */
+export function answerMode(home, hold) {
+    return answerOutcome(home, hold).on_answer === "close" ? "done" : "release";
+}
+/** An answer to a captain hold, closing or releasing it as the hold recorded, followed by a note telling firstmate. */
 export function answer(context, input, channel) {
     const placement = agentTarget(context, input.home, input.task);
     if (typeof placement !== "string")
@@ -150,7 +153,7 @@ export function answer(context, input, channel) {
             plan: {
                 type: "answer",
                 placement,
-                line: [input.task, input.answer, input.label, input.mode].join("\t"),
+                line: [input.task, input.answer, input.label, answerMode(input.home, hold)].join("\t"),
                 noteBody: `［議題：${name}］已在看板回答 ${input.home}/${input.task}：${input.answer}`,
                 answered: false,
             },

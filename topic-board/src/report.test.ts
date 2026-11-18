@@ -20,6 +20,7 @@ const FULL = {
       unresolved_blocker_ids: ["b", 3],
       hold_age_days: 4,
       origin: "t1",
+      on_answer: "close",
     },
     { id: "h2", hold_bucket: "weird" },
     { hold_bucket: "live" },
@@ -134,6 +135,7 @@ describe("parseReport", () => {
           unresolved_blocker_ids: ["b"],
           hold_age_days: 4,
           origin: "t1",
+          on_answer: "close",
         },
       ],
       status_decisions: [{ id: "t1", key: "default", summary: "which?" }],
@@ -156,7 +158,7 @@ describe("parseReport", () => {
     const report = ok({
       schema: 1,
       tasks: [{ id: "t" }],
-      holds: [{ id: "h", hold_bucket: "live" }],
+      holds: [{ id: "h", hold_bucket: "live", on_answer: "finish" }],
       status_decisions: [{ id: "q" }],
       ledger: { status: "absent", to_offset: 0, to_prefix_sha256: "-" },
     });
@@ -175,6 +177,7 @@ describe("parseReport", () => {
           unresolved_blocker_ids: [],
           hold_age_days: null,
           origin: "",
+          on_answer: null,
         },
       ],
       status_decisions: [{ id: "q", key: "", summary: "" }],
