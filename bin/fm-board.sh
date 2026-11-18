@@ -12,6 +12,7 @@
 #   fm-board.sh --in-home <secondmate-id> setup
 #   fm-board.sh install-rules
 #   fm-board.sh rules
+#   fm-board.sh migrate-myshape [--check | --undo]
 #
 # The board itself is bin/myshape.sh; this command is what firstmate adds
 # around it. None of these subcommands needs the board service.
@@ -46,6 +47,15 @@
 # fm-board/rules/, and reports a block that still has the old marker as
 # 舊標記（vN）.
 #
+# migrate-myshape moves this home, once, from the board's names before its
+# rename (state/topic-board, data/topic-board, config/topic-board-port, the
+# "<!-- topic-board:begin" rules marker, the code root's topic-board/
+# leftovers) to myshape's, while the board is stopped, and starts the board
+# again. --check writes nothing and prints what would move and every refusal,
+# or 已搬完. A rerun after an interruption finishes the job; --undo reverses
+# it, and comes before any return to older code. In a secondmate home it only
+# tidies the code root. bin/fm-board-migrate-lib.sh holds the steps.
+#
 # --in-home runs tag, answers, or setup inside a LOCAL registered secondmate
 # home. answers forwards stdin to that home's
 # "fm-captain-hold.sh answers --source myshape" and returns its output and
@@ -79,6 +89,8 @@ TOPICS_FILE="$DATA/topics.json"
 . "$SCRIPT_DIR/myshape-lib.sh"
 # shellcheck source=bin/fm-board-lib.sh
 . "$SCRIPT_DIR/fm-board-lib.sh"
+# shellcheck source=bin/fm-board-migrate-lib.sh
+. "$SCRIPT_DIR/fm-board-migrate-lib.sh"
 
 usage() {
   sed -n '2,/^set -euo pipefail$/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
@@ -447,6 +459,7 @@ install_rules_file() {  # <file> <template> [header-template]
     before=$(rules_state "$file" "$template")
     backup="$STATE/fm-board/rules-backup/$name.$(date -u +%Y%m%dT%H%M%SZ)"
     cp -p "$file" "$backup"
+    RULES_BACKUP=$backup
     mv "$fresh" "$file"
     case "$before" in
       未裝) printf '%s\n' "${name}：新增（${after}），原檔備份在 $backup" ;;
@@ -503,6 +516,7 @@ main() {
     split) cmd_split "$@" ;;
     install-rules) cmd_install_rules "$@" ;;
     rules) cmd_rules "$@" ;;
+    migrate-myshape) cmd_migrate_myshape "$@" ;;
     *) usage_error "不認得的子命令：$sub" ;;
   esac
 }
