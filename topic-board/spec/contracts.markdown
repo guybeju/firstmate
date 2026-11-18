@@ -34,26 +34,27 @@
 
 | 路徑 | 內容 | 哪一段加入 |
 | --- | --- | --- |
-| `bin/fm-topic.sh` | 議題指令，Bash | 一（之後各段加子命令） |
+| `bin/fm-topic.sh` | 看板的指令，Bash；只 source `fm-topic-lib.sh` | 一（之後各段加子命令） |
 | `bin/fm-topic-board-read.sh` | 唯讀彙整腳本，Bash | 一 |
-| `bin/fm-topic-lib.sh` | 上面兩支共用的函式（id 檢查、查同機 secondmate 的 home），只被 source | 一 |
+| `bin/fm-topic-lib.sh` | 看板自己的函式（id 檢查、錯誤、議題 id 解析），只被 source，自己不 source 任何檔 | 一 |
 | `bin/fm-topic-session-start.sh` | 開 session 時檢查看板服務、沒在跑就啟動，印啟動摘要裡的那一行，Bash | 上線後 |
 | `topic-board/src/` | TypeScript 原始碼：服務、node client、頁面腳本 | 二起 |
 | `topic-board/dist/` | `tsc` 的編譯結果，提交進 git；執行期只跑這裡的 `.js` | 二起 |
 | `topic-board/public/` | 靜態頁面：`index.html`、`board.css`、`icon.svg` | 五 |
-| `topic-board/rules/` | 三個規則範本，副檔名 `.md.tmpl` | 六 |
 | `topic-board/spec/` | 這份 spec，副檔名 `.markdown` | 一 |
 | `topic-board/test/` | fork 自己的測試與 `run.sh` | 一起 |
 | `topic-board/package.json`、`pnpm-lock.yaml`、`tsconfig.json`、`.gitignore` | 只有開發期相依；`.gitignore` 忽略 `node_modules/` 與 `.metrics/` | 二 |
-| `FORK-SETUP.markdown`（根目錄） | 新機器從零安裝 fork 與看板的說明；`topic-board/test/check-guide.sh` 檢查它引用的名稱 | 上線後 |
+| `FORK-SETUP.markdown`（根目錄） | 新機器從零安裝 fork 與看板的說明；`fm-board/test/check-guide.sh` 檢查它引用的名稱 | 上線後 |
+
+first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、規則範本 `fm-board/rules/`、它們的測試與說明）不是看板的，列在 [adapter](../../fm-board/spec/adapter.markdown) 第 1 節。
 
 硬性限制（都實測過，見 [verification](verification.markdown)）：
 
 - fork 裡不能新增任何追蹤的 `*.md`、`*.mdx`、`*.rst`、`*.txt`，也不能在 `docs/examples/` 加檔。上游的 `bin/fm-doc-audience-check.sh` 要求這些檔全部登記在既有的 `docs/documentation-audiences.json`。所以新目錄裡不放 `README.md`。
 - 不能追蹤 `data/`、`state/`、`config/`、`projects/`、`.no-mistakes/` 底下的檔（上游 `.gitignore` 與 CI 的 invariants 都擋）。
 - 不在 `tests/` 新增任何檔。上游的 `fm-test-run.sh --check-coverage` 限制沒有時間量測的 serial 測試不超過 15%，目前是 44/297，多一個 `tests/*.test.sh` 就超標；量測表在上游的 `bin/fm-test-run.sh` 裡，不能改（採建議 C6）。
-- `bin/fm-topic.sh` 與 `bin/fm-topic-board-read.sh` 要通過上游釘住版本的 ShellCheck（`bin/fm-lint.sh <檔>`）與 bash 3.2 的語法檢查（`/bin/bash -n`，macOS 內建版本），不直接呼叫 `bd`。
-- `fm-on.sh` 只執行遠端 code root 裡 git 追蹤、可執行、非 symlink 的 `bin/fm-*.sh`，所以遠端要用到的兩支都在 `bin/`、都要 `chmod +x` 後提交。
+- `bin/fm-topic.sh`、`bin/fm-topic-lib.sh` 與 `bin/fm-topic-board-read.sh` 要通過上游釘住版本的 ShellCheck（`bin/fm-lint.sh <檔>`）與 bash 3.2 的語法檢查（`/bin/bash -n`，macOS 內建版本），不直接呼叫 `bd`。
+- `fm-on.sh` 只執行遠端 code root 裡 git 追蹤、可執行、非 symlink 的 `bin/fm-*.sh`，所以遠端要用到的 `fm-topic-board-read.sh` 與 `fm-board.sh` 都在 `bin/`、都要 `chmod +x` 後提交。
 
 ## 3. 執行期的檔案（都在主 home，不進 git）
 
@@ -64,8 +65,8 @@
 | `data/topic-board/events.jsonl` | 0644 | 各 home 的帳本事件加系統紀錄，只追加 | 只有看板服務 |
 | `data/topic-board/summaries.jsonl` | 0644 | 里程碑摘要，只追加 | 只有看板服務 |
 | `data/topic-board/offsets.json` | 0644 | 每個 home 的帳本 offset 與前綴雜湊 | 只有看板服務 |
-| `data/<task-id>/topic` | 0644 | 議題標記，每個 home 各自一份 | `fm-topic.sh tag` |
-| `state/topic-board/` | 0700 | 下面這些檔的目錄 | 服務；`install-rules` 在它不存在時也會建 |
+| `data/<task-id>/topic` | 0644 | 議題標記，每個 home 各自一份 | `fm-board.sh tag`（first mate 這一側；看板經彙整腳本讀） |
+| `state/topic-board/` | 0700 | 下面這些檔的目錄 | 服務 |
 | `state/topic-board/board.sock` | 0600 | Unix socket | 服務 |
 | `state/topic-board/token` | 0600 | 瀏覽器用的 token | 服務 |
 | `state/topic-board/port`、`pid` | 0600 | 實際的埠、服務的 pid | 服務 |
@@ -73,9 +74,9 @@
 | `state/topic-board/start.lock/` | — | 啟動鎖（目錄），裡面記持有它的 client 的 pid | node client |
 | `state/topic-board/service.log`、`service.log.1` | 0600 | 服務的 stdio | 服務 |
 | `state/topic-board/audit.jsonl` | 0600 | 稽核紀錄，只追加 | 服務 |
-| `state/topic-board/rules-backup/` | 0700 | 偏好檔的備份 | `install-rules` |
+| `state/topic-board/rules-backup/` | 0700 | 以前的 `fm-topic.sh install-rules` 留下的偏好檔備份；新的備份在 `state/fm-board/rules-backup/`（adapter 第 5 節） | 不再寫 |
 | `config/topic-board-port` | — | 選用，一行埠號 | 使用者 |
-| `config/fleet-ledger` | — | 上游的帳本旗標，每個 home 各一 | `fm-topic.sh setup` |
+| `config/fleet-ledger` | — | 上游的帳本旗標，每個 home 各一 | `fm-board.sh setup`（first mate 這一側） |
 
 每次改寫整個檔（`topics.json`、`topics-archive.json`、`offsets.json`、`token`、`port`、`pid`）都用同目錄的暫存檔 `<檔名>.tmp-<pid>` 加 rename。
 
@@ -238,11 +239,11 @@ API 的路徑與 body 由第五段定；這裡只定兩件事：
 | W2 | 寫 | `fm-send.sh <task-id> <text>` | — | 直送主 home 的 worker |
 | W3 | 寫 | `fm-send.sh <sm> --fire-and-forget <16 位小寫十六進位> <text>` | — | 經 secondmate 轉達，`<text>` 是「轉給 <worker-id>：<原文>」 |
 | W4 | 寫 | `fm-captain-hold.sh answers --source topic-board` | 答案一行 | 主 home 的 hold |
-| W5 | 寫 | `fm-topic.sh --in-home <sm> answers` | 答案一行 | 同機 secondmate home 的 hold |
+| W5 | 寫 | `fm-board.sh --in-home <sm> answers` | 答案一行 | 同機 secondmate home 的 hold |
 | W6 | 寫 | `fm-on.sh --stdin <sm> fm-captain-hold.sh answers --source topic-board` | 答案一行 | 遠端 home 的 hold |
-| W7 | 寫 | `fm-topic.sh tag <task-id> <議題 id>` | — | 主 home 的歸併（採建議 C8） |
-| W8 | 寫 | `fm-topic.sh --in-home <sm> tag <task-id> <議題 id>` | — | 同機 secondmate home 的歸併 |
-| W9 | 寫 | `fm-on.sh <sm> fm-topic.sh tag <task-id> <議題 id>` | — | 遠端 home 的歸併 |
+| W7 | 寫 | `fm-board.sh tag <task-id> <議題 id>` | — | 主 home 的歸併（採建議 C8） |
+| W8 | 寫 | `fm-board.sh --in-home <sm> tag <task-id> <議題 id>` | — | 同機 secondmate home 的歸併 |
+| W9 | 寫 | `fm-on.sh <sm> fm-board.sh tag <task-id> <議題 id>` | — | 遠端 home 的歸併 |
 
 參數的檢查：
 
@@ -254,9 +255,10 @@ API 的路徑與 body 由第五段定；這裡只定兩件事：
 
 看板直接讀寫的檔案只有第 3 節表裡它自己的那些，再加唯讀的 `config/topic-board-port` 與 `topic-board/` 底下自己的程式與靜態檔。它不讀 `data/secondmates.md`、不讀帳本、不讀 Herdr。
 
-白名單管的是看板服務這個程序。node client 不是服務：它會啟動服務（`spawn` 同一個 `node` 執行 `dist/board-server.js`），並在服務卡死時跑 `ps -o args= -p <pid>` 與送訊號；`fm-topic.sh` 自己會跑 `git rev-parse`、`jq`、`fm-fleet-snapshot.sh`（`order`）與 `fm-startup-memory-budget.sh report`（`install-rules`）。這些都不經服務，也不受瀏覽器的請求觸發。
+白名單管的是看板服務這個程序。node client 不是服務：它會啟動服務（`spawn` 同一個 `node` 執行 `dist/board-server.js`），並在服務卡死時跑 `ps -o args= -p <pid>` 與送訊號；`fm-topic.sh` 自己會跑 `git rev-parse` 與 `jq`，`todo add`、`todo done` 另外還會執行 adapter 第 3 節列的四個指令。這些都不經服務，也不受瀏覽器的請求觸發。
+`fm-topic.sh` 不 source 任何 first mate 的函式庫。
 
-不在白名單裡、由 first mate 或使用者自己跑的：`fm-topic.sh setup`、`install-rules`、`order`，以及 `fm-tasks-axi.sh hold`／`unhold`。看板不碰 backlog，不執行合併、捨棄、清理。
+不在白名單裡、由 first mate 或使用者自己跑的：first mate 這一側的 `fm-board.sh setup`、`install-rules`、`rules`、帶 task 的 `split` 與 `fm-dispatch-plan.sh order`（[adapter](../../fm-board/spec/adapter.markdown)），以及 `fm-tasks-axi.sh hold`／`unhold`。看板不碰 backlog，不執行合併、捨棄、清理。
 
 ## 8. 哪些動作要兩步確認
 
@@ -284,9 +286,10 @@ API 的路徑與 body 由第五段定；這裡只定兩件事：
 | 3 | 結果不明：要求已送出，回應前斷線 |
 | 69 | 看板服務不可用 |
 
-例外：`--in-home <id> answers` 原樣傳回 `fm-captain-hold.sh` 的 exit code 與輸出。
+除了 `open` 與 `--help`，每個子命令在沒有 `state/topic-board/token` 的 home（看板從來沒在那裡跑過）都回 1，stderr 是「這裡沒有看板（找不到 state/topic-board/token）；要在這裡開看板先跑 fm-topic.sh open。」，什麼都不寫。
+移到 first mate 這一側的舊寫法（`tag`、`--in-home`、`setup`、帶 task 的 `split`、`install-rules`、`order`）回 2，stderr 一行指出新的指令（adapter 第 2 節）。
 
-成功印一行 `ok <id> <做了什麼>`；`summary`、`which`、`find`、`order`、`list`、`status`、`open` 各有自己的輸出。錯誤在 stderr 印一行原因與修法。只有 `list` 有 `--json`。
+成功印一行 `ok <id> <做了什麼>`；`summary`、`which`、`find`、`list`、`status`、`open` 各有自己的輸出。錯誤在 stderr 印一行原因與修法。只有 `list` 有 `--json`。
 
 回 69 時 stderr 的那一行固定是「看板服務無法啟動：<原因>。<怎麼修>。這次的要求沒有寫入。」類別見第二段。
 
@@ -320,14 +323,12 @@ API 的路徑與 body 由第五段定；這裡只定兩件事：
 
 | 框架的東西 | 誰用 | 看板靠的是 | 測試 |
 | --- | --- | --- | --- |
-| `bin/fm-fleet-snapshot.sh --json`，環境變數 `FM_SNAPSHOT_SECONDMATES=1`、`FM_SNAPSHOT_BUDGET=1`、`FM_CREW_STATE_NO_FORGE=1`、`FM_HOME` | `fm-topic-board-read.sh`、`fm-topic.sh order` | exit 0 並在 stdout 印一個 JSON 物件；失敗時非 0。用到的欄位見下一張表 | 真的：`stage-1-read.sh` 全部、`stage-1-order.sh` 全部、`stage-3-data.sh` 全部 |
+| `bin/fm-fleet-snapshot.sh --json`，環境變數 `FM_SNAPSHOT_SECONDMATES=1`、`FM_SNAPSHOT_BUDGET=1`、`FM_CREW_STATE_NO_FORGE=1`、`FM_HOME` | `fm-topic-board-read.sh` | exit 0 並在 stdout 印一個 JSON 物件；失敗時非 0。用到的欄位見下一張表 | 真的：`stage-1-read.sh` 全部、`stage-3-data.sh` 全部 |
 | `state/fleet-ledger.jsonl` | `fm-topic-board-read.sh` 逐位元組分段讀；服務解析每一行 | 只會從尾端增加的 JSONL。每行是物件，有字串 `event`、字串 `task`、數字 `ts`；另外用到 `kind`、`pr`、`text`、`state`。`event` 認得 `task.dispatched`、`task.status`、`task.pr_ready`、`task.merged`、`task.cleaned_up`，其他的照原樣顯示 | `stage-1-read.sh` 的 `test_ledger_delta_and_continuity`；`stage-3-data.sh` 的 `test_updates_and_topics`、`test_ledger_is_stored_once_and_survives_rewrites`（帳本是測試自己寫的固定內容，不是框架產生的） |
-| `config/fleet-ledger` 存在與否 | `fm-topic-board-read.sh`、`fm-topic.sh setup` | 檔案存在就是這個 home 的帳本開著；`setup` 建一個空檔來打開 | `stage-1-topic.sh` 的 `test_setup_is_idempotent`；`stage-3-data.sh` 的 `test_home_status` |
-| `bin/fm-primary-scope-lib.sh` 的 `fm_root_is_secondmate_home <home>` | `fm-topic.sh`、`fm-topic-board-read.sh`、`fm-topic-session-start.sh` | 回傳值分辨 secondmate home（標記檔 `.fm-secondmate-home`） | 真的：`stage-1-topic.sh` 的 `test_tag_in_secondmate_home_checks_format_only`；`stage-1-order.sh` 的 `test_falls_open_without_a_usable_topic_file` |
-| `bin/fm-secondmate-registry-lib.sh` 的 `secondmate_registry_parse_line`（設 `SECONDMATE_REGISTRY_ID`、`_HOME`、`_REMOTE`）與 `secondmate_registry_field <登記檔> <id> remote\|home` | `fm-topic-board-read.sh`、`fm-topic-lib.sh` | `data/secondmates.md` 每個 `- ` 開頭的行解析出 id、home、是不是遠端 | 真的：`stage-1-read.sh` 的 `test_secondmates_and_in_home`；`stage-1-topic.sh` 的 `test_in_home_routes_to_a_local_secondmate` |
-| `bin/fm-config-inherit-lib.sh` 的 `shared_captain_header_valid <檔>` | `fm-topic.sh install-rules` | 回傳值判斷共用檔的檔頭上游收不收；印出缺的那一段 | 真的：`stage-6-rules.sh` 的 `test_creates_both_files`、`test_refuses_a_shared_file_with_a_bad_header` |
+| `config/fleet-ledger` 存在與否 | `fm-topic-board-read.sh` | 檔案存在就是這個 home 的帳本開著（由 first mate 這一側的 `fm-board.sh setup` 建立） | `stage-3-data.sh` 的 `test_home_status` |
+| `bin/fm-primary-scope-lib.sh` 的 `fm_root_is_secondmate_home <home>` | `fm-topic-board-read.sh`、`fm-topic-session-start.sh` | 回傳值分辨 secondmate home（標記檔 `.fm-secondmate-home`） | 真的：`stage-1-read.sh` 的 `test_secondmates_and_in_home`；`stage-2-startup.sh` 的 `test_secondmate_home_gets_nothing` |
+| `bin/fm-secondmate-registry-lib.sh` 的 `secondmate_registry_parse_line`（設 `SECONDMATE_REGISTRY_ID`、`_HOME`、`_REMOTE`）與 `secondmate_registry_field <登記檔> <id> remote\|home` | `fm-topic-board-read.sh`，經 `fm-board-lib.sh` | `data/secondmates.md` 每個 `- ` 開頭的行解析出 id、home、是不是遠端 | 真的：`stage-1-read.sh` 的 `test_secondmates_and_in_home` |
 | `bin/fm-timeout-lib.sh` 的 `fm_run_timed <秒> <指令…>` 與 `fm_timed_out <exit code>` | `fm-topic-session-start.sh` | 指令超過秒數就被停下，回 `fm_timed_out` 認得的 exit code；其他時候回指令自己的 exit code | 真的：`stage-2-startup.sh` 全部（沒有逾時的情況） |
-| `bin/fm-startup-memory-budget.sh report` | `fm-topic.sh install-rules` | 只把它的輸出印出來；失敗時印一句替代的話，不影響安裝 | 真的：`stage-6-rules.sh` 的 `test_creates_both_files`（只檢查安裝成功） |
 | `data/backlog.md` 的項目行格式 | 經 snapshot 間接讀；看板自己不解析 | 測試的 backlog 是照這個格式手寫的；hold 的原因用 `fm-hold-v1:<base64>` 編碼時由 snapshot 解回原文 | `stage-4-writes.sh` 的 `test_hands_on_items`（編碼過的原因）；`stage-5-page.sh` |
 
 snapshot 的 JSON 裡用到的欄位（少了哪一個，對應的東西就從看板上消失或顯示成未知，不會報錯）：
@@ -337,7 +338,7 @@ snapshot 的 JSON 裡用到的欄位（少了哪一個，對應的東西就從�
 | `generated` | 這次讀取的時間 |
 | `tasks[].id`、`.kind`、`.current_state.state`、`.current_state.source`、`.current_state.detail` | agent 的燈號。`state` 是 `working` 且 `detail` 剛好是 `harness busy (fm-spawn)` 時當成「還沒開始」（C32） |
 | `tasks[].hints.open_decisions[]` 的 `verb`（只取 `needs-decision`）、`key`、`summary` | worker 提問 |
-| `backlog.records[]` 的 `structured`、`state`（`queued`、`done`）、`id`、`title`、`kind` | 排隊中的項目；`order` 的分組 |
+| `backlog.records[]` 的 `structured`、`state`（`queued`、`done`）、`id`、`title`、`kind` | 排隊中的項目 |
 | `backlog.records[]` 的 `hold_kind`（`captain`）、`hold_reason`、`hold_bucket`（`live`、`aged`、`dated`、`blocked`）、`hold_until`、`hold_age_days`、`unresolved_blocker_ids` | 待決事項、要你動手的項目、排隊項目在等什麼 |
 | `backlog.records[].body_lines[]` 裡 `Captain hold origin: <id>` 那一行 | 待決事項沒有自己的議題標記時，跟著來源 task 的議題 |
 | `backlog.records[].body_lines[]` 裡 `Captain hold on answer: close\|release` 那一行 | 作答時送 `done` 還是 `release`（第 8 節） |
@@ -354,12 +355,11 @@ argv 的確切形狀在第 7 節，結果怎麼判在 [第四段](stage-4-writes
 | `bin/fm-on.sh <sm> <指令…>` 與 `--stdin` | 在遠端 home 執行並把 stdout、exit code 傳回；exit 255 是連線層失敗，可以重試 | 替身：`stage-3-data.sh`（遠端 home 是本機的目錄）、`stage-4-writes.sh` 的 `test_answers`、`test_tagging` |
 | `bin/fm-captain-hold.sh answers --source topic-board`，stdin 一行 `<task-id>\t<answer>\t<label>\t<mode>` | 逐行讀 stdout：`closed: <id>` 是成功；`skipped: <id> (already closed)`、`(… records a different captain decision …)`、`(not held for the captain)` 是別處已處理；其他的 `skipped:`、`refused:` 是失敗。`mode` 是 `done` 或 `release` | 替身：`stage-4-writes.sh` 的 `test_answers`、`stage-5-http.sh` 的 `test_answer_takes_two_steps`。真的：`test_hands_on_item_with_the_real_hold_tool`，只有裝了 `tasks-axi` 才跑，涵蓋 `done` 與 `release` |
 | `bin/fm-captain-hold.sh hold <id> --title <標題> --reason <多行文字> --on-answer close` | 建立或更新 captain hold；原因可以有換行、括號、引號，讀回來一字不差；重複執行會更新原因。`--on-answer` 寫成內文的 `Captain hold on answer:` 一行，之後重複 hold 不帶它也保留 | 真的：`test_hands_on_item_with_the_real_hold_tool`（同上，要 `tasks-axi`）。替身：`test_hands_on_commands` |
-| `bin/fm-tasks-axi.sh hold <id> --reason <文字>`、`unhold <id>` | 看板不執行，只由 `order` 印成給 first mate 照著跑的指令 | `stage-1-order.sh` 的 `test_sections` 只檢查印出來的字串；指令本身能不能跑沒有測試 |
 
 ### 11.3 其他
 
 - `bin/fm-session-start.sh`：fleet state 那一段的最後，只在拿到 session 鎖、不是 `--reemit` 時，呼叫 `bin/fm-topic-session-start.sh`，它的輸出原樣印進啟動摘要。這是看板在上游檔案裡唯一的呼叫點；合併上游時要留著這幾行。看板的測試靠真的 `fm-session-start.sh` 與 `fm-lock.sh`：拿得到鎖時跑、鎖被一個活著的 harness 程序拿著時是唯讀。測試：真的，`stage-2-startup.sh` 全部。
-- `tests/lib.sh`：看板的測試腳本 source 它，用 `fm_test_tmproot`、`fm_test_run`、`fm_test_cleanup`、`fm_git_init_commit`、`fm_write_meta`、`pass`、`fail`、`assert_equals`、`assert_contains`、`assert_not_contains`、`assert_grep`、`expect_code` 與變數 `ROOT`。改到這些，十二個腳本都受影響。
+- `tests/lib.sh`：看板的測試腳本 source 它，用 `fm_test_tmproot`、`fm_test_run`、`fm_test_cleanup`、`fm_git_init_commit`、`fm_write_meta`、`fm_fakebin`、`pass`、`fail`、`assert_equals`、`assert_contains`、`assert_not_contains`、`assert_grep`、`assert_present`、`assert_absent`、`expect_code` 與變數 `ROOT`。改到這些，每個測試腳本都受影響。
 - 環境變數 `FM_HOME`、`FM_ROOT_OVERRIDE`、`FM_DATA_OVERRIDE`、`FM_CONFIG_OVERRIDE`、`FM_STATE_OVERRIDE`：看板的 Bash 指令照上游的慣例解析路徑。
 - 自我更新：主 home 的 `config/self-update-source` 指向 `carry`。看板的服務在下一個議題指令發現程式的 commit 變了，就換掉自己。
-- `data/captain.md`、`data/captain-shared.md`：`install-rules` 在裡面維護一個有標記的區塊；`/stow` 之類的整理不能動到標記行。
+- first mate 這一側的指令（`fm-board.sh`、`fm-dispatch-plan.sh`）依賴的框架介面，包括 `install-rules` 在 `data/captain.md`、`data/captain-shared.md` 裡維護的標記區塊，列在 [adapter](../../fm-board/spec/adapter.markdown) 第 7 節。

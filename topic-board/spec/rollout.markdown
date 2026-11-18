@@ -23,11 +23,11 @@
 3. **主 home**：寫 `config/self-update-source`，內容一行 `fork carry`。
 4. **在主 home 跑 `/updatefirstmate`**。主 home 前進到 `carry`；同機的 secondmate 跟到主 home 的 commit；每台遠端 code root 依自己的 `self-update-source` 前進到 `carry`，遠端 home 再對齊到 code root。更新後上游會列出要重啟的 secondmate，照做。
 5. **每個 home 開帳本**：
-   - 主 home：`bin/fm-topic.sh setup`
-   - 同機的 secondmate：`bin/fm-topic.sh --in-home <id> setup`
-   - 遠端：`bin/fm-on.sh <id> fm-topic.sh setup`
+   - 主 home：`bin/fm-board.sh setup`
+   - 同機的 secondmate：`bin/fm-board.sh --in-home <id> setup`
+   - 遠端：`bin/fm-on.sh <id> fm-board.sh setup`
 6. **確認每個 home 都在同一版**：`bin/fm-topic.sh open`，打開看板停留一分鐘以上（讓遠端輪到一次），再跑 `bin/fm-topic.sh status`。每個 home 都要是「相同」，沒有「還沒換到 fork」「版本不相容」「版本不同」「帳本未開」。
-7. **最後才裝規則**：`bin/fm-topic.sh install-rules`。共用段會叫每個 secondmate 跑 `fm-topic.sh`，所以要等第 6 步全過。裝完重啟主 first mate 的 session；secondmate 在主 home 下一次 bootstrap 之後重啟。
+7. **最後才裝規則**：`bin/fm-board.sh install-rules`。共用段會叫每個 secondmate 跑 `fm-board.sh`，所以要等第 6 步全過。裝完重啟主 first mate 的 session；secondmate 在主 home 下一次 bootstrap 之後重啟。
 
 ## 上線時要驗的事
 
@@ -35,8 +35,8 @@
 
 | # | 要驗的事 | 怎麼驗 | 假設不成立時 |
 | --- | --- | --- | --- |
-| R-1 | 第 2 到 4 步的順序在真機上走得通：遠端 code root 依自己的 `self-update-source` 前進到 `carry`，遠端 home 再對齊到 code root | 先只拿一台遠端做。第 4 步之後 `bin/fm-on.sh <id> fm-topic.sh setup` 能跑就是到了 | 到不了就停在第 4 步，不做第 5 步之後的事，也不要拿掉任何一邊的 `config/self-update-source`（拿掉會讓下次更新因分歧而中止）。主 home 留在 `carry` 上沒有壞處：看板把那台遠端標成「還沒換到 fork」，其餘照常。把那台遠端的更新錯誤訊息記下來，回頭開一個決定 |
-| R-2 | 遠端的 secondmate agent 自己跑 `bin/fm-topic.sh tag` 時，用的是 home 的 `bin/` 還是 code root 的 `bin/` | 請遠端的 secondmate 跑 `bin/fm-topic.sh --help`，並回報當時的 `pwd` | 兩份在第 4 步之後是同一個 commit，哪一份都可以。只有兩者版本分歧時才有差別，看板會顯示「版本不同」 |
+| R-1 | 第 2 到 4 步的順序在真機上走得通：遠端 code root 依自己的 `self-update-source` 前進到 `carry`，遠端 home 再對齊到 code root | 先只拿一台遠端做。第 4 步之後 `bin/fm-on.sh <id> fm-board.sh setup` 能跑就是到了 | 到不了就停在第 4 步，不做第 5 步之後的事，也不要拿掉任何一邊的 `config/self-update-source`（拿掉會讓下次更新因分歧而中止）。主 home 留在 `carry` 上沒有壞處：看板把那台遠端標成「還沒換到 fork」，其餘照常。把那台遠端的更新錯誤訊息記下來，回頭開一個決定 |
+| R-2 | 遠端的 secondmate agent 自己跑 `bin/fm-board.sh tag` 時，用的是 home 的 `bin/` 還是 code root 的 `bin/` | 請遠端的 secondmate 跑 `bin/fm-topic.sh --help`，並回報當時的 `pwd` | 兩份在第 4 步之後是同一個 commit，哪一份都可以。只有兩者版本分歧時才有差別，看板會顯示「版本不同」 |
 | R-3 | 遠端帳號用 https 讀得到 fork | 第 2 步之後在遠端 code root 跑 `git fetch fork carry` | 讀不到就查那台機器的對外連線或 proxy；不要改用需要憑證的網址 |
 | R-4 | 開發用的 clone 用網址直接 fetch 上游、合併進 `carry` 的流程 | 上游第一次有新 commit 時照「之後怎麼更新」做一次 | 合併有衝突代表 fork 改到了上游的檔案，違反只新增的原則，要先找出是哪個檔 |
 | R-5 | 第一次開 PR 時 `gh pr create --repo guybeju/firstmate --base carry --dry-run` 的目標是 fork 的 `carry` | 第一段的 PR 開之前跑一次 | 目標不對就不開，先查 clone 的 remote |
@@ -57,10 +57,10 @@
 ## 之後怎麼更新
 
 - **看板有新版**：合併進 `carry` 並推上 fork，然後在主 home 跑 `/updatefirstmate`。下一個議題指令會發現服務的程式版本不同，自動換掉舊服務。
-- **上游有新版**：由 fleet 把上游的 `main` 合併進 `carry`（2026-11-17 起；原本寫的是看板開發用的 clone）。一定是真的 merge，不 squash、不 rebase：`carry` 分歧的話主 home 的更新會被跳過。開發用的 clone 沒有上游的 remote，合併時用網址直接 fetch：`git fetch https://github.com/kunchenguid/firstmate.git main && git merge FETCH_HEAD`。合併後跑一次全部六段的驗收（特別是 `bin/fm-doc-audience-check.sh` 與 `bin/fm-test-run.sh --check-coverage`，上游可能改了它們的範圍），再推上 fork、跑 `/updatefirstmate`。
+- **上游有新版**：由 fleet 把上游的 `main` 合併進 `carry`（2026-11-17 起；原本寫的是看板開發用的 clone）。一定是真的 merge，不 squash、不 rebase：`carry` 分歧的話主 home 的更新會被跳過。開發用的 clone 沒有上游的 remote，合併時用網址直接 fetch：`git fetch https://github.com/kunchenguid/firstmate.git main && git merge FETCH_HEAD`。合併後跑一次看板與 first mate 這一側的全部驗收（`topic-board/test/run.sh`、`fm-board/test/run.sh`、`dispatch-plan/test/run.sh`；特別是 `bin/fm-doc-audience-check.sh` 與 `bin/fm-test-run.sh --check-coverage`，上游可能改了它們的範圍），再推上 fork、跑 `/updatefirstmate`。
 - **退回較舊的版本**：`data/topics.json` 的 `history`、`todos`，以及 `history` 每一筆裡的 `reason` 與 `by`，都是後來才加的欄位，舊版存檔時不會寫回。以 `history` 為例：沒有這個欄位的舊版程式讀得懂這個檔，但它下一次存檔時不會寫回 `history`，來歷紀錄就沒了（議題本身與 `merged` 表不受影響）。要退版又想留著紀錄，先備份這個檔。
   退回 C52 之前的版本時，檔案照樣讀得懂（`status` 一律是 `confirmed`），議題都還在佇列裡；那一版又會有 `propose` 與提議中的狀態，規則也要跟著退回 v6。
-- **規則範本有變**：更新後 `bin/fm-topic.sh status` 會顯示「和範本不同」，由使用者再跑一次 `install-rules`。
+- **規則範本有變**：更新後 `bin/fm-board.sh rules` 會顯示「和範本不同」，由使用者再跑一次 `bin/fm-board.sh install-rules`。
 - **之後新增的 secondmate**：遠端的 code root 是使用者在那台機器上手動 clone 的。clone 完就做第 2 步，再照上游的流程佈建 home。不把 `origin` 改指向 fork。
 
 ## 已知限制

@@ -31,16 +31,20 @@
                                    ├─ 看板服務（node，主 home，常駐）
 fm-topic.sh ──Unix socket（0600）──┘      │  獨家寫入 data/topics.json 等
    │                                      │
-   │ tag、order、list、setup              ├─ 讀：fm-topic-board-read.sh（主 home、同機、經 fm-on.sh 到遠端）
-   │ install-rules（只讀寫檔）             └─ 寫：fm-inbox.sh、fm-send.sh、fm-captain-hold.sh、fm-topic.sh tag
+   │ list（只讀檔）                       ├─ 讀：fm-topic-board-read.sh（主 home、同機、經 fm-on.sh 到遠端）
+   │                                      └─ 寫：fm-inbox.sh、fm-send.sh、fm-captain-hold.sh、fm-board.sh tag
+   ▼
+data/topics.json（只讀）
+
+first mate 這一側：fm-board.sh（tag、setup、帶 task 的 split、--in-home、install-rules、rules）、fm-dispatch-plan.sh（order）
    ▼
 各 home 的 data/<task-id>/topic、config/fleet-ledger、偏好檔
 ```
 
 - **看板服務**只在主 home，按需啟動、獨立常駐；主 home 每次開 session 時，沒在跑的服務也會被啟動。它是議題資料唯一的寫入者。
-- **`bin/fm-topic.sh`** 是 first mate 與使用者用的指令。一部分子命令只讀寫檔，服務掛了也能用；其餘經 socket 找服務。
+- **`bin/fm-topic.sh`** 是 first mate 與使用者用的看板指令，只 source 自己的 `fm-topic-lib.sh`。`list` 只讀檔，服務掛了也能用；其餘經 socket 找服務。讀寫 first mate 自己的檔的指令在 first mate 這一側（[adapter](../../fm-board/spec/adapter.markdown)）。
 - **`bin/fm-topic-board-read.sh`** 是每個 home 都有的唯讀彙整腳本，也是服務唯一的讀取來源。
-- **遠端 home** 只需要這兩支腳本、帳本旗標與 `jq`。
+- **遠端 home** 只需要 `fm-topic-board-read.sh`、`fm-board.sh`、帳本旗標與 `jq`。
 
 ## 不變的原則
 
@@ -69,7 +73,7 @@ fm-topic.sh ──Unix socket（0600）──┘      │  獨家寫入 data/top
 | --- | --- | --- |
 | 原始碼放哪 | 頂層新目錄 `topic-board/`：`src/`、`dist/`、`public/`、`rules/`、`spec/`、`test/`。Bash 入口在 `bin/`（`fm-on.sh` 只認那裡） | [contracts](contracts.markdown) 第 2 節 |
 | TypeScript 怎麼變成能跑的東西 | 用釘死版本的 `tsc` 編成 `.js` 提交進 git，執行期只跑 `dist/`。原因：這台的 `node` 沒有 TypeScript 支援（實測） | [第二段](stage-2-service.markdown) |
-| 規則範本放哪 | `topic-board/rules/*.md.tmpl`。不能是 `.md`，也不能放 `config/` 或 `data/` | [第六段](stage-6-rules.markdown) |
+| 規則範本放哪 | `fm-board/rules/*.md.tmpl`（原本在 `topic-board/rules/`，規則是 first mate 的，後來搬到 first mate 這一側）。不能是 `.md`，也不能放 `config/` 或 `data/` | [adapter](../../fm-board/spec/adapter.markdown) 第 6 節 |
 | 頁面上改名、改目標、封存、議題併議題放哪 | 都在議題頁：標題與目標旁的「編輯」鈕；標題列的「⋯」選單放「封存」與「併入其他議題…」 | [第五段](stage-5-browser.markdown) |
 | 執行期的 npm 相依 | 沒有。只用 Node 的內建模組；開發期只有 `typescript` 與 `@types/node` | [第二段](stage-2-service.markdown) |
 
