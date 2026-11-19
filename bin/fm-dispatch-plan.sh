@@ -381,9 +381,11 @@ why() {
   esac
 }
 
-# delivered_at <mate>: the time of the copy last delivered to <mate>.
+# delivered_at <mate>: the time of the copy last delivered to <mate>; returns
+# 1 when there is no record or its time cannot be read.
 delivered_at() {
-  jq -r '.at' "$PUSHED_DIR/$1" 2>/dev/null
+  jq -er '.at | select(type == "string" and ((try fromdateiso8601 catch null) != null))' \
+    "$PUSHED_DIR/$1" 2>/dev/null
 }
 
 # minutes_since <iso-time>: whole minutes from <iso-time> to now, at least 0.

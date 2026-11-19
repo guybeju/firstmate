@@ -79,6 +79,12 @@ test_local_mate_reads_the_main_homes_queues() {
   out=$(tb_run "$mate" "$PLAN" order)
   assert_equals "n1 p1 h1 r1 m1 u1 " "$(section "$out" "可派：")" \
     "a topic moved after routing must reach the local mate at its next order"
+  sed -i.bak 's/(hold: 看板佇列：議題 t2 在待辦)/(hold: topic-board：議題 t2 在待辦)/' "$mate/data/backlog.md"
+  out=$(tb_run "$mate" "$PLAN" order)
+  assert_equals "照主 home 的議題順序（直接讀 $main/data/topics.json）。" "$(first_line "$out")" \
+    "the source line must stay first in a secondmate home"
+  assert_equals "有 1 個舊標記的 hold，先跑 bin/fm-board.sh migrate-myshape" "$(printf '%s\n' "$out" | sed -n 2p)" \
+    "the old-prefix warning must follow the source line"
   pass "a local secondmate ranks by the main home's own topic file, live"
 }
 

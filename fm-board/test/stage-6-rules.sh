@@ -85,8 +85,9 @@ test_replaces_an_old_block_in_place() {
   pass "an existing block is replaced whole and in place"
 }
 
-# A home holding the previous blocks, exactly as the templates were before this
-# version, is updated in place to the current ones.
+# A home holding blocks marked with the previous versions (main v10, shared v4)
+# is updated in place to the current ones: the installer finds a block by its
+# marker, whatever version the block names.
 test_updates_the_previous_version_in_place() {
   local home out main shared
   home=$(tb_make_home previous)

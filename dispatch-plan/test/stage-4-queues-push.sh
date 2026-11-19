@@ -140,6 +140,11 @@ test_resends_an_unchanged_copy_after_30_minutes() {
   backdate_delivery far2 30
   assert_equals "" "$(push --check)" "a refresh must print nothing under --check"
   assert_equals "far2 " "$(calls)" "only a copy delivered 30 minutes ago or more must be sent again"
+  reset_calls
+  jq -c '.at = "yesterday"' "$MAIN/state/dispatch-plan/pushed/far1" > "$MAIN/state/dispatch-plan/pushed/far1.new"
+  mv "$MAIN/state/dispatch-plan/pushed/far1.new" "$MAIN/state/dispatch-plan/pushed/far1"
+  push >/dev/null
+  assert_equals "far1 " "$(calls)" "a delivery record without a readable time must count as no delivery"
   pass "queues-push sends an unchanged copy again once its last delivery is 30 minutes old"
 }
 
