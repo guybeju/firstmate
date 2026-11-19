@@ -96,7 +96,7 @@ async function connected(page) {
   // AT10.8: a tab open before a code change reloads itself.
   await page.evaluate("window.__beforeTheChange = true");
   execFileSync(process.env.TB_RECOMMIT);
-  topic("list");
+  topic("open");
   await page.waitFor("the page to reload itself", "window.__beforeTheChange !== true", 25000);
   await page.waitFor("the reloaded page", has("建置"));
 }

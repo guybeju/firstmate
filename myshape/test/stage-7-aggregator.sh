@@ -34,7 +34,7 @@ mkdir -p "$TMP_ROOT/root"
 SA_ROOT=$TMP_ROOT/root/board
 tb_make_board_root "$SA_ROOT" >/dev/null
 [ "${TB_STAGE7_TRIPWIRES:-0}" != 1 ] || sa_trip_root "$SA_ROOT"
-BASE_ENV=(MYSHAPE_TEST=1 MYSHAPE_NOTIFY_MS=2000 "MYSHAPE_RETRY_MS=100,200" MYSHAPE_RESUME_MS=1000
+BASE_ENV=(MYSHAPE_TEST=1 MYSHAPE_NOTIFY_MS=2000 "MYSHAPE_RETRY_MS=100,200"
   MYSHAPE_READ_MS=300 MYSHAPE_STALE_MS=4000 MYSHAPE_IDLE_MS=600000)
 AGG_FM=$TMP_ROOT/agg-fm
 AGG_PLAIN=$TMP_ROOT/agg-plain
@@ -270,7 +270,7 @@ test_fm_notices() {
   wait_for "the dispatchable notice" is 1 received_count "$AGG_FM"
   text=$(received "$AGG_FM" '.[0].text')
   assert_equals "topic.dispatchable|mover" "$(received "$AGG_FM" '.[0] | "\(.event)|\(.topic.id)"')" "a move out of later must send a dispatchable notice"
-  assert_equals "議題「移動」離開「待辦」，排在「一般」最後" "$text" "the notice must name the queue and the place"
+  assert_equals "議題「移動」離開「待辦」，排在「一般」最後，現在可派" "$text" "the notice must name the queue and the place"
   assert_not_contains "$text" "order" "the notice must not dictate a command"
   assert_not_contains "$text" ".sh" "the notice must name no program"
   : > "$AGG_FM/received.jsonl"
@@ -324,6 +324,20 @@ test_fm_delivery_states() {
   id=$(post "$FMH" messages '{"topic":"solo","text":"別處"}' | jq -r '.write_id')
   wait_for "handled elsewhere" write_is "$FMH" "$id" handled_elsewhere
   pass "retry, failure, a missing outcome, resend, ignore and handled-elsewhere show as they should (AT2.10)"
+}
+
+# A resent filing for a further home, right after a restart and with no page
+# open, reconciles against that home: the board reads the root home first to
+# learn it.
+test_fm_resend_after_a_restart() {
+  local id
+  printf '%s\n' '{"outcome":"failed","error":"not now"}' > "$AGG_FM/play"
+  id=$(post "$FMH" agents/tag '{"home":"sm1","task":"sm-loose","topic":"wrap"}' | jq -r '.write_id')
+  wait_for "the filing to fail" write_is "$FMH" "$id" failed
+  f restart >/dev/null
+  tb_op "$FMH" test-resend "{\"write_id\":\"$id\"}" >/dev/null || fail "the resend was refused"
+  wait_for "the resent filing" write_is "$FMH" "$id" delivered
+  pass "a filing resent before any read reconciles against its home and is delivered"
 }
 
 # AT2.11: a crash while writes are under way.
@@ -620,6 +634,7 @@ test_nothing_is_left() {
 
 fm_test_run test_fm_setup test_fm_work_reaches_the_page test_fm_every_home_is_read_with_its_own_cursor \
   test_fm_message test_fm_answers test_fm_filing test_fm_notices test_fm_direct test_fm_delivery_states \
+  test_fm_resend_after_a_restart \
   test_fm_a_crash_mid_write test_fm_whole_page_states test_fm_refresh test_fm_summaries \
   test_plain_setup test_plain_work test_plain_ledger test_plain_second_home test_plain_banners \
   test_plain_work_only_under_topics test_plain_topics_and_order test_plain_the_captains_channel \

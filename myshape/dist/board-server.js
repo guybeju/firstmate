@@ -669,7 +669,7 @@ function notifyDispatchable(service, ready) {
         const place = index === list.length - 1 ? "最後" : `第 ${index + 1}`;
         const ref = topicRef(service, id);
         const what = reason === "reopened" ? "重開" : "離開「待辦」";
-        const text = `議題「${ref.name}」${what}，排在「${topics.QUEUE_LABEL[queue]}」${place}`;
+        const text = `議題「${ref.name}」${what}，排在「${topics.QUEUE_LABEL[queue]}」${place}，現在可派`;
         submitNotice(service, { kind: "notice", event: "topic.dispatchable", text, topic: ref }, id);
     }
 }
@@ -695,6 +695,19 @@ function recordDelivery(service, record) {
     });
     service.version += 1;
     void service.poller.readNow(record.home);
+}
+/**
+ * Reads `home` afresh and returns `task`'s tag text, or null when the read
+ * failed. A board that has not read the root home since it started does not
+ * know the further homes yet, so it reads the root home first.
+ */
+async function readTags(service, home, task) {
+    if (!service.poller.knows(home))
+        await service.poller.readNow(MAIN_HOME);
+    if (!(await service.poller.readFresh(home)))
+        return null;
+    const report = service.poller.snapshots().find((entry) => entry.id === home)?.report;
+    return report?.topics[task] ?? "";
 }
 /** The aggregator block kept from an earlier start, or null. */
 function loadAggregator(file) {
@@ -761,9 +774,7 @@ function loadService(boot) {
         writes: new WriteEngine(paths.audit, {
             run,
             unavailable,
-            readTags: async (home, task) => (await service.poller.readFresh(home))
-                ? (service.poller.snapshots().find((entry) => entry.id === home)?.report?.topics[task] ?? "")
-                : null,
+            readTags: (home, task) => readTags(service, home, task),
             onChange: bump,
             onDelivered: (record) => recordDelivery(service, record),
         }, writeTimings()),

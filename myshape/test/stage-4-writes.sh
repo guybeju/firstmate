@@ -734,16 +734,16 @@ test_dispatchable_notice() {
   t move parked2 high >/dev/null
   sleep 2.5
   assert_equals $((before + 2)) "$(calls fm-inbox.sh)" "each topic that becomes dispatchable must get its own notice"
-  assert_contains "$(grep '^cmd=fm-inbox.sh' "$TB_LOG" | tail -n 2)" "stdin=議題「Parked」離開「待辦」，排在「一般」最後" \
+  assert_contains "$(grep '^cmd=fm-inbox.sh' "$TB_LOG" | tail -n 2)" "stdin=議題「Parked」離開「待辦」，排在「一般」最後，現在可派" \
     "the notice must say where the topic now stands"
-  assert_contains "$(grep '^cmd=fm-inbox.sh' "$TB_LOG" | tail -n 2)" "stdin=議題「Parked two」離開「待辦」，排在「高」最後" \
+  assert_contains "$(grep '^cmd=fm-inbox.sh' "$TB_LOG" | tail -n 2)" "stdin=議題「Parked two」離開「待辦」，排在「高」最後，現在可派" \
     "the notice must say where the topic now stands"
   assert_not_contains "$(grep '^cmd=fm-inbox.sh' "$TB_LOG" | tail -n 2)" "order" "the notice must not tell firstmate what to run"
   t archive parked >/dev/null
   t reopen parked >/dev/null
   sleep 2.5
   assert_equals $((before + 3)) "$(calls fm-inbox.sh)" "reopening an archived topic must send the notice"
-  assert_contains "$(last_call fm-inbox.sh)" "stdin=議題「Parked」重開，排在「一般」最後" "the reopening notice must say so"
+  assert_contains "$(last_call fm-inbox.sh)" "stdin=議題「Parked」重開，排在「一般」最後，現在可派" "the reopening notice must say so"
   pass "firstmate is told once per topic when topics leave later or are reopened and then stay put"
 }
 

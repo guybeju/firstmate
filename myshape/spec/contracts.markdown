@@ -295,7 +295,7 @@ API 的路徑與 body 由第五段定；這裡只定兩件事：
 
 - `answer` 的 `mode` 照 hold 記下的處理方式（第 8 節），不是使用者選的；`question_sha256` 是問題全文的 SHA-256。
 - `tag` 的 `last_tag_line` 是看板送出時看到的那個 task 最後一行議題標記，沒有就是空字串。重試之前看板先重讀那個 home：標記已經是這個議題就算送達，已經被別人改成別的就算別處已處理。
-- `notice` 的 `event`：`topic.dispatchable`（議題離開「待辦」或重開，之後 30 秒沒再動）、`topic.merged`、`topic.archived`、`topic.kept`（先不關）、`topic.confirmed`（舊版留下的提議在啟動時確認）、`todo.claimed`（使用者按了做完了）。`text` 寫的是發生了什麼，例如「議題「帳務」重開，排在「高」最後」，不寫要跑什麼。
+- `notice` 的 `event`：`topic.dispatchable`（議題離開「待辦」或重開，之後 30 秒沒再動）、`topic.merged`、`topic.archived`、`topic.kept`（先不關）、`topic.confirmed`（舊版留下的提議在啟動時確認）、`todo.claimed`（使用者按了做完了）。`text` 寫的是發生了什麼，例如「議題「帳務」重開，排在「高」最後，現在可派」，不寫要跑什麼。
 - 看板改版之前寫下、還沒送完的寫入（稽核紀錄裡帶 `plan` 而不是 `action` 的那些）照舊的種類換成上面的紀錄，`id` 不變；`message` 與 `notice` 另帶 `legacy_request_id`，是它當初的去重 key，送給 aggregator 的時候要用它而不是 `id`。這個換算只為了接上舊的紀錄，之後會拿掉。
 
 `deliver` 在 stdout 印一行結果：
