@@ -185,7 +185,7 @@ test_remote_means_nothing_to_the_board() {
   SA_ENV=(MYSHAPE_TEST=1 MYSHAPE_READ_MS=300 "MYSHAPE_RETRY_MS=100" MYSHAPE_STALE_MS=600000 MYSHAPE_IDLE_MS=600000)
   sa_install_stub fm "$agg"
   REMOTE_HOME=$(sa_home remote-main)
-  jq '.secondmates = [{id: "h1", remote: false, read_every_s: 2, read_timeout_s: 1}, {id: "h2", remote: true, read_every_s: 2, read_timeout_s: 1}]' \
+  jq '.secondmates = [{id: "h1", remote: false, read_every_s: 1, read_timeout_s: 1}, {id: "h2", remote: true, read_every_s: 1, read_timeout_s: 1}]' \
     "$ROOT/myshape/test/contract/report-main.json" > "$agg/fm/main.json"
   for a in h1 h2; do
     jq '.tasks = [{id: "w", kind: "ship", state: "working", source: "", detail: ""}]
@@ -198,7 +198,7 @@ test_remote_means_nothing_to_the_board() {
   sleep 7
   a=$(feeds "$agg" h1)
   b=$(feeds "$agg" h2)
-  [ "$a" -ge 2 ] && [ $((a - b)) -le 1 ] && [ $((b - a)) -le 1 ] || fail "(a) both homes must be read at the same interval: h1 $a, h2 $b"
+  [ "$a" -ge 5 ] && [ $((a - b)) -le 1 ] && [ $((b - a)) -le 1 ] || fail "(a) both homes must be read at the same interval: h1 $a, h2 $b"
 
   printf 'sleep 3\n' > "$agg/control/h1"
   printf 'sleep 3\n' > "$agg/control/h2"
