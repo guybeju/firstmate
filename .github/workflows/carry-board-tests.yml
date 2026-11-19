@@ -135,7 +135,7 @@ jobs:
           done
           echo >> "$GITHUB_STEP_SUMMARY"
           if [ "${#not_run[@]}" -eq 0 ]; then
-            echo 'Every stage ran; no test skipped.' | tee -a "$GITHUB_STEP_SUMMARY"
+            echo 'No stage printed a skip: line.' | tee -a "$GITHUB_STEP_SUMMARY"
           else
             failed=1
             for line in "${not_run[@]}"; do
