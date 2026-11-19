@@ -9,6 +9,7 @@ export const LIGHT_LABEL = {
     unknown: "未知",
 };
 export const WRITE_LABEL = {
+    waiting: "等 aggregator 接上",
     sending: "送出中",
     retrying: "重試中",
     delivered: "已送達",
@@ -19,6 +20,15 @@ export const WRITE_LABEL = {
     ignored: "已忽略",
 };
 export const BAD_WRITES = ["failed", "undelivered", "unknown"];
+let label = "aggregator";
+/** Remembers the name the board gave the agent side; called with every view. */
+export function setAgentLabel(value) {
+    label = value;
+}
+/** The name the page uses for the agent on the other side. */
+export function agentName() {
+    return label;
+}
 export function currentTopic() {
     const match = /^#\/topic\/(.+)$/.exec(location.hash);
     return match === null ? null : decodeURIComponent(match[1]);

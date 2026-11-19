@@ -1,48 +1,25 @@
-// The only external commands the board service may run. The list is fixed
-// here, never read from configuration. Every command is built as an argument
-// array for execFile (no shell), runs a script from the code root's bin/, and
-// gets FM_HOME set to the main home.
+// The only external commands the board service may run: the aggregator's feed
+// and its deliverer, both one program fixed here, never read from
+// configuration (contracts section 7). Every run is an argument array for
+// execFile (no shell), and gets MYSHAPE_HOME set to the board's home.
 import { execFile } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
-const ID = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
+/** The aggregator's program, relative to the code root. */
+export const AGGREGATOR_PROGRAM = path.join("bin", "fm-board.sh");
+const HOME_ID = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
 const SHA = /^(-|[0-9a-f]{64})$/;
-const REQUEST_ID = /^[A-Za-z0-9_][A-Za-z0-9._:-]{0,127}$/;
-const DELIVERY_ID = /^[a-f0-9]{16}$/;
-const ANSWER_MODES = ["done", "release"];
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 export class CommandRefused extends Error {
 }
 function refuse(reason) {
     throw new CommandRefused(reason);
 }
-function readArgs(command) {
-    if (!Number.isInteger(command.offset) || command.offset < 0)
-        refuse("offset must be a non-negative integer");
-    if (!SHA.test(command.sha))
-        refuse("prefix hash must be 64 hex characters or '-'");
-    return [String(command.offset), command.sha];
-}
-/** Checks that `id` is a registered secondmate of the expected placement. */
-function secondmateArg(id, remote, known) {
-    if (!ID.test(id))
-        refuse(`malformed secondmate id: ${id}`);
-    const found = known.find((entry) => entry.id === id);
-    if (found === undefined)
-        refuse(`unknown secondmate: ${id}`);
-    if (found.remote !== remote)
-        refuse(`secondmate ${id} is ${found.remote ? "remote" : "local"}`);
-    return id;
-}
-function idArg(value, what) {
-    if (!ID.test(value))
-        refuse(`malformed ${what}: ${value}`);
-    return value;
-}
 /**
- * Text handed to fm-send.sh as one argument. fm-send.sh treats a leading '-'
- * as an option and has no "--" terminator, and types text starting with '/' or
- * '$' into the pane as a command; '!' is the harness composer's shell escape.
- * None of the four may lead, with or without whitespace in front.
+ * Text handed to an agent. A receiver that types it into a terminal would run
+ * one starting with '/' or '$' as a command, '!' is a harness composer's shell
+ * escape, and a leading '-' reads as an option. None of the four may lead,
+ * with or without whitespace in front.
  */
 export function directTextProblem(text) {
     if (text.trim() === "")
@@ -52,132 +29,53 @@ export function directTextProblem(text) {
     }
     return null;
 }
-function sendText(text) {
-    const problem = directTextProblem(text);
-    if (problem !== null)
-        refuse(problem);
-    return text;
+function feedArgs(command) {
+    if (!HOME_ID.test(command.home))
+        refuse(`malformed home id: ${command.home}`);
+    if (!Number.isInteger(command.offset) || command.offset < 0)
+        refuse("offset must be a non-negative integer");
+    if (!SHA.test(command.sha))
+        refuse("prefix hash must be 64 hex characters or '-'");
+    return ["feed", command.home, String(command.offset), command.sha];
 }
-/** One `<task-id>\t<answer>\t<label>\t<mode>` line for fm-captain-hold.sh answers. */
-function answerLine(line) {
-    const fields = line.split("\t");
-    const [task = "", answer = "", , mode = ""] = fields;
-    if (/[\r\n]/.test(line) || fields.length !== 4)
-        refuse("an answer must be one line of four tab-separated fields");
-    if (!ID.test(task) || answer === "" || !ANSWER_MODES.includes(mode))
-        refuse("malformed answer line");
-    return `${line}\n`;
+/** Turns an allowed command into the arguments to run; throws CommandRefused otherwise. */
+export function invocationFor(command) {
+    if (command.kind === "feed")
+        return { args: feedArgs(command) };
+    if (/[\r\n]/.test(command.record))
+        refuse("an action record must be one line");
+    return { args: ["deliver"], stdin: `${command.record}\n` };
 }
-/** The secondmate argument a placed command needs: none for the main home. */
-function placed(command, known) {
-    if (command.placement === "main")
-        return "";
-    const secondmate = command.secondmate === undefined ? "" : command.secondmate;
-    return secondmateArg(secondmate, command.placement === "remote", known);
-}
-function answerInvocation(command, known) {
-    const stdin = answerLine(command.line);
-    const secondmate = placed(command, known);
-    const answers = ["fm-captain-hold.sh", "answers", "--source", "myshape"];
-    switch (command.placement) {
-        case "main":
-            return { script: answers[0], args: answers.slice(1), stdin };
-        case "local":
-            return { script: "fm-board.sh", args: ["--in-home", secondmate, "answers"], stdin };
-        case "remote":
-            return { script: "fm-on.sh", args: ["--stdin", secondmate, ...answers], stdin };
+/**
+ * Why the aggregator's program cannot be started, or null when it can: it
+ * must be a regular file (a symlink to one counts) with an execute bit.
+ */
+export function programProblem(root) {
+    const program = path.join(root, AGGREGATOR_PROGRAM);
+    let stat;
+    try {
+        stat = fs.statSync(program);
     }
-}
-function tagInvocation(command, known) {
-    const tag = ["tag", idArg(command.task, "task id"), idArg(command.topic, "topic id")];
-    const secondmate = placed(command, known);
-    switch (command.placement) {
-        case "main":
-            return { script: "fm-board.sh", args: tag };
-        case "local":
-            return { script: "fm-board.sh", args: ["--in-home", secondmate, ...tag] };
-        case "remote":
-            return { script: "fm-on.sh", args: [secondmate, "fm-board.sh", ...tag] };
+    catch {
+        return `沒有 ${AGGREGATOR_PROGRAM}`;
     }
-}
-function relayInvocation(command, known) {
-    if (!DELIVERY_ID.test(command.deliveryId))
-        refuse("delivery id must be 16 lowercase hex characters");
-    if (!known.some((entry) => entry.id === command.secondmate))
-        refuse(`unknown secondmate: ${command.secondmate}`);
-    return {
-        script: "fm-send.sh",
-        args: [
-            idArg(command.secondmate, "secondmate id"),
-            "--fire-and-forget",
-            command.deliveryId,
-            sendText(command.text),
-        ],
-    };
-}
-function readInvocation(command, known) {
-    switch (command.kind) {
-        case "read-main":
-            return { script: "fm-topic-board-read.sh", args: readArgs(command) };
-        case "read-local":
-            return {
-                script: "fm-topic-board-read.sh",
-                args: ["--in-home", secondmateArg(command.secondmate, false, known), ...readArgs(command)],
-            };
-        case "read-remote":
-            return {
-                script: "fm-on.sh",
-                args: [
-                    secondmateArg(command.secondmate, true, known),
-                    "fm-topic-board-read.sh",
-                    ...readArgs(command),
-                ],
-            };
-    }
-}
-function writeInvocation(command, known) {
-    switch (command.kind) {
-        case "note":
-            if (!REQUEST_ID.test(command.requestId))
-                refuse("malformed request id");
-            return {
-                script: "fm-inbox.sh",
-                args: ["note", "--request-id", command.requestId, "-"],
-                stdin: command.body,
-            };
-        case "send":
-            return {
-                script: "fm-send.sh",
-                args: [idArg(command.task, "task id"), sendText(command.text)],
-            };
-        case "relay":
-            return relayInvocation(command, known);
-        case "answer":
-            return answerInvocation(command, known);
-        case "tag":
-            return tagInvocation(command, known);
-    }
-}
-const READ_KINDS = ["read-main", "read-local", "read-remote"];
-/** Turns an allowed command into the script and arguments to run; throws CommandRefused otherwise. */
-export function invocationFor(command, known) {
-    return READ_KINDS.includes(command.kind)
-        ? readInvocation(command, known)
-        : writeInvocation(command, known);
+    if (!stat.isFile())
+        return `${AGGREGATOR_PROGRAM} 不是一般檔案`;
+    return (stat.mode & 0o111) === 0 ? `${AGGREGATOR_PROGRAM} 不能執行` : null;
 }
 /** Builds the runner bound to one home and code root. */
 export function commandRunner(config) {
-    return (command, known, timeoutMs) => new Promise((resolve) => {
+    return (command, timeoutMs) => new Promise((resolve) => {
         let invocation;
         try {
-            invocation = invocationFor(command, known);
+            invocation = invocationFor(command);
         }
         catch (error) {
             resolve({ code: null, stdout: "", stderr: error.message });
             return;
         }
-        const child = execFile(path.join(config.root, "bin", invocation.script), invocation.args, {
-            env: { ...process.env, FM_HOME: config.home },
+        const child = execFile(path.join(config.root, AGGREGATOR_PROGRAM), invocation.args, {
+            env: { ...process.env, MYSHAPE_HOME: config.home },
             timeout: timeoutMs,
             maxBuffer: MAX_OUTPUT_BYTES,
             encoding: "utf8",
@@ -189,7 +87,11 @@ export function commandRunner(config) {
                 stderr: error !== null && code === null ? `${stderr}${error.message}` : stderr,
             });
         });
-        if (child.stdin !== null)
+        if (child.stdin !== null) {
+            // A program that exits without reading its stdin closes the pipe
+            // (EPIPE); its exit code and output already say how the run went.
+            child.stdin.on("error", () => undefined);
             child.stdin.end(invocation.stdin);
+        }
     });
 }

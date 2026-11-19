@@ -251,4 +251,43 @@ describe("findLines for working out what happened", () => {
     ]);
     expect(findLines(state, "w1", tags)).toEqual(["task main/w1：同 1（2026-11-19）"]);
   });
+
+  it("lists moves and goal changes with who made them", () => {
+    let state = fixture();
+    state = done(
+      topics.stampHistory(
+        topics.move(state, "login", "high", { first: true }, "2026-11-19T00:00:00Z"),
+        state.doc.history.length,
+        "command",
+      ),
+    );
+    state = done(
+      topics.stampHistory(
+        topics.setGoal(state, "login", "只做扣款", "2026-11-19T00:00:01Z"),
+        state.doc.history.length,
+        "page",
+      ),
+    );
+    const lines = findLines(state, "login", [], true);
+    expect(lines).toContain("  2026-11-19T00:00:00Z 移到「高」第 1（用指令）");
+    expect(lines).toContain("  2026-11-19T00:00:01Z 目標改為「只做扣款」（在頁面上）");
+  });
+
+  it("keeps moves and goal changes out of the bounded answer, so a merge stays in it", () => {
+    let state = fixture();
+    state = done(topics.merge(state, "idea", "login", "2026-11-19T00:00:00Z"));
+    for (let index = 0; index < 9; index += 1) {
+      const queue = index % 2 === 0 ? "high" : "normal";
+      state = done(
+        topics.move(state, "login", queue, { first: true }, `2026-11-19T01:00:0${index}Z`),
+      );
+    }
+    state = done(topics.setGoal(state, "login", "新的目標", "2026-11-19T02:00:00Z"));
+    const plain = findLines(state, "login", []);
+    expect(plain.some((line) => line.includes("併入"))).toBe(true);
+    expect(plain.some((line) => line.includes("移到") || line.includes("目標改為"))).toBe(false);
+    expect(
+      findLines(state, "login", [], true).filter((line) => line.includes("移到")),
+    ).toHaveLength(9);
+  });
 });

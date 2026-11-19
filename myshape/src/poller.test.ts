@@ -10,22 +10,21 @@ import type { PollTimings } from "./poller.js";
 
 const LINE = (task: string) => JSON.stringify({ v: 1, ts: 5, event: "task.status", task });
 const TIMINGS: PollTimings = {
-  localMs: 40,
-  remoteMs: 40,
+  readMs: 40,
+  timeoutMs: 111,
   idleMs: 600,
   staleMs: 1000,
-  localTimeoutMs: 111,
-  remoteTimeoutMs: 222,
 };
 
 interface Setup {
   poller: Poller;
   journal: Journal;
   offsets: Offsets;
-  calls: { command: AllowedCommand; known: string[]; timeout: number }[];
+  calls: { command: AllowedCommand; timeout: number }[];
   /** What each home answers next; a function is called with the command. */
   answers: Map<string, (command: AllowedCommand) => CommandResult | Promise<CommandResult>>;
   changes: () => number;
+  aggregators: unknown[];
 }
 
 let dir: string;
@@ -47,12 +46,15 @@ function report(extra: Record<string, unknown> = {}): CommandResult {
   return { code: 0, stdout: JSON.stringify(body), stderr: "" };
 }
 
-const SECONDMATES = [
-  { id: "sm1", remote: false, home: "/h/sm1" },
-  { id: "far1", remote: true, home: "/h/far1" },
-];
+const SECONDMATES = [{ id: "sm1" }, { id: "far1", read_every_s: 2, read_timeout_s: 3 }];
 
-function setup(timings: PollTimings = TIMINGS): Setup {
+/** The feed command a call ran, as "<home> <offset> <sha>". */
+function feedOf(call: { command: AllowedCommand }): string {
+  const { command } = call;
+  return command.kind === "feed" ? `${command.home} ${command.offset} ${command.sha}` : "";
+}
+
+function setup(timings: PollTimings = TIMINGS, unavailable: string | null = null): Setup {
   const paths = boardPaths({ state: path.join(dir, "state"), data: path.join(dir, "data") });
   fs.mkdirSync(paths.boardDataDir, { recursive: true });
   const journal = new Journal(paths.events);
@@ -60,27 +62,27 @@ function setup(timings: PollTimings = TIMINGS): Setup {
   const calls: Setup["calls"] = [];
   const answers: Setup["answers"] = new Map();
   let changes = 0;
+  const aggregators: unknown[] = [];
   const poller = new Poller(
-    async (command, known, timeout) => {
-      calls.push({ command, known: known.map((entry) => entry.id), timeout });
-      const home =
-        command.kind === "read-main"
-          ? "main"
-          : "secondmate" in command
-            ? (command.secondmate as string)
-            : "main";
+    async (command, timeout) => {
+      calls.push({ command, timeout });
+      const home = command.kind === "feed" ? command.home : "main";
       const answer = answers.get(home);
       return answer === undefined ? report() : answer(command);
     },
     journal,
     offsets,
     timings,
-    () => {
-      changes += 1;
+    {
+      onChange: () => {
+        changes += 1;
+      },
+      onAggregator: (aggregator) => aggregators.push(aggregator),
     },
+    unavailable,
   );
   pollers.push(poller);
-  return { poller, journal, offsets, calls, answers, changes: () => changes };
+  return { poller, journal, offsets, calls, answers, changes: () => changes, aggregators };
 }
 
 beforeEach(() => {
@@ -96,24 +98,32 @@ describe("reading the main home", () => {
   it("starts knowing only the main home, unread", () => {
     const { poller } = setup();
     expect(poller.snapshots()).toEqual([
-      { id: "main", remote: false, report: null, lastOkAt: null, error: null, version: "unknown" },
+      { id: "main", report: null, lastOkAt: null, error: null, version: "unknown" },
     ]);
-    expect(poller.secondmates()).toEqual([]);
     expect(poller.hasMainReport()).toBe(false);
     expect(poller.knows("main")).toBe(true);
     expect(poller.knows("sm1")).toBe(false);
     expect(poller.active).toBe(false);
     expect(DEFAULT_TIMINGS).toEqual({
-      localMs: 10_000,
-      remoteMs: 60_000,
+      readMs: 10_000,
+      timeoutMs: 60_000,
       idleMs: 120_000,
       staleMs: 180_000,
-      localTimeoutMs: 60_000,
-      remoteTimeoutMs: 400_000,
     });
   });
 
-  it("stores the report and learns the secondmates", async () => {
+  it("reads nothing when the feed cannot be started", async () => {
+    const s = setup(TIMINGS, "沒有 bin/fm-board.sh");
+    expect(await s.poller.readNow("main")).toBe(false);
+    expect(await s.poller.readFresh("main")).toBe(false);
+    await s.poller.refreshAll();
+    s.poller.touch();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(s.calls).toEqual([]);
+    expect(s.poller.snapshots()[0]).toMatchObject({ error: null, report: null });
+  });
+
+  it("stores the report and learns the further homes", async () => {
     const s = setup();
     s.answers.set("main", () => report({ secondmates: SECONDMATES }));
     const before = Date.now();
@@ -122,40 +132,30 @@ describe("reading the main home", () => {
     expect(main).toMatchObject({ id: "main", error: null, version: "same" });
     expect(main?.lastOkAt).toBeGreaterThanOrEqual(before);
     expect(s.poller.hasMainReport()).toBe(true);
-    expect(s.poller.secondmates()).toEqual(SECONDMATES);
+    expect(s.poller.snapshots().map((home) => home.id)).toEqual(["main", "sm1", "far1"]);
     expect(s.poller.knows("far1")).toBe(true);
     expect(s.calls[0]).toEqual({
-      command: { kind: "read-main", offset: 0, sha: "-" },
-      known: [],
+      command: { kind: "feed", home: "main", offset: 0, sha: "-" },
       timeout: 111,
     });
+    expect(s.aggregators).toEqual([null]);
     expect(s.changes()).toBe(1);
     expect(await s.poller.readNow("nobody")).toBe(false);
   });
 
-  it("follows registry changes: new, moved, and removed secondmates", async () => {
+  it("follows the root report's list: new and removed homes", async () => {
     const s = setup();
     s.answers.set("main", () => report({ secondmates: SECONDMATES }));
     await s.poller.readNow("main");
     await s.poller.readNow("sm1");
-    s.answers.set("main", () =>
-      report({
-        secondmates: [
-          { id: "sm1", remote: true, home: "/moved" },
-          { id: "new", remote: false, home: "/n" },
-        ],
-      }),
-    );
+    s.answers.set("main", () => report({ secondmates: [{ id: "sm1" }, { id: "new" }] }));
     await s.poller.readNow("main");
-    expect(s.poller.secondmates()).toEqual([
-      { id: "sm1", remote: true, home: "/moved" },
-      { id: "new", remote: false, home: "/n" },
-    ]);
+    expect(s.poller.snapshots().map((home) => home.id)).toEqual(["main", "sm1", "new"]);
     expect(s.poller.knows("far1")).toBe(false);
     expect(s.poller.snapshots().find((home) => home.id === "sm1")?.report).not.toBeNull();
   });
 
-  it("reads each home with its own command, cursor, and timeout", async () => {
+  it("reads each home with the same feed, its own cursor, and its hinted timeout", async () => {
     const s = setup();
     s.answers.set("main", () => report({ secondmates: SECONDMATES }));
     await s.poller.readNow("main");
@@ -163,17 +163,18 @@ describe("reading the main home", () => {
     await s.poller.readNow("sm1");
     await s.poller.readNow("far1");
     expect(s.calls.slice(1)).toEqual([
-      {
-        command: { kind: "read-local", secondmate: "sm1", offset: 7, sha: "a".repeat(64) },
-        known: ["sm1", "far1"],
-        timeout: 111,
-      },
-      {
-        command: { kind: "read-remote", secondmate: "far1", offset: 0, sha: "-" },
-        known: ["sm1", "far1"],
-        timeout: 222,
-      },
+      { command: { kind: "feed", home: "sm1", offset: 7, sha: "a".repeat(64) }, timeout: 111 },
+      { command: { kind: "feed", home: "far1", offset: 0, sha: "-" }, timeout: 3000 },
     ]);
+  });
+
+  it("hands over the root report's aggregator block, and no other home's", async () => {
+    const s = setup();
+    const aggregator = { name: "plain", label: "plain", update_hint: null };
+    s.answers.set("main", () => report({ secondmates: SECONDMATES, aggregator }));
+    s.answers.set("sm1", () => report({ aggregator: { name: "x", label: "x" } }));
+    await s.poller.refreshAll();
+    expect(s.aggregators).toEqual([aggregator]);
   });
 });
 
@@ -201,11 +202,7 @@ describe("versions", () => {
     const s = setup();
     s.answers.set("main", () => report({ secondmates: SECONDMATES }));
     await s.poller.refreshAll();
-    expect(s.calls.map((call) => call.command.kind)).toEqual([
-      "read-main",
-      "read-local",
-      "read-remote",
-    ]);
+    expect(s.calls.map((call) => feedOf(call).split(" ")[0])).toEqual(["main", "sm1", "far1"]);
   });
 });
 
@@ -246,9 +243,7 @@ describe("the ledger", () => {
     ];
     s.answers.set("main", () => pieces.shift() as CommandResult);
     await s.poller.readNow("main");
-    expect(
-      s.calls.map((call) => (call.command.kind === "read-main" ? call.command.offset : -1)),
-    ).toEqual([0, 5, 9]);
+    expect(s.calls.map((call) => feedOf(call).split(" ")[1])).toEqual(["0", "5", "9"]);
     expect(s.journal.events).toHaveLength(3);
     expect(s.changes()).toBe(1);
   });
@@ -278,11 +273,7 @@ describe("the ledger", () => {
     ];
     s.answers.set("main", () => answers.shift() as CommandResult);
     await s.poller.readNow("main");
-    expect(
-      s.calls.map((call) =>
-        call.command.kind === "read-main" ? `${call.command.offset}:${call.command.sha}` : "",
-      ),
-    ).toEqual(["0:-", "10:s1", "0:-"]);
+    expect(s.calls.map(feedOf)).toEqual(["main 0 -", "main 10 s1", "main 0 -"]);
     expect(s.journal.events).toHaveLength(2);
     expect(s.offsets.get("main")).toEqual({ offset: 20, sha: "s2" });
   });
@@ -306,35 +297,26 @@ describe("failures", () => {
     expect(s.poller.snapshots()[0]?.error).toBeNull();
   });
 
-  it("marks a remote home without the script as not on the fork, and nothing else", async () => {
+  it("drops the data of a home whose feed exits 4, with its first stderr line as the reason", async () => {
     const s = setup();
     s.answers.set("main", () => report({ secondmates: SECONDMATES }));
     await s.poller.refreshAll();
-    const refusal = (text: string): CommandResult => ({
-      code: 1,
-      stdout: "",
-      stderr: `fm-on: ${text}`,
+    s.answers.set("far1", () => ({ code: 4, stdout: "", stderr: "far1 is offline\nmore\n" }));
+    s.answers.set("sm1", () => ({ code: 4, stdout: "", stderr: "" }));
+    await s.poller.refreshAll();
+    const state = Object.fromEntries(
+      s.poller.snapshots().map((home) => [home.id, [home.version, home.report, home.error]]),
+    );
+    expect(state["far1"]).toEqual(["unreported", null, "far1 is offline"]);
+    expect(state["sm1"]).toEqual(["unreported", null, "這個 home 現在無法回報"]);
+    expect(state["main"]?.[0]).toBe("same");
+    s.answers.clear();
+    s.answers.set("main", () => report({ secondmates: SECONDMATES }));
+    await s.poller.refreshAll();
+    expect(s.poller.snapshots().find((home) => home.id === "far1")).toMatchObject({
+      version: "same",
+      error: null,
     });
-    for (const text of [
-      "command is not tracked by the configured remote root",
-      "command is not a genuine executable in the configured remote root",
-    ]) {
-      s.answers.set("far1", () => refusal(text));
-      s.answers.set("sm1", () => refusal(text));
-      s.answers.set("main", () => refusal(text));
-      await s.poller.refreshAll();
-      const state = Object.fromEntries(
-        s.poller.snapshots().map((home) => [home.id, `${home.version}:${home.report === null}`]),
-      );
-      expect(state).toEqual({ main: "same:false", sm1: "same:false", far1: "not-on-fork:true" });
-      s.answers.clear();
-      s.answers.set("main", () => report({ secondmates: SECONDMATES }));
-      await s.poller.refreshAll();
-      expect(s.poller.snapshots().find((home) => home.id === "far1")).toMatchObject({
-        version: "same",
-        error: null,
-      });
-    }
     s.answers.set("far1", () => ({ code: 255, stdout: "", stderr: "ssh: connection refused" }));
     await s.poller.readNow("far1");
     expect(s.poller.snapshots().find((home) => home.id === "far1")).toMatchObject({
@@ -353,7 +335,7 @@ describe("failures", () => {
     expect(s.poller.snapshots()[0]).toMatchObject({
       report: null,
       version: "incompatible",
-      error: "彙整腳本的輸出版本和看板不相容",
+      error: "讀到的資料版本和看板不相容",
     });
     s.answers.set("main", () => report());
     await s.poller.readNow("main");
@@ -362,7 +344,7 @@ describe("failures", () => {
     expect(await s.poller.readNow("main")).toBe(false);
     expect(s.calls).toHaveLength(callsBeforeInvalid + 1);
     const [main] = s.poller.snapshots();
-    expect(main).toMatchObject({ version: "same", error: "彙整腳本的輸出不是合法的 JSON" });
+    expect(main).toMatchObject({ version: "same", error: "讀到的資料不是合法的 JSON" });
     expect(main?.report).not.toBeNull();
   });
 });
@@ -449,15 +431,18 @@ describe("scheduling", () => {
     s.answers.set("main", () => report({ secondmates: SECONDMATES }));
     s.poller.touch();
     expect(s.poller.active).toBe(true);
-    await vi.waitFor(() => expect(new Set(s.calls.map((call) => call.command.kind)).size).toBe(3), {
-      timeout: 2000,
-    });
-    const early = s.calls.filter((call) => call.command.kind === "read-main").length;
+    await vi.waitFor(
+      () => expect(new Set(s.calls.map(feedOf).map((line) => line.split(" ")[0])).size).toBe(3),
+      {
+        timeout: 2000,
+      },
+    );
+    const early = s.calls.filter((call) => feedOf(call).startsWith("main ")).length;
     expect(early).toBeLessThanOrEqual(3);
     await new Promise((resolve) => setTimeout(resolve, 1000));
     expect(s.poller.active).toBe(false);
     const settled = s.calls.length;
-    expect(s.calls.filter((call) => call.command.kind === "read-main").length).toBeGreaterThan(1);
+    expect(s.calls.filter((call) => feedOf(call).startsWith("main ")).length).toBeGreaterThan(1);
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(s.calls).toHaveLength(settled);
     s.poller.touch();
@@ -465,7 +450,7 @@ describe("scheduling", () => {
   });
 
   it("never reads one home twice at once", async () => {
-    const s = setup({ ...TIMINGS, localMs: 1, idleMs: 900 });
+    const s = setup({ ...TIMINGS, readMs: 1, idleMs: 900 });
     let running = 0;
     let peak = 0;
     s.answers.set("main", async () => {
@@ -483,7 +468,7 @@ describe("scheduling", () => {
   });
 
   it("waits a whole interval between two reads of a home", async () => {
-    const s = setup({ ...TIMINGS, localMs: 5000, idleMs: 900 });
+    const s = setup({ ...TIMINGS, readMs: 5000, idleMs: 900 });
     s.poller.touch();
     await new Promise((resolve) => setTimeout(resolve, 800));
     expect(s.calls).toHaveLength(1);
@@ -511,5 +496,22 @@ describe("scheduling", () => {
     s.poller.stop();
     await new Promise((resolve) => setTimeout(resolve, 450));
     expect(s.calls).toHaveLength(0);
+  });
+});
+
+describe("read hints", () => {
+  it("reads a home at its hinted interval and every home without one at the default", async () => {
+    const s = setup({ ...TIMINGS, readMs: 100, idleMs: 5000 });
+    s.answers.set("main", () =>
+      report({ secondmates: [{ id: "a", read_every_s: 1 }, { id: "b" }] }),
+    );
+    s.poller.touch();
+    await new Promise((resolve) => setTimeout(resolve, 2600));
+    s.poller.stop();
+    const count = (home: string): number =>
+      s.calls.filter((call) => feedOf(call).startsWith(`${home} `)).length;
+    expect(count("a")).toBeGreaterThanOrEqual(2);
+    expect(count("a")).toBeLessThanOrEqual(3);
+    expect(count("b")).toBeGreaterThanOrEqual(6);
   });
 });

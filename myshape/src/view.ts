@@ -8,12 +8,11 @@ import { QUEUES, resolveTopicId } from "./topics.js";
 import type { Queue, TodoMark, TodoState, TopicState } from "./topics.js";
 
 export type Light = "decide" | "stuck" | "working" | "done" | "unknown";
-export type HomeVersion = "same" | "different" | "incompatible" | "not-on-fork" | "unknown";
+export type HomeVersion = "same" | "different" | "incompatible" | "unreported" | "unknown";
 
 /** What the poller knows about one home. */
 export interface HomeSnapshot {
   id: string;
-  remote: boolean;
   report: HomeReport | null;
   /** Milliseconds since the epoch of the last successful read, or null. */
   lastOkAt: number | null;
@@ -36,9 +35,10 @@ export type Placement =
 
 export interface HomeView {
   id: string;
-  remote: boolean;
   version: HomeVersion;
   ledger_enabled: boolean | null;
+  /** The aggregator's line for a home whose ledger is off; null when it gave none. */
+  ledger_hint: string | null;
   stale: boolean;
   last_ok_seconds_ago: number | null;
   error: string | null;
@@ -373,9 +373,9 @@ function homeView(home: HomeSnapshot, input: ViewInput): HomeView {
   const age = home.lastOkAt === null ? null : input.nowMs - home.lastOkAt;
   return {
     id: home.id,
-    remote: home.remote,
     version: home.version,
     ledger_enabled: home.report?.ledger_enabled ?? null,
+    ledger_hint: home.report?.ledger_hint ?? null,
     stale: age === null || age > input.staleMs,
     last_ok_seconds_ago: age === null ? null : Math.floor(age / 1000),
     error: home.error,

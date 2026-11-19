@@ -2,6 +2,10 @@
 
 做完之後：服務會定時叫各 home 的彙整腳本、把帳本事件存下來、算出每個議題底下有哪些 agent、燈號與待決事項；`summary` 與 `which` 可用。頁面還沒有，資料先經 socket 上只給測試用的 `op`（`dump`，只在 `MYSHAPE_TEST=1` 時註冊，回完整的看板狀態 JSON）驗證；第五段的 `GET /api/state` 回的就是同一份。
 
+> 這一段的指令編號（R1 到 R3、W1 到 W9）與它們的結果怎麼判，是看板直接執行 first mate 的指令時的設計。
+> 現在看板只執行 `bin/fm-board.sh feed` 與 `deliver`（[contracts](contracts.markdown) 第 4、7 節），原本的指令與結果對應搬到 first mate 這一側（[adapter](../../fm-board/spec/adapter.markdown) 第 3 節）；這一段其餘的行為不變。
+> 「還沒換到 fork」現在是 first mate 的 feed 以 exit 4 給的那一行橫幅，`status` 對那種 home 印「無法回報」。
+
 ## 先驗再做
 
 | # | 要驗的事 | 怎麼驗 | 假設不成立時 |

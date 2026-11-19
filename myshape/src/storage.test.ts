@@ -112,6 +112,8 @@ describe("layout", () => {
       boardDataDir: "/d/myshape",
       events: "/d/myshape/events.jsonl",
       summaries: "/d/myshape/summaries.jsonl",
+      notifyPending: "/d/myshape/notify-pending.json",
+      aggregator: "/d/myshape/aggregator.json",
     });
   });
 
@@ -346,7 +348,7 @@ describe("store", () => {
           goal: "g",
           status: "proposed",
           created_at: "2026-11-18T02:00:00Z",
-          proposed_by: "firstmate",
+          proposed_by: "an agent",
           suggested_queue: "high",
         },
       },

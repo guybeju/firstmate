@@ -23,7 +23,15 @@ export interface ArchivedTopic extends Topic {
   archived_at: string;
 }
 
-export const HISTORY_KINDS = ["merged", "renamed", "split", "archived", "reopened"] as const;
+export const HISTORY_KINDS = [
+  "merged",
+  "renamed",
+  "split",
+  "archived",
+  "reopened",
+  "moved",
+  "goal",
+] as const;
 export type HistoryKind = (typeof HISTORY_KINDS)[number];
 
 /**
@@ -33,6 +41,8 @@ export type HistoryKind = (typeof HISTORY_KINDS)[number];
  * a split the topic it was split off from. `reason` is why, when someone said:
  * the line given with a merge or split, or the close proposal an archive
  * followed. `by` is where the change was made, the board page or a command.
+ * A move records the queue and 1-based place it went to, a goal change the
+ * new goal.
  */
 export interface HistoryEntry {
   at: string;
@@ -43,6 +53,9 @@ export interface HistoryEntry {
   from_name?: string;
   reason?: string;
   by?: HistoryActor;
+  queue?: Queue;
+  position?: number;
+  goal?: string;
 }
 
 export const HISTORY_ACTORS = ["page", "command"] as const;
@@ -92,7 +105,10 @@ export type SystemEventKind =
   | "topic.split"
   | "topic.close_proposed"
   | "topic.archived"
-  | "topic.reopened";
+  | "topic.reopened"
+  | "topic.moved"
+  | "topic.renamed"
+  | "topic.goal_changed";
 
 export interface TopicEvent {
   kind: SystemEventKind;
@@ -417,7 +433,7 @@ export function closePropose(
   const next = clone(state);
   (next.doc.topics[found.id] as Topic).close_proposal = { at: now, reason };
   return changed(next, `ok ${found.id} 已提議關閉，等使用者決定`, [
-    { kind: "topic.close_proposed", topic: found.id, text: `first mate 提議關閉：${reason}` },
+    { kind: "topic.close_proposed", topic: found.id, text: `提議關閉：${reason}` },
   ]);
 }
 
@@ -445,6 +461,7 @@ export function move(
   rawId: string,
   queue: Queue,
   position: MovePosition,
+  now: string,
 ): TopicResult {
   const found = liveTopic(state, rawId);
   if ("ok" in found) return found;
@@ -458,8 +475,17 @@ export function move(
   const next = clone(state);
   removeFromQueues(next.doc, id);
   next.doc.queues[queue] = target;
+  const place = target.indexOf(id) + 1;
+  const name = found.topic.name;
+  next.doc.history.push({ at: now, kind: "moved", topic: id, name, queue, position: place });
   const dispatchable = from === "later" && queue !== "later" ? [id] : [];
-  return changed(next, `ok ${id} 已移到「${QUEUE_LABEL[queue]}」`, [], dispatchable);
+  const text = `議題「${name}」移到「${QUEUE_LABEL[queue]}」第 ${place}`;
+  return changed(
+    next,
+    `ok ${id} 已移到「${QUEUE_LABEL[queue]}」`,
+    [{ kind: "topic.moved", topic: id, text }],
+    dispatchable,
+  );
 }
 
 function setText(
@@ -467,7 +493,7 @@ function setText(
   rawId: string,
   field: "name" | "goal",
   value: string,
-  now = "",
+  now: string,
 ): TopicResult {
   const id = resolveTopicId(state.doc, rawId);
   const topic = state.doc.topics[id];
@@ -479,7 +505,7 @@ function setText(
   if (topic[field] === text) return unchanged(state, `ok ${id} ${label}沒有變`);
   const next = clone(state);
   (next.doc.topics[id] as Topic)[field] = text;
-  if (field === "name")
+  if (field === "name") {
     next.doc.history.push({
       at: now,
       kind: "renamed",
@@ -487,15 +513,22 @@ function setText(
       name: text,
       from_name: topic.name,
     });
-  return changed(next, `ok ${id} ${label}已改`);
+    return changed(next, `ok ${id} ${label}已改`, [
+      { kind: "topic.renamed", topic: id, text: `議題「${topic.name}」改名為「${text}」` },
+    ]);
+  }
+  next.doc.history.push({ at: now, kind: "goal", topic: id, name: topic.name, goal: text });
+  return changed(next, `ok ${id} ${label}已改`, [
+    { kind: "topic.goal_changed", topic: id, text: `議題「${topic.name}」的目標改為「${text}」` },
+  ]);
 }
 
 export function rename(state: TopicState, rawId: string, name: string, now: string): TopicResult {
   return setText(state, rawId, "name", name, now);
 }
 
-export function setGoal(state: TopicState, rawId: string, goal: string): TopicResult {
-  return setText(state, rawId, "goal", goal);
+export function setGoal(state: TopicState, rawId: string, goal: string, now: string): TopicResult {
+  return setText(state, rawId, "goal", goal, now);
 }
 
 export function archive(state: TopicState, rawId: string, now: string): TopicResult {
@@ -572,7 +605,7 @@ export interface TodoInput {
 }
 
 const TODO_LINE: Record<TodoState, string> = {
-  claimed: "已記下做完了，等 first mate 驗證",
+  claimed: "已記下做完了，等驗證",
   rejected: "已標成驗證沒過，回到要使用者動手",
   obsolete: "已標成不再需要，等使用者撤下",
 };

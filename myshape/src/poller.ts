@@ -1,51 +1,50 @@
-// Reads every home on a schedule while someone is looking at the board, and on
-// demand otherwise. It is the only caller of the read commands.
-import type { AllowedCommand, CommandRunner, Secondmate } from "./commands.js";
+// Reads every home through the aggregator's feed on a schedule while someone
+// is looking at the board, and on demand otherwise. It is the only caller of
+// the feed. Every home is read the same way; only the root report's hints
+// change how often and how patiently.
+import type { CommandRunner } from "./commands.js";
 import type { Journal, Offsets } from "./journal.js";
 import { MAIN_HOME } from "./journal.js";
 import { parseReport } from "./report.js";
-import type { HomeReport } from "./report.js";
+import type { Aggregator, FeedHome, HomeReport } from "./report.js";
 import type { HomeSnapshot } from "./view.js";
 
 export interface PollTimings {
-  localMs: number;
-  remoteMs: number;
+  /** How often a home with no read_every_s hint is read. */
+  readMs: number;
+  /** How long a read of a home with no read_timeout_s hint may take. */
+  timeoutMs: number;
   /** Polling stops this long after the last viewer asked for the board. */
   idleMs: number;
   staleMs: number;
-  localTimeoutMs: number;
-  remoteTimeoutMs: number;
 }
 
 export const DEFAULT_TIMINGS: PollTimings = {
-  localMs: 10_000,
-  remoteMs: 60_000,
+  readMs: 10_000,
+  timeoutMs: 60_000,
   idleMs: 120_000,
   staleMs: 180_000,
-  localTimeoutMs: 60_000,
-  remoteTimeoutMs: 400_000,
 };
+
+/** The feed's exit code for "this home's code cannot produce a report". */
+export const FEED_CANNOT_REPORT = 4;
 
 const TICK_MS = 250;
 const MAX_CATCH_UP_READS = 50;
 const ERROR_MAX = 400;
-// fm-on.sh's refusals when the remote code root has no such tracked script.
-const NOT_ON_FORK = [
-  "command is not tracked by the configured remote root",
-  "command is not a genuine executable in the configured remote root",
-];
 
 interface HomeState extends HomeSnapshot {
-  home: string;
+  everyMs: number | null;
+  timeoutMs: number | null;
   reading: Promise<boolean> | null;
   dueAt: number;
 }
 
-function mainHome(): HomeState {
+function newHome(id: string): HomeState {
   return {
-    id: MAIN_HOME,
-    remote: false,
-    home: "",
+    id,
+    everyMs: null,
+    timeoutMs: null,
     report: null,
     lastOkAt: null,
     error: null,
@@ -55,8 +54,15 @@ function mainHome(): HomeState {
   };
 }
 
+export interface PollHost {
+  /** Called after any read that changed what a viewer could see. */
+  onChange: () => void;
+  /** Called with the root report's aggregator block after each read of the root home. */
+  onAggregator: (aggregator: Aggregator | null) => void;
+}
+
 export class Poller {
-  private readonly homes = new Map<string, HomeState>([[MAIN_HOME, mainHome()]]);
+  private readonly homes = new Map<string, HomeState>([[MAIN_HOME, newHome(MAIN_HOME)]]);
   private lastViewerAt = 0;
   private timer: NodeJS.Timeout | null = null;
 
@@ -65,7 +71,9 @@ export class Poller {
     private readonly journal: Journal,
     private readonly offsets: Offsets,
     private readonly timings: PollTimings,
-    private readonly onChange: () => void,
+    private readonly host: PollHost,
+    /** Why the feed cannot run in this service's life, or null when it can. */
+    private readonly unavailable: string | null,
   ) {}
 
   /** True while a viewer asked for the board recently enough to keep polling. */
@@ -76,7 +84,7 @@ export class Poller {
   /** Records that someone is looking, which starts or continues scheduled polling. */
   touch(): void {
     this.lastViewerAt = Date.now();
-    this.timer ??= setInterval(() => this.tick(), TICK_MS);
+    if (this.unavailable === null) this.timer ??= setInterval(() => this.tick(), TICK_MS);
   }
 
   stop(): void {
@@ -85,20 +93,13 @@ export class Poller {
   }
 
   snapshots(): HomeSnapshot[] {
-    return [...this.homes.values()].map(({ id, remote, report, lastOkAt, error, version }) => ({
+    return [...this.homes.values()].map(({ id, report, lastOkAt, error, version }) => ({
       id,
-      remote,
       report,
       lastOkAt,
       error,
       version,
     }));
-  }
-
-  secondmates(): Secondmate[] {
-    return [...this.homes.values()]
-      .filter((home) => home.id !== MAIN_HOME)
-      .map((home) => ({ id: home.id, remote: home.remote, home: home.home }));
   }
 
   hasMainReport(): boolean {
@@ -112,10 +113,10 @@ export class Poller {
   /** Reads one home now (joining a read already in flight); resolves to whether it succeeded. */
   readNow(id: string): Promise<boolean> {
     const home = this.homes.get(id);
-    if (home === undefined) return Promise.resolve(false);
+    if (home === undefined || this.unavailable !== null) return Promise.resolve(false);
     home.reading ??= this.readHome(home).finally(() => {
       home.reading = null;
-      home.dueAt = Date.now() + (home.remote ? this.timings.remoteMs : this.timings.localMs);
+      home.dueAt = Date.now() + (home.everyMs ?? this.timings.readMs);
     });
     return home.reading;
   }
@@ -149,34 +150,42 @@ export class Poller {
     }
   }
 
-  private command(home: HomeState): AllowedCommand {
-    const { offset, sha } = this.offsets.get(home.id);
-    if (home.id === MAIN_HOME) return { kind: "read-main", offset, sha };
-    return { kind: home.remote ? "read-remote" : "read-local", secondmate: home.id, offset, sha };
-  }
-
   private async readHome(home: HomeState): Promise<boolean> {
     const before = fingerprint(home);
     const eventsBefore = this.journal.events.length;
     for (let reads = 0; reads < MAX_CATCH_UP_READS; reads += 1) {
-      const timeout = home.remote ? this.timings.remoteTimeoutMs : this.timings.localTimeoutMs;
-      const result = await this.run(this.command(home), this.secondmates(), timeout);
+      const { offset, sha } = this.offsets.get(home.id);
+      const result = await this.run(
+        { kind: "feed", home: home.id, offset, sha },
+        home.timeoutMs ?? this.timings.timeoutMs,
+      );
       const more =
-        result.code === 0 ? this.accept(home, result.stdout) : this.reject(home, result.stderr);
+        result.code === 0
+          ? this.accept(home, result.stdout)
+          : this.reject(home, result.code, result.stderr);
       if (!more) break;
     }
     // A read that found nothing new must not look like a change, or every
     // viewer would redraw the whole page on every poll.
     if (fingerprint(home) !== before || this.journal.events.length !== eventsBefore)
-      this.onChange();
+      this.host.onChange();
     return home.error === null;
   }
 
-  private reject(home: HomeState, stderr: string): boolean {
-    const notOnFork = home.remote && NOT_ON_FORK.some((text) => stderr.includes(text));
-    home.version = notOnFork ? "not-on-fork" : home.version;
-    if (notOnFork) home.report = null;
-    home.error = stderr.trim().slice(0, ERROR_MAX) || "讀取失敗";
+  /**
+   * A failed read. Exit 4 says the home cannot report at all: its data is
+   * dropped and the feed's one line becomes its banner. Any other failure keeps
+   * the last report until it goes stale.
+   */
+  private reject(home: HomeState, code: number | null, stderr: string): boolean {
+    const text = stderr.trim();
+    if (code === FEED_CANNOT_REPORT) {
+      home.version = "unreported";
+      home.report = null;
+      home.error = (text.split("\n")[0] ?? "").slice(0, ERROR_MAX) || "這個 home 現在無法回報";
+      return false;
+    }
+    home.error = text.slice(0, ERROR_MAX) || "讀取失敗";
     return false;
   }
 
@@ -186,11 +195,11 @@ export class Poller {
     if (parsed.kind === "incompatible") {
       home.version = "incompatible";
       home.report = null;
-      home.error = "彙整腳本的輸出版本和看板不相容";
+      home.error = "讀到的資料版本和看板不相容";
       return false;
     }
     if (parsed.kind === "invalid") {
-      home.error = "彙整腳本的輸出不是合法的 JSON";
+      home.error = "讀到的資料不是合法的 JSON";
       return false;
     }
     const { report } = parsed;
@@ -198,7 +207,10 @@ export class Poller {
     home.report = report;
     home.lastOkAt = Date.now();
     home.error = null;
-    if (home.id === MAIN_HOME) this.syncSecondmates(report);
+    if (home.id === MAIN_HOME) {
+      this.syncHomes(report.secondmates);
+      this.host.onAggregator(report.aggregator);
+    }
     this.refreshVersions();
     return rewind || report.ledger.more;
   }
@@ -219,24 +231,17 @@ export class Poller {
     return false;
   }
 
-  private syncSecondmates(report: HomeReport): void {
-    const listed = new Set(report.secondmates.map((entry) => entry.id));
+  /** Makes the further homes exactly the ones the root report lists, with its hints. */
+  private syncHomes(listed: FeedHome[]): void {
+    const ids = new Set(listed.map((entry) => entry.id));
     for (const id of this.homes.keys()) {
-      if (id !== MAIN_HOME && !listed.has(id)) this.homes.delete(id);
+      if (id !== MAIN_HOME && !ids.has(id)) this.homes.delete(id);
     }
-    for (const entry of report.secondmates) {
-      const known = this.homes.get(entry.id);
-      if (known === undefined) {
-        this.homes.set(entry.id, {
-          ...mainHome(),
-          id: entry.id,
-          remote: entry.remote,
-          home: entry.home,
-        });
-      } else {
-        known.remote = entry.remote;
-        known.home = entry.home;
-      }
+    for (const entry of listed) {
+      const home = this.homes.get(entry.id) ?? newHome(entry.id);
+      home.everyMs = entry.read_every_s === null ? null : entry.read_every_s * 1000;
+      home.timeoutMs = entry.read_timeout_s === null ? null : entry.read_timeout_s * 1000;
+      this.homes.set(entry.id, home);
     }
   }
 
@@ -253,7 +258,7 @@ export class Poller {
 function fingerprint(home: HomeState): string {
   const { report } = home;
   const shown = report === null ? null : { ...report, ledger: null };
-  return JSON.stringify([home.error, home.version, home.remote, shown]);
+  return JSON.stringify([home.error, home.version, shown]);
 }
 
 function versionOf(home: string, commit: string, mainCommit: string): HomeSnapshot["version"] {

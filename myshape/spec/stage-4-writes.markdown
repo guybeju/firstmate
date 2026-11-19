@@ -2,6 +2,10 @@
 
 做完之後：服務能替使用者送訊息給主 first mate、直送 agent、作答待決事項、歸併 agent；每筆寫入有稽核紀錄、七種狀態、重試與重啟後接續。頁面還沒有，寫入先經 socket 上只給測試用的 `op`（`test-write`、`test-resend`、`test-ignore`）觸發；第五段的 HTTP API 呼叫的是同一套函式。這三個 `op` 只在環境變數 `MYSHAPE_TEST=1` 時註冊。
 
+> 這一段的指令編號（R1 到 R3、W1 到 W9）與它們的結果怎麼判，是看板直接執行 first mate 的指令時的設計。
+> 現在看板只執行 `bin/fm-board.sh feed` 與 `deliver`（[contracts](contracts.markdown) 第 4、7 節），原本的指令與結果對應搬到 first mate 這一側（[adapter](../../fm-board/spec/adapter.markdown) 第 3 節）；這一段其餘的行為不變。
+> 「議題變成可派」的通知現在寫的是發生了什麼（contracts 7.1），每個議題、每個頁面上的決定各一則。
+
 ## 先驗再做
 
 | # | 要驗的事 | 怎麼驗 | 假設不成立時 |

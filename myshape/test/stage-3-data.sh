@@ -15,7 +15,7 @@ command -v node >/dev/null 2>&1 || { echo "skip: node not found"; exit 0; }
 TMP_ROOT=$(fm_test_tmproot tb-s3)
 trap 'tb_stop_boards; fm_test_cleanup' EXIT
 
-export MYSHAPE_TEST=1 MYSHAPE_LOCAL_MS=300 MYSHAPE_REMOTE_MS=300
+export MYSHAPE_TEST=1 MYSHAPE_READ_MS=300
 export MYSHAPE_IDLE_MS=8000 MYSHAPE_STALE_MS=4000
 export FM_SNAPSHOT_NOW=2026-07-25T00:00:00Z
 
@@ -240,9 +240,10 @@ test_home_status() {
   assert_equals 0 "$(view '[.agents[] | select(.home == "far1")] | length')" "an incompatible home's output must not be used"
   rm "$REMOTE_SM/schema"
   : > "$REMOTE_SM/not-on-fork"
-  assert_equals "not-on-fork" "$(view '.homes[] | select(.id == "far1") | .version')" "a home without the script must read as not on the fork"
+  assert_equals "unreported" "$(view '.homes[] | select(.id == "far1") | .version')" "a home without the script must read as unable to report"
+  assert_contains "$(view '.homes[] | select(.id == "far1") | .error')" "還沒換到 fork" "its banner must be firstmate's not-on-the-fork line"
   assert_equals 0 "$(view '[.agents[] | select(.home == "far1")] | length')" "a home not on the fork shows no agents"
-  assert_contains "$(t status)" "home far1：還沒換到 fork" "status must say which home is not on the fork"
+  assert_contains "$(t status)" "home far1：無法回報" "status must say which home cannot report"
   rm "$REMOTE_SM/not-on-fork"
   assert_equals "same" "$(view '.homes[] | select(.id == "far1") | .version')" "the home must recover once it answers again"
 

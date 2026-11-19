@@ -1,5 +1,9 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DispatchNotifier } from "./notifier.js";
+import { DispatchNotifier, fileStore } from "./notifier.js";
+import type { NotifyStore, PendingNotice } from "./notifier.js";
 import { emptyState } from "./topics.js";
 import type { Queue, TopicState } from "./topics.js";
 
@@ -9,14 +13,31 @@ function state(queues: Partial<Record<Queue, string[]>>): TopicState {
   return result;
 }
 
+/** A store kept in memory, as the file would keep it between starts. */
+function memoryStore(): NotifyStore & { saved: Map<string, PendingNotice> } {
+  const saved = new Map<string, PendingNotice>();
+  return {
+    saved,
+    load: () => new Map(saved),
+    save: (pending) => {
+      saved.clear();
+      for (const [id, entry] of pending) saved.set(id, { ...entry });
+    },
+  };
+}
+
 describe("DispatchNotifier", () => {
   let notified: string[][];
   let notifier: DispatchNotifier;
+  let store: ReturnType<typeof memoryStore>;
 
   beforeEach(() => {
     vi.useFakeTimers();
     notified = [];
-    notifier = new DispatchNotifier(30_000, (ids) => notified.push(ids));
+    store = memoryStore();
+    notifier = new DispatchNotifier(30_000, store, (ready) =>
+      notified.push(ready.map((entry) => entry.id)),
+    );
   });
   afterEach(() => {
     notifier.stop();
@@ -92,5 +113,74 @@ describe("DispatchNotifier", () => {
     notifier.stop();
     vi.advanceTimersByTime(60_000);
     expect(notified).toEqual([]);
+  });
+
+  it("says whether the topic left later or was reopened", () => {
+    const reasons: string[] = [];
+    const other = new DispatchNotifier(1000, memoryStore(), (ready) =>
+      reasons.push(...ready.map((entry) => `${entry.id}:${entry.reason}`)),
+    );
+    const archived = state({});
+    archived.archive.topics["r"] = {
+      name: "R",
+      goal: "g",
+      status: "confirmed",
+      created_at: "",
+      archived_at: "T",
+    };
+    other.observe(state({ later: ["m"] }), state({ normal: ["m"] }), ["m"]);
+    other.observe(archived, state({ normal: ["m", "r"] }), ["r"]);
+    vi.advanceTimersByTime(1000);
+    expect(reasons).toEqual(["m:left-later", "r:reopened"]);
+    other.stop();
+  });
+
+  it("keeps the wait across a restart and fires once it is due", () => {
+    notifier.observe(state({ later: ["a", "b"] }), state({ normal: ["a", "b"] }), ["a", "b"]);
+    vi.advanceTimersByTime(10_000);
+    notifier.stop();
+    expect([...store.saved.keys()]).toEqual(["a", "b"]);
+    const restarted = new DispatchNotifier(30_000, store, (ready) =>
+      notified.push(ready.map((entry) => entry.id)),
+    );
+    restarted.start(state({ normal: ["a"], later: ["b"] }));
+    expect([...store.saved.keys()]).toEqual(["a"]);
+    vi.advanceTimersByTime(19_999);
+    expect(notified).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(notified).toEqual([["a"]]);
+    expect(store.saved.size).toBe(0);
+    restarted.stop();
+  });
+
+  it("fires at once a wait that ended while the board was down", () => {
+    notifier.observe(state({ later: ["a"] }), state({ normal: ["a"] }), ["a"]);
+    notifier.stop();
+    vi.advanceTimersByTime(60_000);
+    const restarted = new DispatchNotifier(30_000, store, (ready) =>
+      notified.push(ready.map((entry) => entry.id)),
+    );
+    restarted.start(state({ normal: ["a"] }));
+    vi.advanceTimersByTime(0);
+    expect(notified).toEqual([["a"]]);
+    restarted.stop();
+  });
+});
+
+describe("fileStore", () => {
+  it("round-trips the waits and reads a missing or broken file as none", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tb-notify-"));
+    const file = path.join(dir, "notify-pending.json");
+    const store = fileStore(file);
+    expect(store.load().size).toBe(0);
+    store.save(new Map([["a", { dueAt: 5, reason: "reopened" }]]));
+    expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({
+      v: 1,
+      pending: { a: { due_at: 5, reason: "reopened" } },
+    });
+    expect([...fileStore(file).load()]).toEqual([["a", { dueAt: 5, reason: "reopened" }]]);
+    fs.writeFileSync(file, "{not json");
+    expect(fileStore(file).load().size).toBe(0);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

@@ -9,13 +9,16 @@ set -u
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tests/lib.sh"
 # shellcheck source=myshape/test/helpers.sh
 . "$ROOT/myshape/test/helpers.sh"
+# shellcheck source=myshape/test/signal-lib.sh
+. "$ROOT/myshape/test/signal-lib.sh"
 
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 command -v node >/dev/null 2>&1 || { echo "skip: node not found"; exit 0; }
 TMP_ROOT=$(fm_test_tmproot tb-s4)
-trap 'tb_stop_boards; fm_test_cleanup' EXIT
+trap 'tb_stop_boards; sig_leftovers; fm_test_cleanup' EXIT
+sig_init
 
-export MYSHAPE_TEST=1 MYSHAPE_LOCAL_MS=60000 MYSHAPE_REMOTE_MS=60000
+export MYSHAPE_TEST=1 MYSHAPE_READ_MS=60000
 export MYSHAPE_RETRY_MS=200,200,200,200,200 MYSHAPE_NOTIFY_MS=1500
 export FM_SNAPSHOT_NOW=2026-07-25T00:00:00Z
 export TB_LOG="$TMP_ROOT/calls.log" TB_PLAY="$TMP_ROOT/play" TB_REMOTES="$TMP_ROOT/remotes"
@@ -36,6 +39,7 @@ cat > "$MAIN/data/secondmates.md" <<EOF
 EOF
 
 t() {
+  case "${1:-}" in open | stop | restart) sig_product_target "$MAIN" "$1" ;; esac
   FM_HOME="$MAIN" FM_ROOT_OVERRIDE="$CODE_ROOT" "$CODE_ROOT/bin/myshape.sh" "$@"
 }
 
@@ -274,19 +278,42 @@ test_same_home_writes_do_not_overlap() {
   pass "writes to one home are serialized"
 }
 
+# child_board: stop MAIN's board and start it again as this script's own
+# background child, with retries an hour apart, so a test can crash it.
+child_board() {
+  local i=0
+  t stop >/dev/null
+  MYSHAPE_RETRY_MS=60000 node "$CODE_ROOT/myshape/dist/board-server.js" --home "$MAIN" --root "$CODE_ROOT" \
+    --commit "$(git -C "$CODE_ROOT" rev-parse HEAD)" --state "$MAIN/state" --data "$MAIN/data" \
+    --port "$(cat "$MAIN/config/myshape-port")" >> "$MAIN/state/myshape/service.log" 2>&1 &
+  CHILD=$!
+  while [ "$(tb_board_pid "$MAIN")" != "$CHILD" ] || [ ! -S "$MAIN/state/myshape/board.sock" ]; do
+    [ "$i" -lt 100 ] || fail "the board started as this script's child did not come up"
+    sleep 0.1
+    i=$((i + 1))
+  done
+}
+
+# crash_child: end that board at once, as a crash would. A signal dry run sends
+# nothing and stops it through its socket instead.
+crash_child() {
+  kill_own_child "$CHILD"
+  ! signal_dry_run || tb_socket_stop "$MAIN/state/myshape/board.sock"
+  wait "$CHILD" 2>/dev/null || true
+}
+
 test_restart_resumes_or_settles() {
   local note send old pid before
   play fm-inbox.sh '3'
-  play fm-send.sh 'sleep30'
-  MYSHAPE_RETRY_MS=60000 t restart >/dev/null
+  play fm-send.sh 'sleep3'
+  child_board
   view >/dev/null
   note=$(write message topic billing text "重啟後接著送")
   send=$(write direct home main task ship-a text "送到一半")
   settle "$note" retrying
-  pid=$(tb_board_pid "$MAIN")
-  kill -KILL "$pid"
-  while kill -0 "$pid" 2>/dev/null; do sleep 0.1; done
-  pkill -f "sleep 30" 2>/dev/null || true
+  crash_child
+  # The direct message's stand-in ends by itself within three seconds.
+  sleep 3
   t open >/dev/null
   settle "$note" delivered
   settle "$send" unknown
@@ -295,13 +322,11 @@ test_restart_resumes_or_settles() {
   settle "$send" delivered
 
   play fm-inbox.sh '3'
-  MYSHAPE_RETRY_MS=60000 t restart >/dev/null
+  child_board
   view >/dev/null
   old=$(write message topic billing text "放太久")
   settle "$old" retrying
-  pid=$(tb_board_pid "$MAIN")
-  kill -KILL "$pid"
-  while kill -0 "$pid" 2>/dev/null; do sleep 0.1; done
+  crash_child
   sleep 1.2
   MYSHAPE_RESUME_MS=1000 t open >/dev/null
   before=$(calls fm-inbox.sh)
@@ -312,23 +337,24 @@ test_restart_resumes_or_settles() {
 }
 
 test_answer_notice_survives_a_restart() {
-  local id answers pid
+  local id answers
   view >/dev/null
   answers=$(calls fm-captain-hold.sh)
   play fm-inbox.sh '3'
-  MYSHAPE_RETRY_MS=60000 t restart >/dev/null
+  child_board
   view >/dev/null
   id=$(write answer home main task call-main answer "合併" label "合併")
   settle "$id" retrying
-  pid=$(tb_board_pid "$MAIN")
-  kill -KILL "$pid"
-  while kill -0 "$pid" 2>/dev/null; do sleep 0.1; done
+  crash_child
   t open >/dev/null
   settle "$id" delivered
-  assert_equals $((answers + 1)) "$(calls fm-captain-hold.sh)" "the answer itself must not be sent again after a restart"
+  assert_equals $((answers + 2)) "$(calls fm-captain-hold.sh)" \
+    "the identical answer line must be replayed once after a restart, which the hold tool answers closed again"
+  assert_equals 1 "$(grep "^cmd=fm-captain-hold.sh" "$TB_LOG" | tail -n 2 | cut -f2- | sort -u | wc -l | tr -d ' ')" \
+    "the replayed answer must be the identical line"
   assert_equals 1 "$(grep "^cmd=fm-inbox.sh" "$TB_LOG" | grep "tb-$id-note" | cut -f2 | sort -u | wc -l | tr -d ' ')" \
     "the notice must be replayed under the same request id"
-  pass "a restart between the answer and its notice finishes the notice only"
+  pass "a restart between the answer and its notice replays the same answer, then finishes the notice"
 }
 
 # page <op> <json>: a topic operation sent the way the board page sends it.
@@ -707,14 +733,18 @@ test_dispatchable_notice() {
   t move parked normal >/dev/null
   t move parked2 high >/dev/null
   sleep 2.5
-  assert_equals $((before + 1)) "$(calls fm-inbox.sh)" "topics that become dispatchable together must share one notice"
-  assert_contains "$(last_call fm-inbox.sh)" "stdin=議題「Parked」、「Parked two」已可派工，請跑 order 重新評估" \
-    "the notice must name the topics and tell firstmate to run order"
+  assert_equals $((before + 2)) "$(calls fm-inbox.sh)" "each topic that becomes dispatchable must get its own notice"
+  assert_contains "$(grep '^cmd=fm-inbox.sh' "$TB_LOG" | tail -n 2)" "stdin=議題「Parked」離開「待辦」，排在「一般」最後，現在可派" \
+    "the notice must say where the topic now stands"
+  assert_contains "$(grep '^cmd=fm-inbox.sh' "$TB_LOG" | tail -n 2)" "stdin=議題「Parked two」離開「待辦」，排在「高」最後，現在可派" \
+    "the notice must say where the topic now stands"
+  assert_not_contains "$(grep '^cmd=fm-inbox.sh' "$TB_LOG" | tail -n 2)" "order" "the notice must not tell firstmate what to run"
   t archive parked >/dev/null
   t reopen parked >/dev/null
   sleep 2.5
-  assert_equals $((before + 2)) "$(calls fm-inbox.sh)" "reopening an archived topic must send the notice"
-  pass "firstmate is told once when topics leave later or are reopened and then stay put"
+  assert_equals $((before + 3)) "$(calls fm-inbox.sh)" "reopening an archived topic must send the notice"
+  assert_contains "$(last_call fm-inbox.sh)" "stdin=議題「Parked」重開，排在「一般」最後，現在可派" "the reopening notice must say so"
+  pass "firstmate is told once per topic when topics leave later or are reopened and then stay put"
 }
 
 test_audit_log() {
@@ -725,8 +755,8 @@ test_audit_log() {
   got=$(grep "\"write_id\":\"$id\"" "$audit" | jq -r '.state' | tr '\n' ' ' | sed 's/ $//')
   assert_equals "sending delivered" "$got" \
     "every state change must be exactly one audit line"
-  grep "\"write_id\":\"$id\"" "$audit" | head -n 1 | jq -e '.sending.text == "稽核" and .sending.plan.requestId != null' >/dev/null ||
-    fail "the first audit line must carry the full text and the dedupe key"
+  grep "\"write_id\":\"$id\"" "$audit" | head -n 1 | jq -e '.sending.text == "稽核" and .sending.action.kind == "message"' >/dev/null ||
+    fail "the first audit line must carry the full text and the action"
   grep -v '^cmd=\(fm-inbox.sh\|fm-send.sh\|fm-captain-hold.sh\|fm-on.sh.fm-captain-hold.sh\|fm-on.sh.fm-board.sh\)	' "$TB_LOG" |
     grep -q '^cmd=' && fail "the board ran a stand-in outside the allow-list"
   t stop >/dev/null

@@ -14,10 +14,10 @@
 #     the end.
 # shellcheck disable=SC2034 # the globals are read by the sourcing scripts.
 
-# The programs this build of the board is still designed to run (design 7.1,
-# B1): absent from every board-only root instead of tripwired, so running one
-# fails with ENOENT.
-SA_NO_TRIPWIRE="fm-topic-board-read.sh fm-on.sh fm-inbox.sh fm-send.sh fm-captain-hold.sh fm-board.sh"
+# The one program this build of the board runs (design 7.1, B2): absent from
+# every board-only root instead of tripwired, so the board finds nobody on the
+# other side until a test installs a stub aggregator under that name.
+SA_NO_TRIPWIRE="fm-board.sh"
 LIVE_BOARD_PORT=47819
 
 # sa_init: build the PATH, the tripwire directory, and the trip log. Stops the
@@ -149,6 +149,9 @@ sa() {
   local home=$1
   shift
   sa_assert_scratch "$home"
+  case "${1:-}" in
+    open | stop | restart) ! declare -F sig_product_target >/dev/null || sig_product_target "$home" "$1" ;;
+  esac
   env -i HOME="$TMP_ROOT/h" PATH="${SA_CMD_PATH:-$SA_PATH}" LANG=C.UTF-8 TMPDIR="$SA_TMPDIR" FM_HOME="$home" \
     ${SA_ENV[@]+"${SA_ENV[@]}"} "$SA_ROOT/bin/myshape.sh" "$@"
 }
@@ -169,4 +172,50 @@ sa_assert_no_trips() {
 sa_assert_no_boards() {
   tb_stop_boards
   ! pgrep -f "board-server.js.*--state $TMP_ROOT/" >/dev/null || fail "a board under $TMP_ROOT is still running"
+}
+
+# sa_install_stub <stub> <agg-dir>: put a stub aggregator (fm or plain) in the
+# board-only root under the one name the board runs, bin/fm-board.sh, commit
+# it, and point the clean environment at it and at <agg-dir>, where it keeps
+# its data and logs (myshape/test/stub-aggregator/stub-lib.sh).
+sa_install_stub() {
+  local stub=$1 agg=$2 name
+  mkdir -p "$agg/fm" "$agg/plain" "$agg/control"
+  : > "$agg/calls.log"
+  : > "$agg/received.jsonl"
+  : > "$agg/play"
+  cp "$ROOT/myshape/test/stub-aggregator/dispatch" "$SA_ROOT/bin/fm-board.sh"
+  for name in stub-fm stub-plain stub-lib.sh; do
+    cp "$ROOT/myshape/test/stub-aggregator/$name" "$SA_ROOT/bin/$name"
+  done
+  ROOT_COMMIT=$(tb_commit_root "$SA_ROOT" "stub aggregator")
+  SA_ENV+=("TB_STUB=$stub" "TB_AGG=$agg")
+}
+
+# sa_child_board <home>: start the home's board service the way myshape.sh
+# would, but as this script's own background child, so a test may end it with
+# kill_own_child. Leaves its pid in SA_CHILD once the service answers.
+sa_child_board() {
+  local home=$1 i=0
+  sa_assert_scratch "$home"
+  mkdir -p "$home/state/myshape"
+  env -i HOME="$TMP_ROOT/h" PATH="$SA_PATH" LANG=C.UTF-8 TMPDIR="$SA_TMPDIR" FM_HOME="$home" \
+    ${SA_ENV[@]+"${SA_ENV[@]}"} node "$SA_ROOT/myshape/dist/board-server.js" --home "$home" --root "$SA_ROOT" \
+    --commit "$(git -C "$SA_ROOT" rev-parse HEAD)" --state "$home/state" --data "$home/data" \
+    --port "$(cat "$home/config/myshape-port")" >> "$home/state/myshape/service.log" 2>&1 &
+  SA_CHILD=$!
+  while [ "$(tb_board_pid "$home")" != "$SA_CHILD" ] || [ ! -S "$home/state/myshape/board.sock" ]; do
+    [ "$i" -lt 100 ] || fail "the board started as this script's child did not come up in $home"
+    sleep 0.1
+    i=$((i + 1))
+  done
+}
+
+# sa_crash_child <home>: end the board sa_child_board started, at once, the way
+# a crash would. In a signal dry run nothing is sent: the board is stopped
+# through its socket instead, and the caller's crash-only checks are skipped.
+sa_crash_child() {
+  kill_own_child "$SA_CHILD"
+  signal_dry_run && tb_socket_stop "$1/state/myshape/board.sock"
+  wait "$SA_CHILD" 2>/dev/null || true
 }

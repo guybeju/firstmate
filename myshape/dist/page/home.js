@@ -1,6 +1,6 @@
 import { h } from "./dom.js";
 import { agentRow, holdCard, liveTodos, needsCaptain, queuedRow, questionRow, summaryRow, topicLink, topicName, untaggedQueued, } from "./parts.js";
-import { BAD_WRITES, LIGHT_LABEL, QUEUES, QUEUE_LABEL } from "./state.js";
+import { BAD_WRITES, LIGHT_LABEL, QUEUES, QUEUE_LABEL, agentName } from "./state.js";
 const RECENT_SUMMARIES = 12;
 function lightCounts(agents) {
     return Object.keys(LIGHT_LABEL)
@@ -33,7 +33,7 @@ export function sidebar(view, actions) {
 function closeProposals(view, actions) {
     return Object.entries(view.topics)
         .filter(([, topic]) => topic.close_reason !== null)
-        .map(([id, topic]) => h("div", { class: "card" }, h("div", { class: "meta" }, topicLink(view, id, actions), h("span", { class: "pill warn" }, "提議關閉")), h("div", {}, `first mate 認為這個議題可以關了：${topic.close_reason ?? ""}`), h("div", { class: "btns" }, h("button", { onclick: () => actions.topic("archive", { id }) }, "關閉並封存"), h("button", { onclick: () => actions.topic("keep", { id }) }, "先不關"))));
+        .map(([id, topic]) => h("div", { class: "card" }, h("div", { class: "meta" }, topicLink(view, id, actions), h("span", { class: "pill warn" }, "提議關閉")), h("div", {}, `${agentName()} 認為這個議題可以關了：${topic.close_reason ?? ""}`), h("div", { class: "btns" }, h("button", { onclick: () => actions.topic("archive", { id }) }, "關閉並封存"), h("button", { onclick: () => actions.topic("keep", { id }) }, "先不關"))));
 }
 function section(title, ...children) {
     const content = children

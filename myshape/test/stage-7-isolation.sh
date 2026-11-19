@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
-# The board tree loads no Firstmate file and tells the dispatcher nothing (AT3
-# of the board-interface test plan, as it stands for B1):
+# The board tree loads no Firstmate file, holds no Firstmate words, knows no
+# machine, and tells the dispatcher nothing (AT3 of the board-interface test
+# plan, as it stands for B2):
 #   - a static scan of the board's own files for Firstmate script and data
 #     names, each allowed only on a line pinned below by file and exact text;
-#   - a run of stage-7-standalone.sh with tripwires named after every other
-#     Firstmate script and library, which must leave the trip log empty, and
-#     a check that those tripwires do fire;
+#   - a word scan of the string literals of myshape/src and the code lines of
+#     bin/myshape.sh: no "first mate", "firstmate" or "/updatefirstmate";
+#   - runs of stage-7-standalone.sh and stage-7-aggregator.sh with tripwires
+#     named after every other Firstmate script and library, which must leave
+#     the trip log empty, and a check that those tripwires do fire;
+#   - two further homes that differ only in being called remote are read and
+#     written alike, and no board type has a machine field;
 #   - nothing in the command or its help that dictates what to dispatch.
-# The board's unit tests (*.test.ts) are not scanned: the board never loads
-# them, and they mirror the command table they test.
+# The board's unit tests (*.test.ts) are not in the name scan: the board never
+# loads them. The word scan covers them too, with no exception.
 # shellcheck disable=SC2016 # jq filters and the pinned lines are literal text.
 set -u
 
@@ -18,13 +23,16 @@ set -u
 . "$ROOT/myshape/test/helpers.sh"
 # shellcheck source=myshape/test/standalone-lib.sh
 . "$ROOT/myshape/test/standalone-lib.sh"
+# shellcheck source=myshape/test/signal-lib.sh
+. "$ROOT/myshape/test/signal-lib.sh"
 
 for tool in jq node curl git; do
   command -v "$tool" >/dev/null 2>&1 || { echo "skip: $tool not found"; exit 0; }
 done
 TMP_ROOT=$(fm_test_tmproot tb-s7i)
 case "$TMP_ROOT" in /*) ;; *) echo "not ok - no scratch root" >&2; exit 1 ;; esac
-trap 'tb_stop_boards; fm_test_cleanup' EXIT
+trap 'tb_stop_boards; sig_leftovers; fm_test_cleanup' EXIT
+sig_init
 
 FIRSTMATE_NAMES='fm-[A-Za-z0-9_-]+\.sh|secondmates\.md|captain(-shared)?\.md|fleet-ledger|\.fm-secondmate-home|backlog\.md|fm-hold-v1'
 
@@ -51,9 +59,8 @@ scan() {
 # The lines allowed to name a Firstmate file: the old-path refusal, which names
 # Firstmate's move to the new names until that move is gone; the split line
 # naming the command that moves tasks; the four calls todo add and todo done
-# keep until the board stores hands-on items (design 4.2); the command table's
-# rows and its comments; the ledger banner's commands; and comments that
-# describe what those programs print.
+# keep until the board stores hands-on items (design 4.2); and the one program
+# the service runs, for its feed and its deliverer.
 pinned() {
   cat <<'PINS'
 bin/myshape.sh	report=$("$SCRIPT_DIR/fm-topic-board-read.sh" 0 -) || tb_die 1 "讀不到這個 home 的 backlog，沒有改任何東西。"
@@ -62,57 +69,8 @@ bin/myshape.sh	"$SCRIPT_DIR/fm-board.sh" tag "${words[0]}" "$topic" >/dev/null |
 bin/myshape.sh	"$SCRIPT_DIR/fm-captain-hold.sh" answers --source myshape) ||
 bin/myshape.sh	service_unavailable "這個 home 還有改名前的 $1" "先跑 bin/fm-board.sh migrate-myshape 搬到新名字"
 bin/myshape.sh	usage_error "split 只建議題；要一起搬 task，改用 bin/fm-board.sh split <議題 id> <新名稱> --goal <一行> <task…>"
-myshape/dist/actions.js	/** The close mode fm-captain-hold.sh answers takes for what answering `hold` does. */
-myshape/dist/commands.js	* Text handed to fm-send.sh as one argument. fm-send.sh treats a leading '-'
-myshape/dist/commands.js	/** One `<task-id>\t<answer>\t<label>\t<mode>` line for fm-captain-hold.sh answers. */
-myshape/dist/commands.js	const answers = ["fm-captain-hold.sh", "answers", "--source", "myshape"];
-myshape/dist/commands.js	return { script: "fm-board.sh", args: ["--in-home", secondmate, "answers"], stdin };
-myshape/dist/commands.js	return { script: "fm-on.sh", args: ["--stdin", secondmate, ...answers], stdin };
-myshape/dist/commands.js	return { script: "fm-board.sh", args: tag };
-myshape/dist/commands.js	return { script: "fm-board.sh", args: ["--in-home", secondmate, ...tag] };
-myshape/dist/commands.js	return { script: "fm-on.sh", args: [secondmate, "fm-board.sh", ...tag] };
-myshape/dist/commands.js	script: "fm-send.sh",
-myshape/dist/commands.js	return { script: "fm-topic-board-read.sh", args: readArgs(command) };
-myshape/dist/commands.js	script: "fm-topic-board-read.sh",
-myshape/dist/commands.js	script: "fm-on.sh",
-myshape/dist/commands.js	"fm-topic-board-read.sh",
-myshape/dist/commands.js	script: "fm-inbox.sh",
-myshape/dist/commands.js	script: "fm-send.sh",
-myshape/dist/page/frame.js	return "bin/fm-board.sh setup";
-myshape/dist/page/frame.js	? `bin/fm-on.sh ${entry.id} fm-board.sh setup`
-myshape/dist/page/frame.js	: `bin/fm-board.sh --in-home ${entry.id} setup`;
-myshape/dist/poller.js	// fm-on.sh's refusals when the remote code root has no such tracked script.
-myshape/dist/report.js	// The JSON one home's fm-topic-board-read.sh prints, parsed and checked once
-myshape/dist/writes.js	/** Why fm-send.sh could not deliver, in words for the board; its own text when the cause is not known. */
-myshape/dist/writes.js	// fm-captain-hold.sh's reasons for skipping a hold that someone already answered or released.
-myshape/dist/writes.js	/** Reads fm-captain-hold.sh answers output for the line about `task`. */
-myshape/dist/writes.js	// Exit 3: fm-send.sh retried once and the remote delivery is still unconfirmed.
-myshape/src/actions.ts	/** The close mode fm-captain-hold.sh answers takes for what answering `hold` does. */
-myshape/src/commands.ts	* Text handed to fm-send.sh as one argument. fm-send.sh treats a leading '-'
-myshape/src/commands.ts	/** One `<task-id>\t<answer>\t<label>\t<mode>` line for fm-captain-hold.sh answers. */
-myshape/src/commands.ts	const answers = ["fm-captain-hold.sh", "answers", "--source", "myshape"];
-myshape/src/commands.ts	return { script: "fm-board.sh", args: ["--in-home", secondmate, "answers"], stdin };
-myshape/src/commands.ts	return { script: "fm-on.sh", args: ["--stdin", secondmate, ...answers], stdin };
-myshape/src/commands.ts	return { script: "fm-board.sh", args: tag };
-myshape/src/commands.ts	return { script: "fm-board.sh", args: ["--in-home", secondmate, ...tag] };
-myshape/src/commands.ts	return { script: "fm-on.sh", args: [secondmate, "fm-board.sh", ...tag] };
-myshape/src/commands.ts	script: "fm-send.sh",
-myshape/src/commands.ts	return { script: "fm-topic-board-read.sh", args: readArgs(command) };
-myshape/src/commands.ts	script: "fm-topic-board-read.sh",
-myshape/src/commands.ts	script: "fm-on.sh",
-myshape/src/commands.ts	"fm-topic-board-read.sh",
-myshape/src/commands.ts	script: "fm-inbox.sh",
-myshape/src/commands.ts	script: "fm-send.sh",
-myshape/src/page/frame.ts	if (entry.id === "main") return "bin/fm-board.sh setup";
-myshape/src/page/frame.ts	? `bin/fm-on.sh ${entry.id} fm-board.sh setup`
-myshape/src/page/frame.ts	: `bin/fm-board.sh --in-home ${entry.id} setup`;
-myshape/src/poller.ts	// fm-on.sh's refusals when the remote code root has no such tracked script.
-myshape/src/report.ts	// The JSON one home's fm-topic-board-read.sh prints, parsed and checked once
-myshape/src/report.ts	/** What answering a hold does to its item, as `fm-captain-hold.sh hold --on-answer` recorded it. */
-myshape/src/writes.ts	/** Why fm-send.sh could not deliver, in words for the board; its own text when the cause is not known. */
-myshape/src/writes.ts	// fm-captain-hold.sh's reasons for skipping a hold that someone already answered or released.
-myshape/src/writes.ts	/** Reads fm-captain-hold.sh answers output for the line about `task`. */
-myshape/src/writes.ts	// Exit 3: fm-send.sh retried once and the remote delivery is still unconfirmed.
+myshape/dist/commands.js	export const AGGREGATOR_PROGRAM = path.join("bin", "fm-board.sh");
+myshape/src/commands.ts	export const AGGREGATOR_PROGRAM = path.join("bin", "fm-board.sh");
 PINS
 }
 
@@ -127,6 +85,7 @@ test_the_scan_finds_only_pinned_lines() {
     "myshape.sh must source only myshape-lib.sh"
   assert_equals "" "$(cd "$ROOT" && grep -E '^[[:space:]]*(\.|source)[[:space:]]+["$]' bin/myshape-lib.sh || true)" \
     "myshape-lib.sh must source nothing"
+  assert_equals "" "$(cd "$ROOT" && grep -rn 'FM_HOME' myshape/src || true)" "the board's code must not name FM_HOME"
   pass "the board tree names Firstmate files only on the pinned lines, and its command sources only its own library"
 }
 
@@ -147,11 +106,155 @@ test_the_scan_catches_a_new_name() {
 }
 
 test_the_board_trips_no_wire() {
-  local out rc=0
-  out=$(TB_STAGE7_TRIPWIRES=1 "${BASH:-bash}" "$ROOT/myshape/test/stage-7-standalone.sh" 2>&1) || rc=$?
-  assert_equals 0 "$rc" "the board alone must pass with tripwires around it: $out"
-  assert_contains "$out" "ok - no board is left running and no Firstmate file was reached" "the tripwire run must check its log"
-  pass "the board's command and service run beside tripwires for every other Firstmate file and trip none"
+  local out rc script
+  for script in stage-7-standalone.sh stage-7-aggregator.sh; do
+    rc=0
+    out=$(TB_STAGE7_TRIPWIRES=1 "${BASH:-bash}" "$ROOT/myshape/test/$script" 2>&1) || rc=$?
+    assert_equals 0 "$rc" "$script must pass with tripwires around the board: $out"
+    assert_contains "$out" "ok - no board is left running and no Firstmate file was reached" "the tripwire run of $script must check its log"
+  done
+  pass "the board's command and service, alone and with stub aggregators, run beside tripwires for every other Firstmate file and trip none"
+}
+
+# literal_words <file-or-directory>: every string literal of the .ts files
+# there that names Firstmate (myshape/test/word-scan.mjs). The scan also must
+# have read every file to its end.
+literal_words() {
+  local unread
+  unread=$(node "$ROOT/myshape/test/word-scan.mjs" "$ROOT/myshape/node_modules/typescript" "$1" check)
+  [ -z "$unread" ] || fail "the word scan did not read every file to its end: $unread"
+  node "$ROOT/myshape/test/word-scan.mjs" "$ROOT/myshape/node_modules/typescript" "$1"
+}
+
+# AT3.1b: the words the board shows, sends and stores.
+test_no_firstmate_words() {
+  local found
+  found=$(literal_words "$ROOT/myshape/src")
+  assert_equals "" "$found" "no string literal of the board's code may name Firstmate"
+  found=$(cd "$ROOT" && grep -nEi 'first mate|firstmate|/updatefirstmate' bin/myshape.sh | grep -vE '^[0-9]+:[[:space:]]*#' || true)
+  assert_equals "" "$found" "no code line of myshape.sh may name Firstmate"
+  pass "the board's texts name no Firstmate, with no exception (AT3.1b)"
+}
+
+# The word scan must see a word in a string, also inside a template and after
+# a regular expression, and skip a comment.
+test_the_word_scan_catches_a_word() {
+  local copy=$TMP_ROOT/word-copy found
+  mkdir -p "$copy"
+  printf '%s\n' 'const a = `會通知 ${x} 和 first mate`;' '// a comment about firstmate' 'const b = { c: "x" };' \
+    'const r = /[`"]/.test(a);' 'const d = "給 first mate";' > "$copy/a.ts"
+  found=$(literal_words "$copy/a.ts" | sed 's|^.*: ||')
+  assert_equals "$(printf '%s\n' ' 和 first mate' '給 first mate')" "$found" "the scan must find both strings and skip the comment"
+  pass "the word scan reports Firstmate's name in a string and only there"
+}
+
+# AT3.5: no type of the board's has a machine field, and the feed schema documents none.
+test_no_machine_field() {
+  local found
+  found=$(cd "$ROOT/myshape/src" && grep -nE '^[[:space:]]*(readonly[[:space:]]+)?(remote|machine|host|placement)\??:' \
+    report.ts view.ts topics.ts writes.ts actions.ts poller.ts commands.ts legacy.ts || true)
+  assert_equals "" "$found" "no board type may have a remote, machine, host or placement field"
+  found=$(awk '/^## 4\. /{on=1; next} /^## /{on=0} on' "$ROOT/myshape/spec/contracts.markdown" | grep -nE '"(remote|machine|host|placement)"' || true)
+  assert_equals "" "$found" "the feed schema must document no machine field"
+  pass "no board type or feed field knows a machine (AT3.5)"
+}
+
+# AT3.4: two further homes that differ only in what the aggregator calls them.
+remote_post() {  # <route> <json body>
+  local base
+  base="http://127.0.0.1:$(cat "$REMOTE_HOME/config/myshape-port")"
+  curl -s -m 20 -H "Authorization: Bearer $(cat "$REMOTE_HOME/state/myshape/token")" -H "Origin: $base" \
+    -H 'Content-Type: application/json' -d "$2" "$base/api/$1"
+}
+
+remote_state() {  # [jq arguments...] <jq filter>
+  curl -s -m 20 -H "Authorization: Bearer $(cat "$REMOTE_HOME/state/myshape/token")" \
+    "http://127.0.0.1:$(cat "$REMOTE_HOME/config/myshape-port")/api/state" | jq -c -r "$@"
+}
+
+feeds() {  # <agg-dir> <home>
+  awk -v home="$2" '$1 == "feed" && $2 == home' "$1/calls.log" | wc -l | tr -d ' '
+}
+
+test_remote_means_nothing_to_the_board() {
+  local agg=$TMP_ROOT/agg-remote a b code
+  sa_init
+  mkdir -p "$TMP_ROOT/remote"
+  SA_ROOT=$TMP_ROOT/remote/board
+  tb_make_board_root "$SA_ROOT" >/dev/null
+  SA_ENV=(MYSHAPE_TEST=1 MYSHAPE_READ_MS=300 "MYSHAPE_RETRY_MS=100" MYSHAPE_STALE_MS=600000 MYSHAPE_IDLE_MS=600000)
+  sa_install_stub fm "$agg"
+  REMOTE_HOME=$(sa_home remote-main)
+  jq '.secondmates = [{id: "h1", remote: false, read_every_s: 1, read_timeout_s: 1}, {id: "h2", remote: true, read_every_s: 1, read_timeout_s: 1}]' \
+    "$ROOT/myshape/test/contract/report-main.json" > "$agg/fm/main.json"
+  for a in h1 h2; do
+    jq '.tasks = [{id: "w", kind: "ship", state: "working", source: "", detail: ""}]
+      | .holds = [{id: "c", title: "T", question: "Q", hold_bucket: "live", hold_until: null, unresolved_blocker_ids: [],
+                   hold_age_days: 0, origin: "", on_answer: "close"}]' "$ROOT/myshape/test/contract/report-sm1.json" > "$agg/fm/$a.json"
+  done
+  sa "$REMOTE_HOME" open >/dev/null || fail "the board did not start"
+  sa "$REMOTE_HOME" create T --goal g --id t >/dev/null
+  remote_post refresh '{}' >/dev/null
+  sleep 7
+  a=$(feeds "$agg" h1)
+  b=$(feeds "$agg" h2)
+  [ "$a" -ge 5 ] && [ $((a - b)) -le 1 ] && [ $((b - a)) -le 1 ] || fail "(a) both homes must be read at the same interval: h1 $a, h2 $b"
+
+  printf 'sleep 3\n' > "$agg/control/h1"
+  printf 'sleep 3\n' > "$agg/control/h2"
+  remote_post refresh '{}' >/dev/null
+  sleep 2
+  a=$(remote_state '.homes[] | select(.id == "h1") | .error' | sed 's/ h1 / <home> /')
+  [ "$a" != null ] || fail "(b) the short timeout must cut the read"
+  assert_equals "$a" "$(remote_state '.homes[] | select(.id == "h2") | .error' | sed 's/ h2 / <home> /')" \
+    "(b) both homes must time out with the same error, apart from their id"
+  rm "$agg/control/h1" "$agg/control/h2"
+  sleep 3
+
+  : > "$agg/received.jsonl"
+  for a in h1 h2; do
+    code=$(remote_post holds/answer "{\"home\":\"$a\",\"task\":\"c\",\"answer\":\"x\",\"label\":\"x\"}" | jq -r '.confirm')
+    remote_post holds/answer "{\"home\":\"$a\",\"task\":\"c\",\"answer\":\"x\",\"label\":\"x\",\"confirm\":\"$code\"}" >/dev/null
+    remote_post agents/tag "{\"home\":\"$a\",\"task\":\"w\",\"topic\":\"t\"}" >/dev/null
+    remote_post direct "{\"home\":\"$a\",\"task\":\"w\",\"text\":\"hi\"}" >/dev/null
+  done
+  sleep 2
+  assert_equals "$(jq -c -s '[.[] | select(.home == "h1") | del(.id, .home)]' "$agg/received.jsonl")" \
+    "$(jq -c -s '[.[] | select(.home == "h2") | del(.id, .home)]' "$agg/received.jsonl")" "(c) the records must be identical apart from home"
+  assert_equals 6 "$(grep -c '' "$agg/received.jsonl")" "(c) an answer, a filing and a direct message to each home"
+  assert_equals 0 "$(grep -cE '"(remote|placement|machine|host)"' "$agg/received.jsonl" || true)" "(f) no action record may carry a placement"
+
+  printf '%s\n' 'sleep 3 {"outcome":"delivered"}' 'sleep 3 {"outcome":"delivered"}' > "$agg/play"
+  a=$(remote_post direct '{"home":"h1","task":"w","text":"in flight"}' | jq -r '.write_id')
+  b=$(remote_post direct '{"home":"h2","task":"w","text":"in flight"}' | jq -r '.write_id')
+  sleep 1
+  sa "$REMOTE_HOME" restart >/dev/null
+  sleep 3.5
+  assert_equals "unknown unknown" "$(remote_state --arg a "$a" --arg b "$b" '[.writes[] | select(.id == $a or .id == $b) | .state] | join(" ")')" \
+    "(d) a direct message in flight to either home must become uncertain"
+
+  printf 'exit4 cannot report\n' > "$agg/control/h1"
+  printf 'exit4 cannot report\n' > "$agg/control/h2"
+  remote_post refresh '{}' >/dev/null
+  sleep 2
+  assert_equals "$(remote_state '.homes[] | select(.id == "h1") | del(.id, .last_ok_seconds_ago)')" \
+    "$(remote_state '.homes[] | select(.id == "h2") | del(.id, .last_ok_seconds_ago)')" "(e) exit 4 must give both the same banner form"
+  assert_equals "$(remote_state '.homes[] | select(.id == "h1") | keys')" "$(remote_state '.homes[] | select(.id == "h2") | keys')" \
+    "(f) both homes must have the same keys"
+  assert_equals false "$(remote_state '[.homes[] | has("remote")] | any')" "(f) no home may carry remote"
+  rm "$agg/control/h1" "$agg/control/h2"
+
+  jq '.secondmates = [{id: "h1", remote: false, read_every_s: 1}, {id: "h2", remote: true, read_every_s: 3}]' \
+    "$agg/fm/main.json" > "$agg/fm/main.tmp" && mv "$agg/fm/main.tmp" "$agg/fm/main.json"
+  remote_post refresh '{}' >/dev/null
+  sleep 1
+  : > "$agg/calls.log"
+  sleep 6.2
+  a=$(feeds "$agg" h1)
+  b=$(feeds "$agg" h2)
+  [ "$a" -ge 5 ] && [ "$b" -ge 1 ] && [ "$b" -le 3 ] || fail "the intervals must follow the hints: h1 $a reads, h2 $b reads in 6 s"
+  sa "$REMOTE_HOME" stop >/dev/null
+  pass "two homes differing only in remote are read, timed out, written, settled and shown alike, and follow their own hints (AT3.4)"
 }
 
 # The tripwires must fire: a board-only root whose command sources a Firstmate
@@ -187,5 +290,6 @@ test_nothing_dictates_the_dispatcher() {
   pass "nothing in the board's command or help dictates what to dispatch"
 }
 
-fm_test_run test_the_scan_finds_only_pinned_lines test_the_scan_catches_a_new_name test_the_board_trips_no_wire \
-  test_the_tripwires_fire test_nothing_dictates_the_dispatcher
+fm_test_run test_the_scan_finds_only_pinned_lines test_the_scan_catches_a_new_name test_no_firstmate_words \
+  test_the_word_scan_catches_a_word test_no_machine_field test_the_board_trips_no_wire \
+  test_the_tripwires_fire test_nothing_dictates_the_dispatcher test_remote_means_nothing_to_the_board

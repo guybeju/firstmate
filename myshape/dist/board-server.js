@@ -11,16 +11,16 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { appendLine, fileSize, isAlive, isRecord, readPidFile, removeStaleTemps, stringField, writeFileAtomic, } from "./files.js";
+import { appendLine, fileSize, isAlive, isRecord, readJsonFile, readPidFile, removeStaleTemps, stringField, writeFileAtomic, } from "./files.js";
 import * as actions from "./actions.js";
 import { createApi } from "./api.js";
 import { ConfirmStore } from "./confirm.js";
 import { serveBoard } from "./http.js";
-import { commandRunner } from "./commands.js";
+import { commandRunner, programProblem } from "./commands.js";
 import { Journal, MAIN_HOME, Offsets, SUMMARY_KINDS, SUMMARY_MAX, Summaries } from "./journal.js";
 import { boardPaths, parseConfigArgs } from "./layout.js";
 import { MAX_REQUEST_BYTES } from "./protocol.js";
-import { DispatchNotifier } from "./notifier.js";
+import { DispatchNotifier, fileStore } from "./notifier.js";
 import { DEFAULT_TIMINGS, Poller } from "./poller.js";
 import { loadTopicState, saveTopicState } from "./store.js";
 import * as topics from "./topics.js";
@@ -33,6 +33,10 @@ const LOOKUP_WAIT_MS = 10_000;
 const NOTIFY_DELAY_MS = 30_000;
 const WRITE_HISTORY_MS = 24 * 60 * 60 * 1000;
 const TEST_MODE = process.env["MYSHAPE_TEST"] === "1";
+/** What the page and the board's texts call the agent side when its report names none. */
+const DEFAULT_LABEL = "aggregator";
+/** The captain's own presses: the page may send them, the socket may not. */
+const PAGE_ONLY_OPS = ["todo-claim", "keep"];
 // sizeof(sun_path) minus the terminating NUL. Node silently truncates a longer
 // path instead of failing, so the length is checked before listening.
 const SOCKET_PATH_MAX = os.platform() === "darwin" ? 103 : 107;
@@ -119,7 +123,7 @@ function markTodo(service, args, state) {
     const todos = service.state.doc.todos;
     const current = Object.hasOwn(todos, task) ? todos[task]?.state : undefined;
     if (state === "claimed" && current === "obsolete") {
-        const line = `${task} 已經被 first mate 標成不再需要，請直接撤下。`;
+        const line = `${task} 已經被 ${labelOf(service)} 標成不再需要，請直接撤下。`;
         return { ok: false, code: "refused", line };
     }
     const open = new Set(mainHolds(service).map((hold) => hold.id));
@@ -184,7 +188,7 @@ const TOPIC_HANDLERS = {
         if (id === null || queue === null || queue === undefined || position === null) {
             return { usage: "move 需要議題 id 與佇列（high、normal、later）。" };
         }
-        return topics.move(service.state, id, queue, position);
+        return topics.move(service.state, id, queue, position, now());
     },
     split: (service, args) => {
         const from = stringField(args, "from");
@@ -223,7 +227,7 @@ const TOPIC_HANDLERS = {
         const value = stringField(args, "value");
         if (id === null || value === null)
             return { usage: "goal 需要議題 id 與一行目標。" };
-        return topics.setGoal(service.state, id, value);
+        return topics.setGoal(service.state, id, value, now());
     },
     archive: (service, args) => {
         const id = stringField(args, "id");
@@ -256,6 +260,7 @@ function statusData(service) {
     return {
         ...healthData(service),
         polling: service.poller.active,
+        aggregator: aggregatorView(service),
         homes: service.poller.snapshots().map((home) => ({ id: home.id, version: home.version })),
         events_bytes: fileSize(service.paths.events),
         summaries_bytes: fileSize(service.paths.summaries),
@@ -281,16 +286,16 @@ async function homeArg(service, args) {
     if (home === undefined)
         return MAIN_HOME;
     if (typeof home !== "string")
-        return usage("--home 要是 secondmate id。");
-    // A board started just now has never read the main home, so it does not know the secondmates yet.
+        return usage("--home 要是 home 的 id。");
+    // A board started just now has never read the root home, so it does not know the further homes yet.
     if (!service.poller.hasMainReport())
         await withTimeout(service.poller.readNow(MAIN_HOME), LOOKUP_WAIT_MS, false);
     return service.poller.knows(home) && home !== MAIN_HOME
         ? home
-        : refused(`--home ${home} 不是已註冊的 secondmate。`);
+        : refused(`--home ${home} 不是看板讀的 home。`);
 }
 /**
- * The line firstmate puts in front of a chat reminder about `task`. The home is
+ * The line the agent puts in front of a chat reminder about `task`. The home is
  * read afresh, because nothing keeps the board current while no page is open
  * and a tag may have changed since. When that read fails, a tag seen earlier
  * still answers; without one the line is "議題不明", never "未分類": not
@@ -390,7 +395,7 @@ async function find(service, args) {
 function writeView(record) {
     return {
         id: record.id,
-        kind: record.plan.type,
+        kind: record.action.kind,
         home: record.home,
         task: record.task,
         topic: record.topic,
@@ -414,7 +419,6 @@ function actionContext(service) {
     return {
         topics: service.state,
         homes: service.poller.snapshots(),
-        secondmates: service.poller.secondmates(),
         writes: service.writes,
     };
 }
@@ -429,9 +433,24 @@ function viewVersion(service) {
         .map((home) => home.lastOkAt === null || nowMs - home.lastOkAt > service.timings.staleMs ? "1" : "0");
     return `${service.version}-${stale.join("")}`;
 }
+/** The name the board's texts use for the agent side. */
+function labelOf(service) {
+    return service.aggregator?.label ?? DEFAULT_LABEL;
+}
+function aggregatorView(service) {
+    return {
+        connected: service.unavailable === null,
+        unavailable: service.unavailable,
+        name: service.aggregator?.name ?? null,
+        label: labelOf(service),
+        update_hint: service.aggregator?.update_hint ?? null,
+    };
+}
 function boardView(service) {
     return {
         boot_id: service.bootId,
+        code_commit: service.config.commit,
+        aggregator: aggregatorView(service),
         version: viewVersion(service),
         polling: service.poller.active,
         writes: visibleWrites(service),
@@ -490,7 +509,7 @@ async function testIgnore(service, args) {
     return problem === null ? { ok: true, line: "ok" } : refused(problem);
 }
 /**
- * Firstmate's verdict on a hands-on item. The main home is read afresh first:
+ * The agent's verdict on a hands-on item. The main home is read afresh first:
  * nothing keeps the board current while no page is open, and the item may be
  * seconds old.
  */
@@ -519,6 +538,10 @@ async function handle(service, request) {
         : undefined;
     if (serviceHandler !== undefined)
         return serviceHandler(service, request.args);
+    // The records a command writes name the agent side; a board that never read
+    // the root home asks it once, so they do not say "aggregator" for Firstmate.
+    if (service.aggregator === null && Object.hasOwn(TOPIC_HANDLERS, request.op))
+        await withTimeout(service.poller.readNow(MAIN_HOME), LOOKUP_WAIT_MS, false);
     return topicOp(service, request.op, request.args);
 }
 function parseRequest(line) {
@@ -594,8 +617,7 @@ function pollTimings() {
         return DEFAULT_TIMINGS;
     return {
         ...DEFAULT_TIMINGS,
-        localMs: override("LOCAL", DEFAULT_TIMINGS.localMs),
-        remoteMs: override("REMOTE", DEFAULT_TIMINGS.remoteMs),
+        readMs: override("READ", DEFAULT_TIMINGS.readMs),
         idleMs: override("IDLE", DEFAULT_TIMINGS.idleMs),
         staleMs: override("STALE", DEFAULT_TIMINGS.staleMs),
     };
@@ -618,25 +640,38 @@ function notifyDelay() {
     const configured = Number(process.env["MYSHAPE_NOTIFY_MS"]);
     return TEST_MODE && Number.isFinite(configured) && configured > 0 ? configured : NOTIFY_DELAY_MS;
 }
-/** Tells firstmate which topics just became dispatchable, as one note. */
-function notifyDispatchable(service, topicIds) {
-    const names = topicIds
-        .filter((id) => service.state.doc.topics[id] !== undefined)
-        .map((id) => `「${service.state.doc.topics[id]?.name ?? id}」`);
-    if (names.length === 0)
-        return;
+/** Hands the aggregator one notice about something that happened on the board. */
+function submitNotice(service, notice, topic) {
     service.writes.submit({
         channel: "auto",
         home: MAIN_HOME,
         task: null,
-        topic: topicIds[0] ?? null,
-        text: `議題${names.join("、")}已可派工，請跑 order 重新評估`,
-        plan: {
-            type: "note",
-            requestId: `tb-dispatch-${crypto.randomBytes(8).toString("hex")}`,
-            body: `議題${names.join("、")}已可派工，請跑 order 重新評估`,
-        },
+        topic,
+        text: notice.text,
+        action: notice,
     });
+}
+function topicRef(service, id) {
+    const name = service.state.doc.topics[id]?.name ?? service.state.archive.topics[id]?.name;
+    return { id, name: name ?? id };
+}
+/**
+ * Says which topics just became dispatchable and where they now stand, one
+ * notice each. It reports what happened, never what to run.
+ */
+function notifyDispatchable(service, ready) {
+    for (const { id, reason } of ready) {
+        const queue = topics.QUEUES.find((name) => service.state.doc.queues[name].includes(id));
+        if (queue === undefined || queue === "later")
+            continue;
+        const list = service.state.doc.queues[queue];
+        const index = list.indexOf(id);
+        const place = index === list.length - 1 ? "最後" : `第 ${index + 1}`;
+        const ref = topicRef(service, id);
+        const what = reason === "reopened" ? "重開" : "離開「待辦」";
+        const text = `議題「${ref.name}」${what}，排在「${topics.QUEUE_LABEL[queue]}」${place}，現在可派`;
+        submitNotice(service, { kind: "notice", event: "topic.dispatchable", text, topic: ref }, id);
+    }
 }
 /** Records a delivered answer or tag as a system record and re-reads the home it changed. */
 function recordDelivery(service, record) {
@@ -644,10 +679,10 @@ function recordDelivery(service, record) {
         answer: "hold.answered",
         tag: "agent.tagged",
     };
-    const kind = kinds[record.plan.type];
+    const kind = kinds[record.action.kind];
     if (kind === undefined)
         return;
-    const text = record.plan.type === "answer"
+    const text = record.action.kind === "answer"
         ? `在看板回答 ${record.home}/${record.task ?? ""}：${record.text}`
         : `${record.home}/${record.task ?? ""} ${record.text}`;
     service.journal.appendBoard({
@@ -661,6 +696,47 @@ function recordDelivery(service, record) {
     service.version += 1;
     void service.poller.readNow(record.home);
 }
+/**
+ * Reads `home` afresh and returns `task`'s tag text, or null when the read
+ * failed. A board that has not read the root home since it started does not
+ * know the further homes yet, so it reads the root home first.
+ */
+async function readTags(service, home, task) {
+    if (!service.poller.knows(home))
+        await service.poller.readNow(MAIN_HOME);
+    if (!(await service.poller.readFresh(home)))
+        return null;
+    const report = service.poller.snapshots().find((entry) => entry.id === home)?.report;
+    return report?.topics[task] ?? "";
+}
+/** The aggregator block kept from an earlier start, or null. */
+function loadAggregator(file) {
+    let raw = null;
+    try {
+        raw = readJsonFile(file);
+    }
+    catch {
+        return null;
+    }
+    if (!isRecord(raw))
+        return null;
+    return {
+        name: stringField(raw, "name"),
+        label: stringField(raw, "label"),
+        update_hint: stringField(raw, "update_hint"),
+    };
+}
+/** Keeps the root report's aggregator block, so texts written before the next read can use it. */
+function rememberAggregator(service, aggregator) {
+    if (JSON.stringify(aggregator) === JSON.stringify(service.aggregator))
+        return;
+    service.aggregator = aggregator;
+    if (aggregator === null)
+        fs.rmSync(service.paths.aggregator, { force: true });
+    else
+        writeFileAtomic(service.paths.aggregator, `${JSON.stringify(aggregator)}\n`, 0o644);
+    service.version += 1;
+}
 /** Loads everything the board keeps on disk and returns the running service's state. */
 function loadService(boot) {
     const { paths } = boot;
@@ -673,6 +749,9 @@ function loadService(boot) {
     const loaded = loadTopicState(paths);
     const journal = new Journal(paths.events);
     const run = commandRunner(boot.config);
+    const unavailable = programProblem(boot.config.root);
+    if (unavailable !== null)
+        log(`not connected to an aggregator: ${unavailable}`);
     const bump = () => {
         service.version += 1;
     };
@@ -684,29 +763,30 @@ function loadService(boot) {
         timings,
         version: 1,
         ipc: null,
-        poller: new Poller(run, journal, new Offsets(paths), timings, bump),
+        unavailable,
+        aggregator: loadAggregator(paths.aggregator),
+        poller: new Poller(run, journal, new Offsets(paths), timings, {
+            onChange: bump,
+            onAggregator: (aggregator) => rememberAggregator(service, aggregator),
+        }, unavailable),
         confirm: new ConfirmStore(),
-        notifier: new DispatchNotifier(notifyDelay(), (ids) => notifyDispatchable(service, ids)),
+        notifier: new DispatchNotifier(notifyDelay(), fileStore(paths.notifyPending), (ready) => notifyDispatchable(service, ready)),
         writes: new WriteEngine(paths.audit, {
             run,
-            secondmates: () => service.poller.secondmates(),
-            readTags: async (home, task) => (await service.poller.readFresh(home))
-                ? (service.poller.snapshots().find((entry) => entry.id === home)?.report?.topics[task] ?? "")
-                : null,
-            prepare: async () => {
-                await service.poller.readNow(MAIN_HOME);
-            },
+            unavailable,
+            readTags: (home, task) => readTags(service, home, task),
             onChange: bump,
             onDelivered: (record) => recordDelivery(service, record),
         }, writeTimings()),
     };
-    void service.writes.resumeUnfinished();
+    service.writes.resumeUnfinished();
     announceConfirmed(service, loaded.confirmed);
+    service.notifier.start(service.state);
     return service;
 }
 /**
- * Records the leftover proposals this start confirmed and tells firstmate,
- * which may still be waiting for the captain to confirm them.
+ * Records the leftover proposals this start confirmed and tells the agent
+ * side, which may still be waiting for the captain to confirm them.
  */
 function announceConfirmed(service, confirmed) {
     if (confirmed.length === 0)
@@ -724,34 +804,31 @@ function announceConfirmed(service, confirmed) {
         return `${text}（id：${proposal.id}）`;
     });
     const text = `看板不再等確認，還在提議中的議題已確認：${lines.join("；")}`;
-    service.writes.submit({
-        channel: "auto",
-        home: MAIN_HOME,
-        task: null,
-        topic: null,
-        text,
-        plan: {
-            type: "note",
-            requestId: `tb-confirmed-${crypto.randomBytes(8).toString("hex")}`,
-            body: text,
-        },
-    });
+    submitNotice(service, { kind: "notice", event: "topic.confirmed", text }, null);
 }
-// Decisions firstmate is waiting on or has to act on. A reopening is left out:
-// the dispatchable notice already covers it.
-const DECISION_EVENTS = ["topic.merged", "topic.archived"];
-/** What the captain just decided on the page, as lines for firstmate; empty when it needs none. */
-function decisionLines(op, args, result) {
+// Decisions the agent side is waiting on or has to act on. A reopening is
+// left out: the dispatchable notice already covers it.
+const DECISION_EVENTS = {
+    "topic.merged": "topic.merged",
+    "topic.archived": "topic.archived",
+};
+/** What the captain just decided on the page; empty when it needs no notice. */
+function decisionNotices(op, args, result) {
     if (!result.changed)
         return [];
-    const lines = result.events
-        .filter((event) => DECISION_EVENTS.includes(event.kind))
-        .map((event) => `${event.text}（id：${event.topic}）`);
+    const notices = [];
+    for (const event of result.events) {
+        const kind = DECISION_EVENTS[event.kind];
+        if (kind === undefined)
+            continue;
+        notices.push({ event: kind, topic: event.topic, line: `${event.text}（id：${event.topic}）` });
+    }
     const id = stringField(args, "id");
     if (op !== "keep" || id === null)
-        return lines;
+        return notices;
     const kept = topics.resolveTopicId(result.state.doc, id);
-    return [`議題「${result.state.doc.topics[kept]?.name ?? kept}」先不關（id：${kept}）`];
+    const name = result.state.doc.topics[kept]?.name ?? kept;
+    return [{ event: "topic.kept", topic: kept, line: `議題「${name}」先不關（id：${kept}）` }];
 }
 /** True when the task `args` names is already marked as done by the captain. */
 function isClaimed(service, args) {
@@ -759,61 +836,69 @@ function isClaimed(service, args) {
     const todos = service.state.doc.todos;
     return task !== null && Object.hasOwn(todos, task) && todos[task]?.state === "claimed";
 }
-/** What firstmate has to check after the captain says a hands-on item is done. */
-function claimLines(service, args, result, alreadyClaimed) {
+/** What the agent has to check after the captain says a hands-on item is done. */
+function claimNotices(service, args, result, alreadyClaimed) {
     const task = stringField(args, "task");
     // A repeated claim can still change the file, by dropping the marks of items that are gone.
     if (!result.changed || task === null || alreadyClaimed)
         return [];
     const title = todoHold(service, task)?.title ?? task;
     const failed = `bin/myshape.sh todo failed ${task} --reason <一行>`;
-    return [
-        `「${title}」做完了（${task}）。驗證後跑 bin/myshape.sh todo done ${task}；沒成功就跑 ${failed}`,
-    ];
+    const line = `「${title}」做完了（${task}）。驗證後跑 bin/myshape.sh todo done ${task}；沒成功就跑 ${failed}`;
+    return [{ event: "todo.claimed", topic: null, line, item: { id: task, title, ref: task } }];
 }
 /**
- * Tells firstmate what the captain decided on the page. Firstmate proposes
- * closings and then waits; without this it would learn the outcome only by
- * asking.
+ * Tells the agent side what the captain decided on the page. The agent
+ * proposes closings and then waits; without this it would learn the outcome
+ * only by asking.
  */
-function notifyDecision(service, lines, topic) {
-    if (lines.length === 0)
-        return;
-    const text = `使用者在看板上：${lines.join("；")}`;
-    service.writes.submit({
-        channel: "auto",
-        home: MAIN_HOME,
-        task: null,
-        topic,
-        text,
-        plan: {
-            type: "note",
-            requestId: `tb-decision-${crypto.randomBytes(8).toString("hex")}`,
-            body: text,
-        },
-    });
+function notifyDecision(service, notices) {
+    for (const notice of notices) {
+        const text = `使用者在看板上：${notice.line}`;
+        submitNotice(service, {
+            kind: "notice",
+            event: notice.event,
+            text,
+            ...(notice.topic === null ? {} : { topic: topicRef(service, notice.topic) }),
+            ...(notice.item === undefined ? {} : { item: notice.item }),
+        }, notice.topic);
+    }
+}
+/** The records a change writes, each saying whether it came from the page or a command. */
+function withActor(result, actor) {
+    if (!result.ok || result.events.length === 0)
+        return result;
+    return {
+        ...result,
+        events: result.events.map((event) => ({ ...event, text: `${event.text}（${actor}）` })),
+    };
 }
 /**
  * Runs one topic operation. `fromPage` is true for the browser API: only then
- * is firstmate told, since over the socket it is firstmate itself asking.
+ * is the agent side told, since over the socket it is the agent itself asking.
+ * The captain's own presses are refused over the socket.
  */
 function topicOp(service, op, args, fromPage = false) {
     const handler = Object.hasOwn(TOPIC_HANDLERS, op) ? TOPIC_HANDLERS[op] : undefined;
     if (handler === undefined)
         return usage(`不認得的 op：${op}`);
+    if (!fromPage && PAGE_ONLY_OPS.includes(op))
+        return refused(`${op} 是使用者在頁面上按的，不能從指令送。`);
     const claimed = isClaimed(service, args);
     const recorded = service.state.doc.history.length;
     const handled = handler(service, args);
     if ("usage" in handled)
         return usage(handled.usage);
     const result = topics.stampHistory(handled, recorded, fromPage ? "page" : "command");
-    const response = commit(service, result);
+    const notices = [];
     if (fromPage && result.ok) {
-        const lines = op === "todo-claim"
-            ? claimLines(service, args, result, claimed)
-            : decisionLines(op, args, result);
-        notifyDecision(service, lines, result.events[0]?.topic ?? null);
+        notices.push(...(op === "todo-claim"
+            ? claimNotices(service, args, result, claimed)
+            : decisionNotices(op, args, result)));
     }
+    const actor = fromPage ? "在頁面上" : `${labelOf(service)} 用指令`;
+    const response = commit(service, withActor(result, actor));
+    notifyDecision(service, notices);
     return response;
 }
 /** Starts answering browser requests on the port this process already holds. */

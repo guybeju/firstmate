@@ -1,8 +1,12 @@
-// The JSON one home's fm-topic-board-read.sh prints, parsed and checked once
-// where it enters the service.
+// The JSON report the aggregator's feed prints for one home (contracts
+// section 4), parsed and checked once where it enters the service.
 import { isRecord, stringField, stringRecord, textField } from "./files.js";
 export const REPORT_SCHEMA = 1;
 const ON_ANSWER = ["close", "release"];
+export const HOLD_BUCKETS = ["live", "aged", "dated", "blocked"];
+/** How often a further home may be read, and how long one read may take, in seconds. */
+export const READ_EVERY_S = { min: 1, max: 3600 };
+export const READ_TIMEOUT_S = { min: 1, max: 3600 };
 function records(value) {
     return Array.isArray(value) ? value.filter(isRecord) : [];
 }
@@ -11,15 +15,21 @@ function strings(value) {
         ? value.filter((entry) => typeof entry === "string")
         : [];
 }
-const BUCKETS = ["live", "aged", "dated", "blocked"];
 function onAnswerOf(value) {
     const found = ON_ANSWER.find((name) => name === value);
     return found === undefined ? null : found;
 }
+/** A hold with no bucket is due now; an unknown word drops the hold. */
+function bucketOf(value) {
+    if (value === undefined || value === null)
+        return "live";
+    const found = HOLD_BUCKETS.find((name) => name === value);
+    return found === undefined ? null : found;
+}
 function parseHold(raw) {
     const id = stringField(raw, "id");
-    const bucket = BUCKETS.find((name) => name === raw["hold_bucket"]);
-    if (id === null || bucket === undefined)
+    const bucket = bucketOf(raw["hold_bucket"]);
+    if (id === null || bucket === null)
         return null;
     const age = raw["hold_age_days"];
     return {
@@ -83,12 +93,31 @@ function parseQueued(raw) {
         topic_hint: stringField(raw, "topic_hint"),
     }));
 }
-function parseSecondmate(raw) {
-    return withId(raw, (id) => ({
+/** A number of seconds within `bounds`, or null when `value` is not a finite number. */
+function seconds(value, bounds) {
+    if (typeof value !== "number" || !Number.isFinite(value))
+        return null;
+    return Math.min(bounds.max, Math.max(bounds.min, value));
+}
+const HOME_ID = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
+function parseFeedHome(raw) {
+    const id = stringField(raw, "id");
+    if (id === null || !HOME_ID.test(id) || id === "main")
+        return null;
+    return {
         id,
-        remote: raw["remote"] === true,
-        home: textField(raw, "home"),
-    }));
+        read_every_s: seconds(raw["read_every_s"], READ_EVERY_S),
+        read_timeout_s: seconds(raw["read_timeout_s"], READ_TIMEOUT_S),
+    };
+}
+function parseAggregator(raw) {
+    if (!isRecord(raw))
+        return null;
+    return {
+        name: stringField(raw, "name"),
+        label: stringField(raw, "label"),
+        update_hint: stringField(raw, "update_hint"),
+    };
 }
 function parseQuestion(raw) {
     return withId(raw, (id) => ({
@@ -126,7 +155,9 @@ export function parseReport(stdout) {
             status_decisions: records(raw["status_decisions"]).map(parseQuestion).filter(present),
             topics: stringRecord(raw["topics"]),
             ledger,
-            secondmates: records(raw["secondmates"]).map(parseSecondmate).filter(present),
+            ledger_hint: stringField(raw, "ledger_hint"),
+            aggregator: parseAggregator(raw["aggregator"]),
+            secondmates: records(raw["secondmates"]).map(parseFeedHome).filter(present),
         },
     };
 }

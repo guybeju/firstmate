@@ -55,9 +55,18 @@ function circumstances(entry: HistoryEntry): string {
 }
 
 function whatHappened(entry: HistoryEntry): string {
-  if (entry.kind === "archived") return "封存";
-  if (entry.kind === "reopened") return "重開";
-  return describeMove(entry, entry.kind);
+  switch (entry.kind) {
+    case "archived":
+      return "封存";
+    case "reopened":
+      return "重開";
+    case "moved":
+      return `移到「${entry.queue === undefined ? "？" : QUEUE_LABEL[entry.queue]}」第 ${entry.position ?? "？"}`;
+    case "goal":
+      return `目標改為「${entry.goal ?? "？"}」`;
+    default:
+      return describeMove(entry, entry.kind);
+  }
 }
 
 function describe(entry: HistoryEntry, everything: boolean): string {
@@ -93,8 +102,13 @@ function matchingTopics(state: TopicState, needle: string): string[] {
   return [...found];
 }
 
+/** Moves and goal changes are listed only when everything is asked for, so they never crowd out a merge or a split. */
+const DETAIL_KINDS = ["moved", "goal"];
+
 function topicLines(state: TopicState, id: string, everything: boolean): string[] {
-  const history = state.doc.history.filter((entry) => concerns(state, entry, id));
+  const history = state.doc.history.filter(
+    (entry) => concerns(state, entry, id) && (everything || !DETAIL_KINDS.includes(entry.kind)),
+  );
   const recorded = new Set(
     history.filter((entry) => entry.kind === "merged").map((entry) => entry.from),
   );

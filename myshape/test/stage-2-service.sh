@@ -70,8 +70,9 @@ test_recovers_from_a_crash() {
   tb_run "$home" "$TOPIC" rename keep "Still here" >/dev/null || fail "the next command must restart a crashed board"
   assert_not_equals "$pid" "$(tb_board_pid "$home")" "a new board must have replaced the killed one"
   assert_absent "$home/data/topics.json.tmp-99999" "a stale temp file must be removed at startup"
-  assert_equals 1 "$(wc -l < "$home/data/myshape/events.jsonl" | tr -d ' ')" \
-    "a half-written event line must be cut off at startup"
+  assert_equals 2 "$(wc -l < "$home/data/myshape/events.jsonl" | tr -d ' ')" \
+    "a half-written event line must be cut off at startup, leaving the create and the rename records"
+  assert_equals 0 "$(grep -c 'half' "$home/data/myshape/events.jsonl")" "the half-written line must be gone"
   tail -c 1 "$home/data/myshape/events.jsonl" | od -An -c | grep -q '\\n' ||
     fail "events.jsonl must end with a newline after recovery"
   tb_run "$home" "$TOPIC" stop >/dev/null

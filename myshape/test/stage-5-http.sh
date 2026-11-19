@@ -15,7 +15,7 @@ done
 TMP_ROOT=$(fm_test_tmproot tb-s5)
 trap 'tb_stop_boards; fm_test_cleanup' EXIT
 
-export MYSHAPE_TEST=1 MYSHAPE_LOCAL_MS=60000 MYSHAPE_REMOTE_MS=60000
+export MYSHAPE_TEST=1 MYSHAPE_READ_MS=60000
 export FM_SNAPSHOT_NOW=2026-07-25T00:00:00Z
 export TB_LOG="$TMP_ROOT/calls.log" TB_PLAY="$TMP_ROOT/play" TB_REMOTES="$TMP_ROOT/remotes"
 mkdir -p "$TB_PLAY" "$TB_REMOTES"
@@ -266,7 +266,7 @@ test_messages_and_writes() {
 test_quiet_polling_is_not_a_change() {
   local version
   t stop >/dev/null
-  MYSHAPE_LOCAL_MS=300 MYSHAPE_STALE_MS=4000 MYSHAPE_IDLE_MS=2000 t open >/dev/null
+  MYSHAPE_READ_MS=300 MYSHAPE_STALE_MS=4000 MYSHAPE_IDLE_MS=2000 t open >/dev/null
   AUTH="Authorization: Bearer $(cat "$MAIN/state/myshape/token")"
   curl -s -H "$AUTH" "$BASE/api/state" >/dev/null
   sleep 2
