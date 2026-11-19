@@ -4,6 +4,7 @@
 
 > 這一段的指令編號（R1 到 R3、W1 到 W9）與它們的結果怎麼判，是看板直接執行 first mate 的指令時的設計。
 > 現在看板只執行 `bin/fm-board.sh feed` 與 `deliver`（[contracts](contracts.markdown) 第 4、7 節），原本的指令與結果對應搬到 first mate 這一側（[adapter](../../fm-board/spec/adapter.markdown) 第 3 節）；這一段其餘的行為不變。
+> 「議題變成可派」的通知現在寫的是發生了什麼（contracts 7.1），每個議題、每個頁面上的決定各一則。
 
 ## 先驗再做
 

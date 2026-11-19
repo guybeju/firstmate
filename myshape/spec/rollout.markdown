@@ -28,7 +28,7 @@
    - 主 home：`bin/fm-board.sh setup`
    - 同機的 secondmate：`bin/fm-board.sh --in-home <id> setup`
    - 遠端：`bin/fm-on.sh <id> fm-board.sh setup`
-6. **確認每個 home 都在同一版**：`bin/myshape.sh open`，打開看板停留一分鐘以上（讓遠端輪到一次），再跑 `bin/myshape.sh status`。每個 home 都要是「相同」，沒有「還沒換到 fork」「版本不相容」「版本不同」「帳本未開」。
+6. **確認每個 home 都在同一版**：`bin/myshape.sh open`，打開看板停留一分鐘以上（讓遠端輪到一次），再跑 `bin/myshape.sh status`。每個 home 都要是「相同」，沒有「無法回報」（頁面上那個 home 的橫幅會寫原因，例如「還沒換到 fork」）「版本不相容」「版本不同」「帳本未開」。
 7. **最後才裝規則**：`bin/fm-board.sh install-rules`。共用段會叫每個 secondmate 跑 `fm-board.sh`，所以要等第 6 步全過。裝完重啟主 first mate 的 session；secondmate 在主 home 下一次 bootstrap 之後重啟。
 
 ## 上線時要驗的事

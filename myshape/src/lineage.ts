@@ -102,8 +102,13 @@ function matchingTopics(state: TopicState, needle: string): string[] {
   return [...found];
 }
 
+/** Moves and goal changes are listed only when everything is asked for, so they never crowd out a merge or a split. */
+const DETAIL_KINDS = ["moved", "goal"];
+
 function topicLines(state: TopicState, id: string, everything: boolean): string[] {
-  const history = state.doc.history.filter((entry) => concerns(state, entry, id));
+  const history = state.doc.history.filter(
+    (entry) => concerns(state, entry, id) && (everything || !DETAIL_KINDS.includes(entry.kind)),
+  );
   const recorded = new Set(
     history.filter((entry) => entry.kind === "merged").map((entry) => entry.from),
   );

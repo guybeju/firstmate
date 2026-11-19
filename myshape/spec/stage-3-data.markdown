@@ -4,6 +4,7 @@
 
 > 這一段的指令編號（R1 到 R3、W1 到 W9）與它們的結果怎麼判，是看板直接執行 first mate 的指令時的設計。
 > 現在看板只執行 `bin/fm-board.sh feed` 與 `deliver`（[contracts](contracts.markdown) 第 4、7 節），原本的指令與結果對應搬到 first mate 這一側（[adapter](../../fm-board/spec/adapter.markdown) 第 3 節）；這一段其餘的行為不變。
+> 「還沒換到 fork」現在是 first mate 的 feed 以 exit 4 給的那一行橫幅，`status` 對那種 home 印「無法回報」。
 
 ## 先驗再做
 

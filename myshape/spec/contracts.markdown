@@ -114,7 +114,7 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
   舊版程式留下的 `status: "proposed"` 議題，看板啟動時照建立時間排到它提議時的佇列（`suggested_queue`，沒有就是 `normal`）最後，立刻寫回檔案，每一個寫一筆系統紀錄並通知主 first mate；封存檔裡的同樣改成 `confirmed`，仍然留在封存。
   舊檔的 `proposed_by`、`suggested_queue` 讀了不用，下一次存檔就不再寫。
 - `merged` 是「舊 id → 新 id」，可以串接；讀到舊 id 的地方一律走到底。各 home 的標記檔不重寫。
-- `history` 是來歷紀錄，舊的在前，和議題的變動寫在同一次存檔裡。`kind` 是 `merged`、`renamed`、`split`、`archived`、`reopened`；`topic` 與 `name` 是變動之後留下來的議題，合併另記被併掉的 `from` 與 `from_name`，改名另記舊名字 `from_name`，拆分的 `topic` 是新議題、`from` 是它拆出來的來源。另有兩個可省略的欄位：`reason` 是原因（`merge`、`split` 帶的 `--reason`，或封存之前的關閉提議），`by` 是在哪裡做的，`page` 或 `command`（C50）。搬了哪些 task 不記在這裡，各 task 的標記檔本來就有每次標記的時間。沒有這個欄位的舊檔當成空的；讀不懂的項目略過。`myshape.sh find` 讀它。
+- `history` 是來歷紀錄，舊的在前，和議題的變動寫在同一次存檔裡。`kind` 是 `merged`、`renamed`、`split`、`archived`、`reopened`、`moved`、`goal`；`moved` 另記移到的 `queue` 與從 1 起算的 `position`，`goal` 另記新的 `goal`，這兩種 `find` 只在 `--all` 時印；`topic` 與 `name` 是變動之後留下來的議題，合併另記被併掉的 `from` 與 `from_name`，改名另記舊名字 `from_name`，拆分的 `topic` 是新議題、`from` 是它拆出來的來源。另有兩個可省略的欄位：`reason` 是原因（`merge`、`split` 帶的 `--reason`，或封存之前的關閉提議），`by` 是在哪裡做的，`page` 或 `command`（C50）。搬了哪些 task 不記在這裡，各 task 的標記檔本來就有每次標記的時間。沒有這個欄位的舊檔當成空的；讀不懂的項目略過。`myshape.sh find` 讀它。
 - `todos` 記要你動手的項目在「還沒做」之外的狀態，鍵是主 home 的 task id：`claimed`（使用者按了做完了，等 first mate 驗證）、`rejected`（first mate 驗證沒過，附 `reason`）、`obsolete`（first mate 不再需要，附 `reason`，等使用者撤下）。項目本身（標題、說明、指令、開或關）只在 backlog 的 hold 裡；這裡的紀錄只在對應的 hold 還開著時才顯示，hold 不在了的紀錄在下一次寫入時清掉。沒有這個欄位的舊檔當成空的；讀不懂的項目略過。
 - `close_proposal` 沒有就省略。
 - `next_seq` 是 `t<流水號>` 的下一個號碼，只增不減（採建議 C14）。
@@ -131,7 +131,7 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
 每行一個 JSON：
 
 - 帳本事件：`{"src":"ledger","home":"<home>","raw":"<上游帳本的那一行，原樣的字串>"}`。存原始字串而不是解析後的物件，重啟後才能用同樣的位元組去重。上游的事件有 `v`、`ts`（epoch 秒）、`event`、`task`，五種 `event`：`task.dispatched`、`task.status`、`task.pr_ready`、`task.merged`、`task.cleaned_up`。
-- 系統紀錄（`ts` 也是 epoch 秒）：`{"src":"board","ts":…,"kind":"topic.created|topic.confirmed|topic.merged|agent.tagged|hold.answered|topic.close_proposed|topic.archived|topic.reopened","topic":"<id>","home":…,"task":…,"text":"<顯示用的一行>"}`。議題層級的紀錄沒有 `home` 與 `task`。
+- 系統紀錄（`ts` 也是 epoch 秒）：`{"src":"board","ts":…,"kind":"topic.created|topic.confirmed|topic.merged|topic.split|topic.moved|topic.renamed|topic.goal_changed|agent.tagged|hold.answered|topic.close_proposed|topic.archived|topic.reopened","topic":"<id>","home":…,"task":…,"text":"<顯示用的一行>"}`。議題層級的紀錄沒有 `home` 與 `task`。
   `topic.confirmed` 只在看板啟動時確認舊版留下的提議時寫（第 3.1 節）；更早寫下的照樣顯示。
 
 去重的鍵是 (home, 帳本那一行的原始位元組)。啟動時讀完整個檔重建去重集合；最後一行沒有換行字元就截掉。
@@ -296,7 +296,7 @@ API 的路徑與 body 由第五段定；這裡只定兩件事：
 - `answer` 的 `mode` 照 hold 記下的處理方式（第 8 節），不是使用者選的；`question_sha256` 是問題全文的 SHA-256。
 - `tag` 的 `last_tag_line` 是看板送出時看到的那個 task 最後一行議題標記，沒有就是空字串。重試之前看板先重讀那個 home：標記已經是這個議題就算送達，已經被別人改成別的就算別處已處理。
 - `notice` 的 `event`：`topic.dispatchable`（議題離開「待辦」或重開，之後 30 秒沒再動）、`topic.merged`、`topic.archived`、`topic.kept`（先不關）、`topic.confirmed`（舊版留下的提議在啟動時確認）、`todo.claimed`（使用者按了做完了）。`text` 寫的是發生了什麼，例如「議題「帳務」重開，排在「高」最後，現在可派」，不寫要跑什麼。
-- 看板改版之前寫下、還沒送完的寫入（稽核紀錄裡帶 `plan` 而不是 `action` 的那些）照舊的種類換成上面的紀錄，`id` 不變；`message` 與 `notice` 另帶 `legacy_request_id`，是它當初的去重 key，送給 aggregator 的時候要用它而不是 `id`。這個換算只為了接上舊的紀錄，之後會拿掉。
+- 看板改版之前寫下、還沒送完的寫入（稽核紀錄裡帶 `plan` 而不是 `action` 的那些）照舊的種類換成上面的紀錄，`id` 不變；`message` 與 `notice` 另帶 `legacy_request_id`，是它當初的去重 key，送給 aggregator 的時候要用它而不是 `id`；`answer` 的 `question_sha256` 是 `-`，因為舊紀錄沒有存問題。這個換算只為了接上舊的紀錄，之後會拿掉。
 
 `deliver` 在 stdout 印一行結果：
 

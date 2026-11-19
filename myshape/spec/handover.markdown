@@ -168,7 +168,7 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
 - 頁面上只能用拖的改順序：沒有鍵盤可用的移法，原生拖放在 Chrome 上也還沒驗（第 3 節）；這兩種情況改用 `bin/myshape.sh move`（C55）。
 - 看板認一個 home 的依據是 `state/myshape/token`：全新的 home 要先 `open` 才能 `create`；`open` 在 secondmate 的 home 也不會被拒絕，那裡會開出另一個看板（沒有規則叫 second mate 跑它）。
 - 「要你動手」只支援主 home 的項目；按了「做完了」之後使用者不能自己收回；first mate 不能自己關掉項目，要使用者按「好，撤下」（C46）。
-- `find` 平常每個議題只印最近八筆來歷（`--all` 印全部）；來歷不記拖曳排序、改目標、建立議題；`split` 不帶 task 會建一個空議題，新名稱可以和來源相同。
+- `find` 平常每個議題只印最近八筆來歷（`--all` 印全部）；移動與改目標記在來歷裡，但只有 `--all` 才印，所以不會把合併、拆分擠掉；來歷不記建立議題；`split` 不帶 task 會建一個空議題，新名稱可以和來源相同。
 - `install-rules` 會換掉結束標記之後同一行的文字（有備份）；別處有一行以標記開頭時拒絕安裝（C37）。
 - 程式退回沒有 `history` 或 `todos` 欄位的舊版時，下一次存檔會丟掉這兩個欄位（見 [rollout](rollout.markdown)）。
 - first mate 自己直接做、沒有派 worker 的項目，在關掉之前會被 `order` 列在「可派」。
