@@ -55,9 +55,18 @@ function circumstances(entry: HistoryEntry): string {
 }
 
 function whatHappened(entry: HistoryEntry): string {
-  if (entry.kind === "archived") return "封存";
-  if (entry.kind === "reopened") return "重開";
-  return describeMove(entry, entry.kind);
+  switch (entry.kind) {
+    case "archived":
+      return "封存";
+    case "reopened":
+      return "重開";
+    case "moved":
+      return `移到「${entry.queue === undefined ? "？" : QUEUE_LABEL[entry.queue]}」第 ${entry.position ?? "？"}`;
+    case "goal":
+      return `目標改為「${entry.goal ?? "？"}」`;
+    default:
+      return describeMove(entry, entry.kind);
+  }
 }
 
 function describe(entry: HistoryEntry, everything: boolean): string {

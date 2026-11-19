@@ -33,6 +33,10 @@ export interface BoardPaths {
   boardDataDir: string;
   events: string;
   summaries: string;
+  /** The topics waiting out the delay before their dispatchable notice. */
+  notifyPending: string;
+  /** The aggregator block of the last root report, for texts written while no report is at hand. */
+  aggregator: string;
 }
 
 export function boardPaths(config: Pick<BoardConfig, "state" | "data">): BoardPaths {
@@ -53,6 +57,8 @@ export function boardPaths(config: Pick<BoardConfig, "state" | "data">): BoardPa
     boardDataDir,
     events: path.join(boardDataDir, "events.jsonl"),
     summaries: path.join(boardDataDir, "summaries.jsonl"),
+    notifyPending: path.join(boardDataDir, "notify-pending.json"),
+    aggregator: path.join(boardDataDir, "aggregator.json"),
   };
 }
 

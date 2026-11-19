@@ -1,5 +1,6 @@
 // The write engine, the four captain actions, and the browser API routes,
-// driven together against a scripted command runner.
+// driven together against a scripted deliverer.
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as actions from "./actions.js";
 import type { ActionContext, ActionResult } from "./actions.js";
 import { createApi } from "./api.js";
-import type { AllowedCommand, CommandResult, Secondmate } from "./commands.js";
+import type { AllowedCommand, CommandResult } from "./commands.js";
 import { ConfirmStore } from "./confirm.js";
 import type { ApiHandler } from "./http.js";
 import type { BoardResponse } from "./protocol.js";
@@ -15,32 +16,33 @@ import type { HomeReport, ReportHold } from "./report.js";
 import { emptyState } from "./topics.js";
 import type { TopicState } from "./topics.js";
 import type { HomeSnapshot } from "./view.js";
-import { WriteEngine, isDedupable } from "./writes.js";
-import type { WriteRecord, WriteTimings } from "./writes.js";
+import { WriteEngine, isDedupable, parseOutcome } from "./writes.js";
+import type { Action, WriteRecord, WriteTimings } from "./writes.js";
 
-const SECONDMATES: Secondmate[] = [
-  { id: "sm1", remote: false, home: "/h/sm1" },
-  { id: "far1", remote: true, home: "/h/far1" },
-  { id: "down", remote: true, home: "/h/down" },
-];
-const OK: CommandResult = { code: 0, stdout: "", stderr: "" };
 const exit = (code: number | null, stdout = "", stderr = ""): CommandResult => ({
   code,
   stdout,
   stderr,
 });
+const outcome = (name: string, error?: string): CommandResult =>
+  exit(
+    0,
+    `${JSON.stringify(error === undefined ? { outcome: name } : { outcome: name, error })}\n`,
+  );
+const DELIVERED = outcome("delivered");
 
 interface Harness {
   engine: WriteEngine;
   context: ActionContext;
-  calls: AllowedCommand[];
-  /** Results for the next commands of a kind, in order; anything unscripted succeeds. */
-  script: (kind: AllowedCommand["kind"], ...results: CommandResult[]) => void;
+  /** Every action record the deliverer received, parsed. */
+  calls: Record<string, unknown>[];
+  /** Results for the next deliverer runs, in order; anything unscripted is delivered. */
+  next: (...results: CommandResult[]) => void;
   tags: Map<string, string | null>;
   delivered: WriteRecord[];
   changes: () => number;
   audit: () => Record<string, unknown>[];
-  restart: (timings?: Partial<WriteTimings>) => Harness;
+  restart: (timings?: Partial<WriteTimings>, unavailable?: string | null) => Harness;
 }
 
 let dir: string;
@@ -74,6 +76,8 @@ function report(extra: Partial<HomeReport>): HomeReport {
     status_decisions: [],
     topics: {},
     ledger: { status: "absent", to_offset: 0, to_prefix_sha256: "-", more: false, lines: [] },
+    ledger_hint: null,
+    aggregator: null,
     secondmates: [],
     ...extra,
   };
@@ -93,16 +97,15 @@ const hold = (id: string, origin = "", extra: Partial<ReportHold> = {}): ReportH
 });
 
 function homes(): HomeSnapshot[] {
-  const snapshot = (id: string, remote: boolean, extra: Partial<HomeReport>): HomeSnapshot => ({
+  const snapshot = (id: string, extra: Partial<HomeReport>): HomeSnapshot => ({
     id,
-    remote,
     report: report(extra),
     lastOkAt: 1,
     error: null,
     version: "same",
   });
   return [
-    snapshot("main", false, {
+    snapshot("main", {
       holds: [
         hold("call-1", "ship-a"),
         hold("call-origin", "ship-a"),
@@ -113,47 +116,38 @@ function homes(): HomeSnapshot[] {
       ],
       topics: { "ship-a": "billing T", "call-1": "login T", tagged: "login T1\nbilling T2" },
     }),
-    snapshot("sm1", false, {
+    snapshot("w2", {
       holds: [
-        hold("call-sm", "", { on_answer: "close" }),
-        hold("todo-sm", "", { question: "動手：登入", on_answer: null }),
+        hold("call-w2", "", { on_answer: "close" }),
+        hold("todo-w2", "", { question: "動手：登入", on_answer: null }),
       ],
+      topics: { "w2-work": "billing T" },
     }),
-    snapshot("far1", true, {
-      holds: [hold("call-far", "", { on_answer: null })],
-      topics: { "far-work": "billing T" },
-    }),
-    {
-      id: "down",
-      remote: true,
-      report: null,
-      lastOkAt: null,
-      error: "unreachable",
-      version: "unknown",
-    },
+    { id: "down", report: null, lastOkAt: null, error: "unreachable", version: "unknown" },
   ];
 }
 
 function harness(
   timings: Partial<WriteTimings> = {},
+  unavailable: string | null = null,
   auditFile = path.join(dir, "audit.jsonl"),
 ): Harness {
-  const scripts = new Map<string, CommandResult[]>();
-  const calls: AllowedCommand[] = [];
+  const queue: CommandResult[] = [];
+  const calls: Record<string, unknown>[] = [];
   const tags = new Map<string, string | null>();
   const delivered: WriteRecord[] = [];
   let changes = 0;
   const engine = new WriteEngine(
     auditFile,
     {
-      run: async (command) => {
-        calls.push(command);
-        return scripts.get(command.kind)?.shift() ?? OK;
+      run: async (command: AllowedCommand) => {
+        if (command.kind !== "deliver") throw new Error("the engine only delivers");
+        calls.push(JSON.parse(command.record) as Record<string, unknown>);
+        return queue.shift() ?? DELIVERED;
       },
-      secondmates: () => SECONDMATES,
+      unavailable,
       readTags: async (home, task) =>
         tags.has(`${home}/${task}`) ? (tags.get(`${home}/${task}`) as string | null) : "",
-      prepare: async () => undefined,
       onChange: () => {
         changes += 1;
       },
@@ -164,9 +158,9 @@ function harness(
   open.push(engine);
   return {
     engine,
-    context: { topics: topics(), homes: homes(), secondmates: SECONDMATES, writes: engine },
+    context: { topics: topics(), homes: homes(), writes: engine },
     calls,
-    script: (kind, ...results) => scripts.set(kind, results),
+    next: (...results) => queue.push(...results),
     tags,
     delivered,
     changes: () => changes,
@@ -176,9 +170,11 @@ function harness(
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line) as Record<string, unknown>),
-    restart: (next = {}) => {
+    restart: (next = {}, nextUnavailable = unavailable) => {
       engine.stop();
-      return harness({ ...timings, ...next }, auditFile);
+      const restarted = harness({ ...timings, ...next }, nextUnavailable, auditFile);
+      restarted.engine.resumeUnfinished();
+      return restarted;
     },
   };
 }
@@ -206,8 +202,34 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+describe("the outcome line", () => {
+  it("is the last line of stdout naming one of the four outcomes", () => {
+    expect(parseOutcome(exit(0, 'log\n{"outcome":"delivered"}\n\n'))).toEqual({
+      kind: "delivered",
+    });
+    expect(parseOutcome(outcome("handled_elsewhere"))).toEqual({ kind: "handled_elsewhere" });
+    expect(parseOutcome(outcome("retry", "busy"))).toEqual({ kind: "retry", error: "busy" });
+    expect(parseOutcome(exit(1, '{"outcome":"failed","error":"no"}'))).toEqual({
+      kind: "failed",
+      error: "no",
+    });
+  });
+
+  it("is a failure with stderr when it is missing, unknown, or the run was killed", () => {
+    expect(parseOutcome(exit(0, "", ""))).toEqual({ kind: "failed", error: "exit 0" });
+    expect(parseOutcome(exit(3, "", "boom"))).toEqual({ kind: "failed", error: "boom" });
+    expect(parseOutcome(exit(0, '{"outcome":"maybe"}'))).toMatchObject({ kind: "failed" });
+    expect(parseOutcome(exit(null, "", "killed"))).toEqual({ kind: "failed", error: "killed" });
+    expect(parseOutcome(exit(0, '{"outcome":"retry"}', "slow"))).toEqual({
+      kind: "retry",
+      error: "slow",
+    });
+    expect(parseOutcome(exit(2, "", "x".repeat(700)))).toMatchObject({ error: "x".repeat(600) });
+  });
+});
+
 describe("message", () => {
-  it("sends one note naming the topic and records it", async () => {
+  it("hands over one record naming the topic, and records it", async () => {
     const h = harness();
     const write = sent(actions.message(h.context, "old", "  請先做帳務  ", "browser"));
     expect(write).toMatchObject({
@@ -223,16 +245,19 @@ describe("message", () => {
     await settled(write, "delivered");
     expect(h.calls).toEqual([
       {
-        kind: "note",
-        requestId: expect.stringMatching(/^tb-[0-9a-f]{16}$/),
-        body: "［議題：Billing（billing）］\n請先做帳務",
+        v: 1,
+        id: write.id,
+        attempt: 0,
+        kind: "message",
+        topic: { id: "billing", name: "Billing" },
+        text: "請先做帳務",
       },
     ]);
     expect(h.audit().map((line) => line["state"])).toEqual(["sending", "delivered"]);
     expect(h.audit()[0]).toMatchObject({
       write_id: write.id,
       attempt: 0,
-      sending: { text: "請先做帳務", plan: { type: "note" } },
+      sending: { text: "請先做帳務", action: { kind: "message" } },
     });
     expect(fs.statSync(path.join(dir, "audit.jsonl")).mode & 0o777).toBe(0o600);
     expect(h.delivered).toEqual([write]);
@@ -252,15 +277,13 @@ describe("message", () => {
     expect(actions.message(h.context, "billing", "x".repeat(4000), "socket").ok).toBe(true);
   });
 
-  it("replays a note that did not wake firstmate, then gives up as undelivered", async () => {
+  it("retries the same id when the deliverer says so, then gives up as undelivered", async () => {
     const h = harness();
-    h.script("note", exit(3, "", "saved, not woken"), exit(3), OK);
+    h.next(outcome("retry", "saved, not woken"), outcome("retry"), DELIVERED);
     const woken = sent(actions.message(h.context, "billing", "a", "browser"));
     await settled(woken, "delivered");
-    expect(
-      new Set(h.calls.map((call) => (call.kind === "note" ? call.requestId : ""))),
-    ).toHaveProperty("size", 1);
-    expect(h.calls).toHaveLength(3);
+    expect(h.calls.map((call) => call["id"])).toEqual([woken.id, woken.id, woken.id]);
+    expect(h.calls.map((call) => call["attempt"])).toEqual([0, 1, 2]);
     expect(h.audit().map((line) => `${String(line["state"])}:${String(line["attempt"])}`)).toEqual([
       "sending:0",
       "retrying:1",
@@ -268,10 +291,8 @@ describe("message", () => {
       "delivered:2",
     ]);
     expect(h.audit()[1]).toMatchObject({ error: "saved, not woken", next_at: expect.any(String) });
-    const retry = h.audit()[1] as { ts: string; next_at: string };
-    expect(Date.parse(retry.next_at)).toBeGreaterThanOrEqual(Date.parse(retry.ts));
 
-    h.script("note", exit(3), exit(3), exit(3, "", "still asleep"));
+    h.next(outcome("retry"), outcome("retry"), outcome("retry", "still asleep"));
     const stuck = sent(actions.message(h.context, "billing", "b", "browser"));
     await settled(stuck, "undelivered");
     expect(stuck.error).toBe("still asleep");
@@ -279,50 +300,32 @@ describe("message", () => {
     expect(h.delivered).toEqual([woken]);
   });
 
-  it("fails at once on any other exit code, with the reason", async () => {
+  it("settles at once as failed or handled elsewhere when the deliverer says so", async () => {
     const h = harness();
-    h.script("note", exit(1, "from stdout"), exit(null), exit(2, "", "x".repeat(700)));
+    h.next(outcome("failed", "no inbox"), exit(1, "", "crashed"), outcome("handled_elsewhere"));
     const first = sent(actions.message(h.context, "billing", "a", "browser"));
     const second = sent(actions.message(h.context, "billing", "b", "browser"));
     const third = sent(actions.message(h.context, "billing", "c", "browser"));
-    await settled(third, "failed");
-    expect(first).toMatchObject({ state: "failed", error: "from stdout", attempt: 0 });
-    expect(second.error).toBe("exit ?");
-    expect(third.error).toHaveLength(600);
+    await settled(third, "handled_elsewhere");
+    expect(first).toMatchObject({ state: "failed", error: "no inbox", attempt: 0 });
+    expect(second).toMatchObject({ state: "failed", error: "crashed" });
     expect(h.calls).toHaveLength(3);
+    expect(h.delivered).toEqual([]);
   });
 });
 
 describe("direct", () => {
-  it("writes to a main-home worker and relays through a secondmate otherwise", async () => {
+  it("names the home, the task, and the text, byte for byte", async () => {
     const h = harness();
     const main = sent(actions.direct(h.context, "main", "ship-a", "看一下 CI", "browser"));
-    const local = sent(actions.direct(h.context, "sm1", "sm-work", "同機", "browser"));
-    const remote = sent(actions.direct(h.context, "far1", "far-work", "遠端", "browser"));
-    await settled(remote, "delivered");
-    await settled(local, "delivered");
-    expect(main).toMatchObject({ topic: "billing", plan: { type: "send", task: "ship-a" } });
-    expect(local).toMatchObject({
-      topic: null,
-      plan: { type: "relay", secondmate: "sm1", remote: false },
-    });
-    expect(remote).toMatchObject({
-      topic: "billing",
-      plan: { type: "relay", secondmate: "far1", remote: true },
-    });
-    expect(h.calls).toContainEqual({ kind: "send", task: "ship-a", text: "看一下 CI" });
-    expect(h.calls).toContainEqual({
-      kind: "relay",
-      secondmate: "far1",
-      deliveryId: expect.stringMatching(/^[a-f0-9]{16}$/),
-      text: "轉給 far-work：遠端",
-    });
-    expect(h.calls).toContainEqual({
-      kind: "relay",
-      secondmate: "sm1",
-      deliveryId: expect.stringMatching(/^[a-f0-9]{16}$/),
-      text: "轉給 sm-work：同機",
-    });
+    const other = sent(actions.direct(h.context, "w2", "w2-work", 'a; $(id) "q"\n二', "browser"));
+    await settled(other, "delivered");
+    await settled(main, "delivered");
+    expect(h.calls.map(({ kind, home, task, text }) => ({ kind, home, task, text }))).toEqual([
+      { kind: "direct", home: "main", task: "ship-a", text: "看一下 CI" },
+      { kind: "direct", home: "w2", task: "w2-work", text: 'a; $(id) "q"\n二' },
+    ]);
+    expect(other.topic).toBe("billing");
   });
 
   it("refuses unknown homes, bad task ids, and command-like or oversized text", () => {
@@ -333,44 +336,16 @@ describe("direct", () => {
     expect(refused(actions.direct(h.context, "main", "-t", "x", "browser"))).toBe(
       "task id 格式不對：-t",
     );
-    expect(refused(actions.direct(h.context, "main", "t", "/compact", "browser"))).toContain(
-      "會被當成指令",
-    );
-    expect(refused(actions.direct(h.context, "far1", "t", "-x", "browser"))).toContain(
-      "會被當成指令",
-    );
+    for (const text of ["/compact", "$x", "!ls", " -x"]) {
+      expect(refused(actions.direct(h.context, "w2", "t", text, "browser"))).toContain(
+        "會被當成指令",
+      );
+    }
     expect(refused(actions.direct(h.context, "main", "t", "", "browser"))).toBe("訊息不能是空的。");
     expect(refused(actions.direct(h.context, "main", "t", "x".repeat(4001), "browser"))).toBe(
       "訊息最多 4000 個字。",
     );
     expect(h.calls).toEqual([]);
-    expect(actions.direct(h.context, "main", "t", "x".repeat(4000), "browser").ok).toBe(true);
-  });
-
-  it("retries an unconfirmed remote relay with the same id, but not a local one or a plain send", async () => {
-    const h = harness();
-    h.script("relay", exit(3), OK, exit(3, "", "local unconfirmed"));
-    const remote = sent(actions.direct(h.context, "far1", "w", "a", "browser"));
-    await settled(remote, "delivered");
-    const relays = h.calls.filter((call) => call.kind === "relay");
-    expect(relays).toHaveLength(2);
-    expect(relays[0]).toEqual(relays[1]);
-    const local = sent(actions.direct(h.context, "sm1", "w", "b", "browser"));
-    await settled(local, "failed");
-    expect(local.error).toBe("local unconfirmed");
-    h.script("relay", exit(1, "", "no such secondmate"));
-    const broken = sent(actions.direct(h.context, "far1", "w", "c", "browser"));
-    await settled(broken, "failed");
-    h.script("send", exit(3, "", "typed, unconfirmed"));
-    const plain = sent(actions.direct(h.context, "main", "w", "d", "browser"));
-    await settled(plain, "failed");
-    expect(plain.error).toBe("typed, unconfirmed");
-    const upstream =
-      "error: target 'w' is not resolvable (tried meta=/h/state/w.meta; backend=none). Use fm-w";
-    h.script("send", exit(1, "", upstream));
-    const ended = sent(actions.direct(h.context, "main", "w", "e", "browser"));
-    await settled(ended, "failed");
-    expect(ended.error).toBe("這個 worker 已經結束或找不到，訊息沒有送出。");
   });
 });
 
@@ -379,502 +354,435 @@ describe("answer", () => {
     home: "main",
     task: "call-1",
     answer: "合併",
-    label: "合併",
+    label: "A",
     ...extra,
   });
 
-  it("records the answer on the hold, then tells firstmate once", async () => {
+  it("hands over the answer with the mode the hold recorded and the question's digest", async () => {
     const h = harness();
-    h.script("answer", exit(0, "closed: call-1\nanswers: closed=1 skipped=0"));
     const write = sent(actions.answer(h.context, input(), "browser"));
-    expect(write).toMatchObject({ home: "main", task: "call-1", topic: "login", text: "合併" });
     await settled(write, "delivered");
     expect(h.calls).toEqual([
-      { kind: "answer", placement: "main", line: "call-1\t合併\t合併\trelease" },
       {
-        kind: "note",
-        requestId: `tb-${write.id}-note`,
-        body: "［議題：Login］已在看板回答 main/call-1：合併",
+        v: 1,
+        id: write.id,
+        attempt: 0,
+        kind: "answer",
+        home: "main",
+        task: "call-1",
+        answer: "合併",
+        label: "A",
+        mode: "release",
+        question_sha256: crypto.createHash("sha256").update("q of call-1").digest("hex"),
+        topic: { id: "login", name: "Login" },
       },
     ]);
-    expect(h.audit().map((line) => line["step"] ?? line["state"])).toEqual([
-      "sending",
-      "answered",
-      "delivered",
-    ]);
+    expect(h.delivered).toEqual([write]);
   });
 
-  it("places the answer where the hold lives and names the topic by task, origin, or neither", async () => {
+  it("names the topic by the task, its origin, or none, and the home the hold lives in", async () => {
     const h = harness();
-    h.script(
-      "answer",
-      exit(0, "closed: call-sm"),
-      exit(0, "closed: call-far"),
-      exit(0, "closed: call-origin"),
-      exit(0, "closed: call-loose"),
-    );
-    const local = sent(
-      actions.answer(h.context, input({ home: "sm1", task: "call-sm" }), "browser"),
-    );
-    await settled(local, "delivered");
-    const remote = sent(
-      actions.answer(h.context, input({ home: "far1", task: "call-far" }), "browser"),
-    );
-    await settled(remote, "delivered");
     const viaOrigin = sent(actions.answer(h.context, input({ task: "call-origin" }), "browser"));
-    await settled(viaOrigin, "delivered");
     const loose = sent(actions.answer(h.context, input({ task: "call-loose" }), "browser"));
-    await settled(loose, "delivered");
-    const answers = h.calls.filter((call) => call.kind === "answer");
-    expect(answers[0]).toEqual({
-      kind: "answer",
-      placement: "local",
-      secondmate: "sm1",
-      line: "call-sm\t合併\t合併\tdone",
-    });
-    expect(answers[1]).toEqual({
-      kind: "answer",
-      placement: "remote",
-      secondmate: "far1",
-      line: "call-far\t合併\t合併\trelease",
-    });
+    const other = sent(actions.answer(h.context, input({ home: "w2", task: "call-w2" }), "socket"));
+    await settled(other, "delivered");
     expect(viaOrigin.topic).toBe("billing");
+    expect(
+      Object.fromEntries(
+        h.calls.map((call) => [String(call["task"]), [call["home"], call["topic"]]]),
+      ),
+    ).toEqual({
+      "call-origin": ["main", { id: "billing", name: "Billing" }],
+      "call-loose": ["main", null],
+      "call-w2": ["w2", null],
+    });
     expect(loose.topic).toBeNull();
-    const notes = h.calls
-      .filter((call) => call.kind === "note")
-      .map((call) => (call.kind === "note" ? call.body : ""));
-    expect(notes).toEqual([
-      "［議題：未分類］已在看板回答 sm1/call-sm：合併",
-      "［議題：未分類］已在看板回答 far1/call-far：合併",
-      "［議題：Billing］已在看板回答 main/call-origin：合併",
-      "［議題：未分類］已在看板回答 main/call-loose：合併",
-    ]);
   });
 
   it("closes or releases as the hold recorded; unrecorded, only a main-home hands-on item closes", async () => {
     const h = harness();
-    const modeOf = async (home: string, task: string): Promise<string | undefined> => {
-      h.script("answer", exit(0, `closed: ${task}`));
-      await settled(sent(actions.answer(h.context, input({ home, task }), "browser")), "delivered");
-      const last = h.calls.filter((call) => call.kind === "answer").at(-1);
-      return last?.kind === "answer" ? last.line.split("\t")[3] : undefined;
+    const modeOf = async (home: string, task: string): Promise<unknown> => {
+      const write = sent(actions.answer(h.context, input({ home, task }), "browser"));
+      await settled(write, "delivered");
+      return h.calls[h.calls.length - 1]?.["mode"];
     };
     expect(await modeOf("main", "call-1")).toBe("release");
-    expect(await modeOf("sm1", "call-sm")).toBe("done");
+    expect(await modeOf("w2", "call-w2")).toBe("done");
     expect(await modeOf("main", "call-old")).toBe("release");
-    expect(await modeOf("far1", "call-far")).toBe("release");
     expect(await modeOf("main", "todo-old")).toBe("done");
     expect(await modeOf("main", "todo-kept")).toBe("release");
-    expect(await modeOf("sm1", "todo-sm")).toBe("release");
-  });
-
-  it("reads the verdict line for its task, not the exit code", async () => {
-    const h = harness();
-    const run = async (
-      result: CommandResult,
-      extra: Partial<actions.AnswerInput> = {},
-    ): Promise<WriteRecord> => {
-      h.script("answer", result);
-      const write = sent(actions.answer(h.context, input(extra), "browser"));
-      await vi.waitFor(() => expect(["sending", "retrying"]).not.toContain(write.state), {
-        timeout: 2000,
-        interval: 2,
-      });
-      return write;
-    };
-    expect(
-      (await run(exit(1, "skipped: call-1 (already closed)\nanswers: closed=0 skipped=1"))).state,
-    ).toBe("handled_elsewhere");
-    const elsewhere =
-      "skipped: call-1 (task call-1 records a different captain decision with mode released)";
-    expect((await run(exit(1, `${elsewhere}\nanswers: closed=0 skipped=1`))).state).toBe(
-      "handled_elsewhere",
-    );
-    const refusedAway = await run(exit(1, "refused: call-1 (away posture)"));
-    expect(refusedAway).toMatchObject({ state: "failed", error: "refused: call-1 (away posture)" });
-    const released = await run(exit(1, "skipped: call-1 (not held for the captain)"));
-    expect(released).toMatchObject({ state: "handled_elsewhere", error: null });
-    expect(
-      (await run(exit(1, "closed: call-10\nskipped: other (already closed)", "tasks-axi missing")))
-        .error,
-    ).toBe("tasks-axi missing");
-    const answers = (): number => h.calls.filter((call) => call.kind === "answer").length;
-    const before = answers();
-    expect((await run(exit(255, "", "ssh died"))).state).toBe("failed");
-    expect(answers()).toBe(before + 1);
-    const remote = await run(exit(1, "", "remote said no"), { home: "far1", task: "call-far" });
-    expect(remote).toMatchObject({ state: "failed", error: "remote said no" });
-    expect(answers()).toBe(before + 2);
-    expect((await run(exit(0, ""))).error).toBe("exit 0");
-    expect((await run(exit(0, "  closed: call-1  "))).state).toBe("delivered");
-    expect(h.calls.filter((call) => call.kind === "note")).toHaveLength(1);
-  });
-
-  it("retries a remote transport failure by replaying the same line", async () => {
-    const h = harness();
-    h.script("answer", exit(255, "", "ssh died"), exit(0, "closed: call-far"));
-    const write = sent(
-      actions.answer(h.context, input({ home: "far1", task: "call-far" }), "browser"),
-    );
-    await settled(write, "delivered");
-    const answers = h.calls.filter((call) => call.kind === "answer");
-    expect(answers).toHaveLength(2);
-    expect(answers[0]).toEqual(answers[1]);
-  });
-
-  it("does not answer again when only the notice has to be retried", async () => {
-    const h = harness();
-    h.script("answer", exit(0, "closed: call-1"));
-    h.script("note", exit(3), OK);
-    const write = sent(actions.answer(h.context, input(), "browser"));
-    await settled(write, "delivered");
-    expect(h.calls.map((call) => call.kind)).toEqual(["answer", "note", "note"]);
+    expect(await modeOf("w2", "todo-w2")).toBe("release");
   });
 
   it("refuses a missing hold, an unknown home, and answers that are not one clean line", () => {
     const h = harness();
     expect(refused(actions.answer(h.context, input({ task: "nope" }), "browser"))).toContain(
-      "main/nope 沒有等你回答的待決事項",
+      "沒有等你回答",
     );
     expect(refused(actions.answer(h.context, input({ home: "down" }), "browser"))).toContain(
-      "down/call-1 沒有等你回答的待決事項",
+      "沒有等你回答",
     );
     expect(refused(actions.answer(h.context, input({ home: "nobody" }), "browser"))).toBe(
       "不認得 home nobody。",
     );
-    expect(refused(actions.answer(h.context, input({ home: "sm1" }), "browser"))).toContain(
-      "sm1/call-1",
-    );
     expect(refused(actions.answer(h.context, input({ task: "bad id" }), "browser"))).toContain(
-      "格式不對",
+      "task id",
     );
-    for (const answer of ["", "  ", "a\tb", "a\nb", "a\rb", "x".repeat(1001)]) {
+    for (const answer of ["", "a\tb", "a\nb", "x".repeat(1001)]) {
       expect(refused(actions.answer(h.context, input({ answer }), "browser"))).toContain("答案");
     }
     expect(refused(actions.answer(h.context, input({ label: "a\tb" }), "browser"))).toContain(
       "選項",
     );
-    expect(actions.answer(h.context, input({ answer: "x".repeat(1000) }), "browser").ok).toBe(true);
+    expect(h.calls).toEqual([]);
   });
 });
 
 describe("tagAgent", () => {
-  it("tags in the home the task lives in, recording the tag it saw", async () => {
+  it("files a task in the home it lives in, with the tag line it saw", async () => {
     const h = harness();
     const main = sent(actions.tagAgent(h.context, "main", "tagged", "old", "browser"));
-    const local = sent(actions.tagAgent(h.context, "sm1", "sm-loose", "login", "browser"));
-    const remote = sent(actions.tagAgent(h.context, "far1", "far-loose", "login", "browser"));
-    await settled(remote, "delivered");
-    await settled(local, "delivered");
-    await settled(main, "delivered");
-    expect(main).toMatchObject({
-      topic: "billing",
-      text: "歸到「Billing」",
-      plan: {
-        type: "tag",
-        placement: "main",
-        task: "tagged",
-        topic: "billing",
-        lastLineAtSend: "billing T2",
-      },
-    });
-    expect(local.plan).toMatchObject({ placement: "local", lastLineAtSend: "" });
-    expect(h.calls).toContainEqual({
-      kind: "tag",
-      placement: "main",
-      task: "tagged",
-      topic: "billing",
-    });
-    expect(h.calls).toContainEqual({
-      kind: "tag",
-      placement: "local",
-      secondmate: "sm1",
-      task: "sm-loose",
-      topic: "login",
-    });
-    expect(h.calls).toContainEqual({
-      kind: "tag",
-      placement: "remote",
-      secondmate: "far1",
-      task: "far-loose",
-      topic: "login",
-    });
-    expect(h.delivered).toHaveLength(3);
+    const other = sent(actions.tagAgent(h.context, "w2", "w2-work", "login", "browser"));
+    const fresh = sent(actions.tagAgent(h.context, "main", "fresh", "login", "browser"));
+    await settled(fresh, "delivered");
+    expect(main).toMatchObject({ topic: "billing", text: "歸到「Billing」" });
+    expect(other.home).toBe("w2");
+    expect(
+      h.calls.map(({ kind, home, task, topic, last_tag_line }) => ({
+        kind,
+        home,
+        task,
+        topic,
+        last_tag_line,
+      })),
+    ).toEqual([
+      { kind: "tag", home: "main", task: "tagged", topic: "billing", last_tag_line: "billing T2" },
+      { kind: "tag", home: "w2", task: "w2-work", topic: "login", last_tag_line: "billing T" },
+      { kind: "tag", home: "main", task: "fresh", topic: "login", last_tag_line: "" },
+    ]);
   });
 
   it("refuses archived or unknown topics, unknown homes, and bad task ids", () => {
     const h = harness();
-    expect(sent(actions.tagAgent(h.context, "down", "t", "login", "browser")).plan).toMatchObject({
-      placement: "remote",
-      lastLineAtSend: "",
-    });
-    for (const topic of ["gone", "nope"]) {
-      expect(refused(actions.tagAgent(h.context, "main", "t", topic, "browser"))).toBe(
-        `${topic} 不是看板上還開著的議題。`,
-      );
-    }
+    expect(refused(actions.tagAgent(h.context, "main", "t", "gone", "browser"))).toContain(
+      "不是看板上還開著的議題",
+    );
+    expect(refused(actions.tagAgent(h.context, "main", "t", "nope", "browser"))).toContain(
+      "不是看板上還開著的議題",
+    );
     expect(refused(actions.tagAgent(h.context, "nobody", "t", "login", "browser"))).toBe(
       "不認得 home nobody。",
     );
-    expect(refused(actions.tagAgent(h.context, "main", "a b", "login", "browser"))).toContain(
-      "格式不對",
+    expect(refused(actions.tagAgent(h.context, "main", "-t", "login", "browser"))).toContain(
+      "task id",
     );
   });
 
-  it("reconciles against a fresh read before every retry", async () => {
-    const h = harness();
-    const tag = (task: string): WriteRecord =>
-      sent(actions.tagAgent(h.context, "far1", task, "login", "browser"));
-    const count = (task: string): number =>
-      h.calls.filter((call) => call.kind === "tag" && call.task === task).length;
-
-    h.script("tag", exit(255, "", "ssh died"));
-    h.tags.set("far1/landed", "billing T0\nlogin T1");
-    const landed = tag("landed");
+  it("reads the home afresh before every retry and settles from what it finds", async () => {
+    const h = harness({ retryDelaysMs: [5, 5, 5] });
+    h.next(outcome("retry", "busy"));
+    h.tags.set("main/landed", "login T1\nbilling T3");
+    const landed = sent(actions.tagAgent(h.context, "main", "landed", "billing", "browser"));
     await settled(landed, "delivered");
-    expect(count("landed")).toBe(1);
+    expect(h.calls).toHaveLength(1);
 
-    h.script("tag", exit(255));
-    h.tags.set("far1/taken", "billing T9");
-    const taken = tag("taken");
-    await settled(taken, "handled_elsewhere");
-    expect(count("taken")).toBe(1);
+    h.next(outcome("retry", "busy"));
+    h.tags.set("main/moved", "other T9");
+    const moved = sent(actions.tagAgent(h.context, "main", "moved", "billing", "browser"));
+    await settled(moved, "handled_elsewhere");
+    expect(h.calls).toHaveLength(2);
 
-    h.script("tag", exit(255), OK);
-    const unchanged = tag("unchanged");
-    await settled(unchanged, "delivered");
-    expect(count("unchanged")).toBe(2);
+    h.next(outcome("retry", "busy"));
+    h.tags.set("main/unread", null);
+    const unread = sent(actions.tagAgent(h.context, "main", "unread", "billing", "browser"));
+    await settled(unread, "undelivered");
+    expect(unread.error).toBe("對帳時讀不到那個 home。");
 
-    h.script("tag", exit(255), exit(255), exit(255));
-    h.tags.set("far1/unreachable", null);
-    const unreachable = tag("unreachable");
-    await settled(unreachable, "undelivered");
-    expect(unreachable.error).toBe("對帳時讀不到那個 home。");
-    expect(count("unreachable")).toBe(1);
-
-    h.script("tag", exit(255, "", "main cannot be unreachable"), exit(1, "", "refused"));
-    const local = sent(actions.tagAgent(h.context, "main", "x", "login", "browser"));
-    await settled(local, "failed");
-    expect(local.error).toBe("main cannot be unreachable");
+    h.next(outcome("retry", "busy"));
+    const again = sent(actions.tagAgent(h.context, "main", "again", "billing", "browser"));
+    await settled(again, "delivered");
+    expect(h.calls.slice(-2).map((call) => call["task"])).toEqual(["again", "again"]);
   });
 });
 
 describe("resend and ignore", () => {
   it("resends a failed write under the same id and ignores on request", async () => {
     const h = harness();
-    h.script("send", exit(1, "", "no such task"));
-    const write = sent(actions.direct(h.context, "main", "t", "hi", "browser"));
+    h.next(outcome("failed", "no"));
+    const write = sent(actions.message(h.context, "billing", "a", "browser"));
     await settled(write, "failed");
+    expect(h.engine.resend("nope", false)).toBe("沒有這筆寫入。");
     expect(h.engine.resend(write.id, false)).toBeNull();
     await settled(write, "delivered");
-    expect(write.error).toBeNull();
-    expect(h.audit().map((line) => line["state"])).toEqual([
-      "sending",
-      "failed",
-      "sending",
-      "delivered",
-    ]);
+    expect(h.calls.map((call) => call["id"])).toEqual([write.id, write.id]);
     expect(h.engine.resend(write.id, false)).toBe("這筆寫入不需要重送。");
     expect(h.engine.ignore(write.id)).toBe("這筆寫入不需要忽略。");
-    expect(h.engine.resend("nope", true)).toBe("沒有這筆寫入。");
-    expect(h.engine.ignore("nope")).toBe("沒有這筆寫入。");
 
-    h.script("send", exit(1));
-    const dropped = sent(actions.direct(h.context, "main", "t", "bye", "browser"));
-    await settled(dropped, "failed");
-    expect(h.engine.ignore(dropped.id)).toBeNull();
-    expect(dropped.state).toBe("ignored");
-    expect(h.engine.resend(dropped.id, true)).toBe("這筆寫入不需要重送。");
+    h.next(outcome("failed", "no"));
+    const other = sent(actions.message(h.context, "billing", "b", "browser"));
+    await settled(other, "failed");
+    expect(h.engine.ignore(other.id)).toBeNull();
+    expect(other.state).toBe("ignored");
   });
 
-  it("resets the retry count on a resend and reconciles a resent tag first", async () => {
+  it("needs confirmation to resend an unknown write", async () => {
     const h = harness();
-    h.script("note", exit(3), exit(3), exit(3));
-    const note = sent(actions.message(h.context, "billing", "a", "browser"));
-    await settled(note, "undelivered");
-    expect(note.attempt).toBe(2);
-    expect(h.engine.resend(note.id, false)).toBeNull();
-    expect(note.attempt).toBe(0);
-    await settled(note, "delivered");
-
-    h.script("tag", exit(1, "", "refused"));
-    const tag = sent(actions.tagAgent(h.context, "main", "t", "login", "browser"));
-    await settled(tag, "failed");
-    h.tags.set("main/t", "login T5");
-    h.engine.resend(tag.id, false);
-    await settled(tag, "delivered");
-    expect(h.calls.filter((call) => call.kind === "tag")).toHaveLength(1);
+    const write = sent(actions.direct(h.context, "main", "t", "x", "browser"));
+    await settled(write, "delivered");
+    write.state = "unknown";
+    expect(h.engine.resend(write.id, false)).toContain("需要先確認");
+    expect(h.engine.resend(write.id, true)).toBeNull();
+    await settled(write, "delivered");
   });
 });
 
 describe("restart", () => {
-  it("knows which writes are safe to repeat", () => {
-    expect(isDedupable({ type: "note", requestId: "r", body: "b" })).toBe(true);
-    expect(isDedupable({ type: "send", task: "t" })).toBe(false);
-    expect(isDedupable({ type: "relay", secondmate: "s", remote: true, deliveryId: "d" })).toBe(
-      true,
-    );
-    expect(isDedupable({ type: "relay", secondmate: "s", remote: false, deliveryId: "d" })).toBe(
-      false,
-    );
-    expect(
-      isDedupable({
-        type: "answer",
-        placement: "local",
-        line: "l",
-        noteBody: "n",
-        answered: false,
-      }),
-    ).toBe(true);
-    expect(
-      isDedupable({ type: "tag", placement: "main", task: "t", topic: "x", lastLineAtSend: "" }),
-    ).toBe(true);
+  it("knows that every kind but direct is safe to repeat", () => {
+    const kinds: Action[] = [
+      { kind: "message", topic: { id: "a", name: "A" }, text: "x" },
+      { kind: "notice", event: "topic.kept", text: "x" },
+      { kind: "tag", home: "main", task: "t", topic: "a", last_tag_line: "" },
+      {
+        kind: "answer",
+        home: "w2",
+        task: "t",
+        answer: "a",
+        label: "a",
+        mode: "done",
+        question_sha256: "-",
+        topic: null,
+      },
+    ];
+    for (const action of kinds) expect(isDedupable(action)).toBe(true);
+    expect(isDedupable({ kind: "direct", home: "w2", task: "t", text: "x" })).toBe(false);
   });
 
-  it("continues a safe write, flags an unsafe one, and expires an old one", async () => {
-    const slow = { retryDelaysMs: [60_000, 60_000] };
-    const h = harness(slow);
-    h.script("note", exit(3));
-    h.script("answer", exit(0, "closed: call-1"));
-    const note = sent(actions.message(h.context, "billing", "resume me", "browser"));
-    await settled(note, "retrying");
-    h.script("note", exit(3));
-    const answered = sent(
-      actions.answer(
-        h.context,
-        { home: "main", task: "call-1", answer: "好", label: "好" },
-        "browser",
-      ),
-    );
-    await settled(answered, "retrying");
-    h.script("answer", exit(255, "", "ssh died"));
-    const unanswered = sent(
-      actions.answer(
-        h.context,
-        { home: "far1", task: "call-far", answer: "好", label: "好" },
-        "browser",
-      ),
-    );
-    await settled(unanswered, "retrying");
-    h.script("tag", exit(255));
-    const tagged = sent(actions.tagAgent(h.context, "far1", "far-loose", "login", "browser"));
-    await settled(tagged, "retrying");
-    const hanging = new Promise<CommandResult>(() => undefined);
-    h.script("send", hanging as unknown as CommandResult);
-    const send = sent(actions.direct(h.context, "main", "t", "mid-flight", "browser"));
-    const relayLocal = sent(actions.direct(h.context, "sm1", "t", "mid-flight too", "browser"));
-    void relayLocal;
-
-    const after = h.restart({ retryDelaysMs: [5, 5] });
-    expect(after.engine.records.get(note.id)).toMatchObject({
-      state: "retrying",
-      attempt: 1,
-      text: "resume me",
-    });
-    after.tags.set("far1/far-loose", "login T9");
-    after.script("answer", exit(0, "closed: call-far"));
-    await after.engine.resumeUnfinished();
-    const resumed = after.engine.records.get(note.id) as WriteRecord;
-    await settled(resumed, "delivered");
-    await settled(after.engine.records.get(answered.id) as WriteRecord, "delivered");
-    await settled(after.engine.records.get(unanswered.id) as WriteRecord, "delivered");
-    await settled(after.engine.records.get(tagged.id) as WriteRecord, "delivered");
-    // The hold answered before the restart is not answered again; the one that never landed is.
-    // The tag that turned out to be in place is not written again.
-    expect(after.calls.map((call) => call.kind).toSorted()).toEqual([
-      "answer",
-      "note",
-      "note",
-      "note",
-    ]);
-    expect(after.calls).toContainEqual({
-      kind: "note",
-      requestId: `tb-${answered.id}-note`,
-      body: expect.stringContaining("main/call-1：好"),
-    });
-    expect(after.engine.records.get(send.id)).toMatchObject({
-      state: "unknown",
-      error: expect.stringContaining("重啟"),
-    });
-    expect(after.engine.resend(send.id, false)).toContain("需要先確認");
-    expect(after.engine.resend(send.id, true)).toBeNull();
-    await settled(after.engine.records.get(send.id) as WriteRecord, "delivered");
-
-    const again = after.restart();
-    await again.engine.resumeUnfinished();
-    expect(again.calls).toEqual([]);
-    expect(again.engine.records.get(note.id)?.state).toBe("delivered");
-  });
-
-  it("does not send a write older than the resume window", async () => {
+  it("continues a safe write with its id, and flags an unfinished direct message", async () => {
     const h = harness({ retryDelaysMs: [60_000] });
-    h.script("note", exit(3));
-    const note = sent(actions.message(h.context, "billing", "stale", "browser"));
+    h.next(outcome("retry"), outcome("retry"));
+    const note = sent(actions.message(h.context, "billing", "a", "browser"));
+    const direct = sent(actions.direct(h.context, "w2", "w2-work", "b", "browser"));
     await settled(note, "retrying");
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    const after = h.restart({ resumeWindowMs: 10 });
-    await after.engine.resumeUnfinished();
-    expect(after.engine.records.get(note.id)).toMatchObject({
-      state: "undelivered",
-      error: expect.stringContaining("放太久"),
+    await settled(direct, "retrying");
+    const after = h.restart({ retryDelaysMs: [5] });
+    await settled(after.engine.records.get(note.id) as WriteRecord, "delivered");
+    expect(after.calls.map((call) => call["id"])).toEqual([note.id]);
+    expect(after.engine.records.get(direct.id)).toMatchObject({
+      state: "unknown",
+      error: "看板在送出途中重啟，不知道有沒有送到。",
     });
-    expect(after.calls).toEqual([]);
-    const fresh = h.restart({ resumeWindowMs: 60_000 });
-    expect(fresh.engine.records.get(note.id)?.state).toBe("undelivered");
   });
 
-  it("still resumes a write exactly as old as the resume window", async () => {
-    const file = path.join(dir, "aged.jsonl");
-    const now = Date.parse("2026-11-16T00:00:00Z");
-    const record = {
-      id: "w-aged",
-      channel: "browser",
-      home: "main",
-      task: null,
-      topic: "billing",
-      text: "x",
-      plan: { type: "note", requestId: "r-aged", body: "b" },
+  it("does not resume a write older than the resume window", async () => {
+    const h = harness({ retryDelaysMs: [60_000] });
+    h.next(outcome("retry"));
+    const note = sent(actions.message(h.context, "billing", "a", "browser"));
+    await settled(note, "retrying");
+    const after = h.restart({ resumeWindowMs: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(after.engine.records.get(note.id)?.state).toBe("undelivered");
+    expect(after.calls).toEqual([]);
+  });
+
+  it("ignores audit lines that are not about a write", () => {
+    const file = path.join(dir, "audit.jsonl");
+    fs.writeFileSync(file, '{"rejected":"host"}\nnot json\n{"write_id":"w-x"}\n');
+    expect(harness().engine.records.size).toBe(0);
+  });
+});
+
+describe("no deliverer", () => {
+  it("leaves every write waiting at attempt 0, with nothing run and nothing failed", async () => {
+    const h = harness({}, "沒有 bin/fm-board.sh");
+    const message = sent(actions.message(h.context, "billing", "a", "browser"));
+    const direct = sent(actions.direct(h.context, "main", "ship-a", "b", "browser"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect([message.state, direct.state]).toEqual(["waiting", "waiting"]);
+    expect([message.attempt, direct.attempt]).toEqual([0, 0]);
+    expect(h.calls).toEqual([]);
+    expect(h.engine.resend(message.id, false)).toBe("這筆寫入不需要重送。");
+  });
+
+  it("keeps waiting across restarts and hands every write over once, in record order, when it can", async () => {
+    const h = harness({ resumeWindowMs: 1 }, "沒有 bin/fm-board.sh");
+    const ids = [
+      sent(actions.message(h.context, "billing", "one", "browser")).id,
+      sent(actions.direct(h.context, "w2", "w2-work", "two", "browser")).id,
+      sent(actions.message(h.context, "login", "three", "browser")).id,
+    ];
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const still = h.restart();
+    expect(ids.map((id) => still.engine.records.get(id)?.state)).toEqual([
+      "waiting",
+      "waiting",
+      "waiting",
+    ]);
+    const connected = still.restart({}, null);
+    const later = sent(actions.message(connected.context, "billing", "four", "browser"));
+    await settled(later, "delivered");
+    for (const id of ids)
+      await settled(connected.engine.records.get(id) as WriteRecord, "delivered");
+    expect(connected.calls.map((call) => call["id"])).toEqual([...ids, later.id]);
+    expect(connected.calls.map((call) => call["attempt"])).toEqual([0, 0, 0, 0]);
+    const again = connected.restart();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(again.calls).toEqual([]);
+  });
+
+  it("turns a safe write that was under way into a waiting one, and an unsafe one into unknown", async () => {
+    const h = harness({ retryDelaysMs: [60_000] });
+    h.next(outcome("retry"), outcome("retry"));
+    const note = sent(actions.message(h.context, "billing", "a", "browser"));
+    const direct = sent(actions.direct(h.context, "main", "t", "b", "browser"));
+    await settled(direct, "retrying");
+    const after = h.restart({}, "沒有 bin/fm-board.sh");
+    expect(after.engine.records.get(note.id)?.state).toBe("waiting");
+    expect(after.engine.records.get(direct.id)?.state).toBe("unknown");
+  });
+
+  it("still shows a connected deliverer's failures", async () => {
+    const h = harness({ retryDelaysMs: [1, 1] });
+    h.next(outcome("failed", "refused"), outcome("retry"), outcome("retry"), outcome("retry"));
+    const failed = sent(actions.message(h.context, "billing", "a", "browser"));
+    const tired = sent(actions.message(h.context, "billing", "b", "browser"));
+    await settled(failed, "failed");
+    await settled(tired, "undelivered");
+  });
+});
+
+describe("audit lines from before action records", () => {
+  const line = (plan: Record<string, unknown>, extra: Record<string, unknown> = {}): string =>
+    JSON.stringify({
+      ts: "T",
+      write_id: String(extra["id"] ?? "w-old"),
       state: "sending",
       attempt: 0,
-      error: null,
-      nextAt: null,
-      createdAt: now - 1000,
-    };
+      sending: {
+        id: "w-old",
+        channel: "browser",
+        home: "main",
+        task: null,
+        topic: "billing",
+        text: "請先做帳務",
+        plan,
+        state: "sending",
+        attempt: 0,
+        error: null,
+        nextAt: null,
+        createdAt: Date.now(),
+        ...extra,
+      },
+    });
+
+  it("resumes an old note as a message or a notice under its write id and request id", async () => {
+    const file = path.join(dir, "audit.jsonl");
     fs.writeFileSync(
       file,
-      `${JSON.stringify({ ts: "t", write_id: "w-aged", state: "sending", attempt: 0, sending: record })}\n`,
+      `${[
+        line({
+          type: "note",
+          requestId: "tb-0011223344556677",
+          body: "［議題：Billing（billing）］\n請先做帳務",
+        }),
+        line(
+          {
+            type: "note",
+            requestId: "tb-dispatch-aa",
+            body: "議題「Billing」已可派工，請跑 order 重新評估",
+          },
+          { id: "w-dispatch", topic: null, text: "議題「Billing」已可派工" },
+        ),
+      ].join("\n")}\n`,
     );
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(now);
-    try {
-      const h = harness({ resumeWindowMs: 1000 }, file);
-      await h.engine.resumeUnfinished();
-      expect(h.engine.records.get("w-aged")?.state).not.toBe("undelivered");
-      vi.useRealTimers();
-      await settled(h.engine.records.get("w-aged") as WriteRecord, "delivered");
-      expect(h.calls).toEqual([{ kind: "note", requestId: "r-aged", body: "b" }]);
-    } finally {
-      vi.useRealTimers();
-    }
+    const h = harness();
+    h.engine.resumeUnfinished();
+    await settled(h.engine.records.get("w-dispatch") as WriteRecord, "delivered");
+    expect(h.calls).toEqual([
+      {
+        v: 1,
+        id: "w-old",
+        attempt: 0,
+        kind: "message",
+        topic: { id: "billing", name: "Billing" },
+        text: "請先做帳務",
+        legacy_request_id: "tb-0011223344556677",
+      },
+      {
+        v: 1,
+        id: "w-dispatch",
+        attempt: 0,
+        kind: "notice",
+        event: "topic.dispatchable",
+        text: "議題「Billing」已可派工，請跑 order 重新評估",
+        legacy_request_id: "tb-dispatch-aa",
+      },
+    ]);
   });
 
-  it("ignores audit lines that are not about a write", async () => {
-    const h = harness();
-    const write = sent(actions.message(h.context, "billing", "x", "browser"));
-    await settled(write, "delivered");
-    fs.appendFileSync(
-      path.join(dir, "audit.jsonl"),
-      `junk\n[1]\n${JSON.stringify({ rejected: "origin", host: "x" })}\n${JSON.stringify({ write_id: "ghost", state: "failed" })}\n${JSON.stringify({ write_id: write.id })}\nhalf`,
+  it("flags an old send or relay as unknown, and keeps settled answers and tags in the history", () => {
+    const file = path.join(dir, "audit.jsonl");
+    fs.writeFileSync(
+      file,
+      `${[
+        line({ type: "send", task: "t" }, { id: "w-send", task: "t" }),
+        line(
+          { type: "relay", secondmate: "far1", remote: true, deliveryId: "0123456789abcdef" },
+          { id: "w-relay", home: "far1", task: "t" },
+        ),
+        line(
+          {
+            type: "answer",
+            placement: "remote",
+            line: "c\t合併\tA\tdone",
+            noteBody: "［議題：Billing］…",
+            answered: true,
+          },
+          { id: "w-answer", home: "far1", task: "c" },
+        ),
+        JSON.stringify({ ts: "T", write_id: "w-answer", state: "delivered", attempt: 0 }),
+        line(
+          { type: "tag", placement: "local", task: "t", topic: "billing", lastLineAtSend: "" },
+          { id: "w-tag", home: "sm1" },
+        ),
+        JSON.stringify({ ts: "T", write_id: "w-tag", state: "delivered", attempt: 0 }),
+      ].join("\n")}\n`,
     );
-    const after = h.restart();
-    expect([...after.engine.records.keys()]).toEqual([write.id]);
-    expect(after.engine.records.get(write.id)?.state).toBe("delivered");
+    const h = harness();
+    h.engine.resumeUnfinished();
+    const records = h.engine.records;
+    expect(records.get("w-send")).toMatchObject({
+      state: "unknown",
+      action: { kind: "direct", home: "main", task: "t", text: "請先做帳務" },
+    });
+    expect(records.get("w-relay")).toMatchObject({
+      state: "unknown",
+      home: "far1",
+      action: { kind: "direct", home: "far1" },
+    });
+    expect(records.get("w-answer")).toMatchObject({
+      state: "delivered",
+      action: {
+        kind: "answer",
+        home: "far1",
+        task: "c",
+        answer: "合併",
+        label: "A",
+        mode: "done",
+        topic: { id: "billing", name: "Billing" },
+      },
+    });
+    expect(records.get("w-tag")).toMatchObject({
+      state: "delivered",
+      action: { kind: "tag", home: "sm1", task: "t", topic: "billing" },
+    });
+    expect(JSON.stringify([...records.values()])).not.toContain("remote");
+    expect(h.calls).toEqual([]);
   });
 });
 
 describe("serialization", () => {
-  it("runs one command per home at a time without holding the queue during a retry wait", async () => {
-    const h = harness({ retryDelaysMs: [80] });
+  it("runs one deliverer per home at a time without holding the queue during a retry wait", async () => {
+    const h = harness();
     let running = 0;
     let peak = 0;
     const order: string[] = [];
@@ -884,18 +792,19 @@ describe("serialization", () => {
         run: async (command) => {
           running += 1;
           peak = Math.max(peak, running);
-          order.push(command.kind === "note" ? command.body : command.kind);
+          const record = JSON.parse(command.kind === "deliver" ? command.record : "{}") as {
+            text: string;
+          };
+          order.push(record.text);
           await new Promise((resolve) => setTimeout(resolve, 15));
           running -= 1;
-          return command.kind === "note" &&
-            command.body.endsWith("retry me") &&
-            order.filter((entry) => entry.endsWith("retry me")).length === 1
-            ? exit(3)
-            : OK;
+          return record.text === "retry me" &&
+            order.filter((entry) => entry === "retry me").length === 1
+            ? outcome("retry")
+            : DELIVERED;
         },
-        secondmates: () => SECONDMATES,
+        unavailable: null,
         readTags: async () => "",
-        prepare: async () => undefined,
         onChange: () => undefined,
         onDelivered: () => undefined,
       },
@@ -911,12 +820,7 @@ describe("serialization", () => {
     expect(second.state).toBe("delivered");
     await settled(first, "delivered");
     expect(peak).toBe(1);
-    expect(order.map((entry) => entry.split("\n")[1])).toEqual([
-      "retry me",
-      "second",
-      "third",
-      "retry me",
-    ]);
+    expect(order).toEqual(["retry me", "second", "third", "retry me"]);
   });
 });
 
@@ -1040,7 +944,6 @@ describe("api", () => {
 
   it("answers a hold only on the second request, the way the hold recorded", async () => {
     const h = harness();
-    h.script("answer", exit(0, "closed: call-1"));
     const { call } = api(h);
     const body = { home: "main", task: "call-1", answer: "合併", label: "合併" };
     const other = (await call("POST holds/answer", body)).body["confirm"];
@@ -1070,10 +973,13 @@ describe("api", () => {
       body: { ok: true, write_id: expect.stringMatching(/^w-/) },
     });
     await vi.waitFor(() =>
-      expect(h.calls[0]).toEqual({
+      expect(h.calls[0]).toMatchObject({
         kind: "answer",
-        placement: "main",
-        line: "call-1\t合併\t合併\trelease",
+        home: "main",
+        task: "call-1",
+        answer: "合併",
+        label: "合併",
+        mode: "release",
       }),
     );
     expect(h.engine.records.get(String(done.body["write_id"]))?.channel).toBe("browser");
@@ -1099,7 +1005,11 @@ describe("api", () => {
       expect(h.engine.records.get(String(reply.body["write_id"]))?.channel).toBe("browser");
     }
     await vi.waitFor(() =>
-      expect(h.calls.map((entry) => entry.kind).toSorted()).toEqual(["note", "send", "tag"]),
+      expect(h.calls.map((entry) => String(entry["kind"])).toSorted()).toEqual([
+        "direct",
+        "message",
+        "tag",
+      ]),
     );
     expect(await call("POST messages", { topic: "nope", text: "hi" })).toEqual({
       status: 409,
@@ -1113,7 +1023,7 @@ describe("api", () => {
   it("resends in one step, or two when the outcome is unknown, and ignores", async () => {
     const h = harness();
     const { call } = api(h);
-    h.script("send", exit(1));
+    h.next(outcome("failed", "no"));
     const failed = sent(actions.direct(h.context, "main", "t", "x", "browser"));
     await settled(failed, "failed");
     expect(await call("POST writes/resend", { write_id: failed.id })).toEqual({

@@ -16,7 +16,7 @@ import {
   topicName,
   untaggedQueued,
 } from "./parts.js";
-import { BAD_WRITES, LIGHT_LABEL, QUEUES, QUEUE_LABEL } from "./state.js";
+import { BAD_WRITES, LIGHT_LABEL, QUEUES, QUEUE_LABEL, agentName } from "./state.js";
 import type { Actions, Page, View } from "./state.js";
 
 const RECENT_SUMMARIES = 12;
@@ -118,7 +118,7 @@ function closeProposals(view: View, actions: Actions): Child {
           topicLink(view, id, actions),
           h("span", { class: "pill warn" }, "提議關閉"),
         ),
-        h("div", {}, `first mate 認為這個議題可以關了：${topic.close_reason ?? ""}`),
+        h("div", {}, `${agentName()} 認為這個議題可以關了：${topic.close_reason ?? ""}`),
         h(
           "div",
           { class: "btns" },

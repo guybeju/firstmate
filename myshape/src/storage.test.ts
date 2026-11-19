@@ -112,6 +112,8 @@ describe("layout", () => {
       boardDataDir: "/d/myshape",
       events: "/d/myshape/events.jsonl",
       summaries: "/d/myshape/summaries.jsonl",
+      notifyPending: "/d/myshape/notify-pending.json",
+      aggregator: "/d/myshape/aggregator.json",
     });
   });
 

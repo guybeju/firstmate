@@ -1,7 +1,6 @@
-// The JSON one home's fm-topic-board-read.sh prints, parsed and checked once
-// where it enters the service.
+// The JSON report the aggregator's feed prints for one home (contracts
+// section 4), parsed and checked once where it enters the service.
 import { isRecord, stringField, stringRecord, textField } from "./files.js";
-import type { Secondmate } from "./commands.js";
 
 export const REPORT_SCHEMA = 1;
 
@@ -38,11 +37,14 @@ export interface ReportQueued {
 export type OnAnswer = "close" | "release";
 const ON_ANSWER: readonly OnAnswer[] = ["close", "release"];
 
+export const HOLD_BUCKETS = ["live", "aged", "dated", "blocked"] as const;
+export type HoldBucket = (typeof HOLD_BUCKETS)[number];
+
 export interface ReportHold {
   id: string;
   title: string;
   question: string;
-  hold_bucket: "live" | "aged" | "dated" | "blocked";
+  hold_bucket: HoldBucket;
   hold_until: string | null;
   unresolved_blocker_ids: string[];
   hold_age_days: number | null;
@@ -65,6 +67,36 @@ export interface ReportLedger {
   lines: string[];
 }
 
+/**
+ * A further home the aggregator reads, as the root report lists it. The ids
+ * are labels the aggregator chose; the board reads every one the same way.
+ * The two hints are seconds, already within READ_EVERY_S and READ_TIMEOUT_S,
+ * or null when the report gave none (the board's default then applies).
+ */
+export interface FeedHome {
+  id: string;
+  read_every_s: number | null;
+  read_timeout_s: number | null;
+}
+
+/** Who feeds the board, from the root report; every field is optional there. */
+export interface Aggregator {
+  name: string | null;
+  /** The name the page and the board's texts use for the agent on the other side. */
+  label: string | null;
+  /** One line the version banners add after the board's own words. */
+  update_hint: string | null;
+}
+
+export interface Bounds {
+  min: number;
+  max: number;
+}
+
+/** How often a further home may be read, and how long one read may take, in seconds. */
+export const READ_EVERY_S: Bounds = { min: 1, max: 3600 };
+export const READ_TIMEOUT_S: Bounds = { min: 1, max: 3600 };
+
 export interface HomeReport {
   code_commit: string;
   ledger_enabled: boolean;
@@ -76,7 +108,12 @@ export interface HomeReport {
   /** Task id to the raw text of its tag file. */
   topics: Record<string, string>;
   ledger: ReportLedger;
-  secondmates: Secondmate[];
+  /** Why the ledger is off and what to do, from the aggregator; null when it gave none. */
+  ledger_hint: string | null;
+  /** Read only from the root report. */
+  aggregator: Aggregator | null;
+  /** The further homes; read only from the root report. */
+  secondmates: FeedHome[];
 }
 
 export type ParsedReport =
@@ -94,17 +131,22 @@ function strings(value: unknown): string[] {
     : [];
 }
 
-const BUCKETS = ["live", "aged", "dated", "blocked"] as const;
-
 function onAnswerOf(value: unknown): OnAnswer | null {
   const found = ON_ANSWER.find((name) => name === value);
   return found === undefined ? null : found;
 }
 
+/** A hold with no bucket is due now; an unknown word drops the hold. */
+function bucketOf(value: unknown): HoldBucket | null {
+  if (value === undefined || value === null) return "live";
+  const found = HOLD_BUCKETS.find((name) => name === value);
+  return found === undefined ? null : found;
+}
+
 function parseHold(raw: Record<string, unknown>): ReportHold | null {
   const id = stringField(raw, "id");
-  const bucket = BUCKETS.find((name) => name === raw["hold_bucket"]);
-  if (id === null || bucket === undefined) return null;
+  const bucket = bucketOf(raw["hold_bucket"]);
+  if (id === null || bucket === null) return null;
   const age = raw["hold_age_days"];
   return {
     id,
@@ -170,12 +212,31 @@ function parseQueued(raw: Record<string, unknown>): ReportQueued | null {
   }));
 }
 
-function parseSecondmate(raw: Record<string, unknown>): Secondmate | null {
-  return withId(raw, (id) => ({
+/** A number of seconds within `bounds`, or null when `value` is not a finite number. */
+function seconds(value: unknown, bounds: Bounds): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.min(bounds.max, Math.max(bounds.min, value));
+}
+
+const HOME_ID = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
+
+function parseFeedHome(raw: Record<string, unknown>): FeedHome | null {
+  const id = stringField(raw, "id");
+  if (id === null || !HOME_ID.test(id) || id === "main") return null;
+  return {
     id,
-    remote: raw["remote"] === true,
-    home: textField(raw, "home"),
-  }));
+    read_every_s: seconds(raw["read_every_s"], READ_EVERY_S),
+    read_timeout_s: seconds(raw["read_timeout_s"], READ_TIMEOUT_S),
+  };
+}
+
+function parseAggregator(raw: unknown): Aggregator | null {
+  if (!isRecord(raw)) return null;
+  return {
+    name: stringField(raw, "name"),
+    label: stringField(raw, "label"),
+    update_hint: stringField(raw, "update_hint"),
+  };
 }
 
 function parseQuestion(raw: Record<string, unknown>): ReportQuestion | null {
@@ -212,7 +273,9 @@ export function parseReport(stdout: string): ParsedReport {
       status_decisions: records(raw["status_decisions"]).map(parseQuestion).filter(present),
       topics: stringRecord(raw["topics"]),
       ledger,
-      secondmates: records(raw["secondmates"]).map(parseSecondmate).filter(present),
+      ledger_hint: stringField(raw, "ledger_hint"),
+      aggregator: parseAggregator(raw["aggregator"]),
+      secondmates: records(raw["secondmates"]).map(parseFeedHome).filter(present),
     },
   };
 }

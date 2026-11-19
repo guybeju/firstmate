@@ -14,19 +14,10 @@ function refuse(line) {
 function topicName(topics, id) {
     return topics.doc.topics[id]?.name ?? topics.archive.topics[id]?.name ?? null;
 }
-/** Where commands for `home` run, or null when the board does not know that home. */
-function placementOf(context, home) {
-    if (home === MAIN_HOME)
-        return "main";
-    const secondmate = context.secondmates.find((entry) => entry.id === home);
-    if (secondmate === undefined)
-        return null;
-    return secondmate.remote ? "remote" : "local";
-}
 function lengthOf(text) {
     return [...text].length;
 }
-/** A message from a topic page to the main firstmate. */
+/** A message from a topic page to the agent on the other side. */
 export function message(context, rawTopic, text, channel) {
     const topic = resolveTopicId(context.topics.doc, rawTopic);
     const name = topicName(context.topics, topic);
@@ -43,20 +34,15 @@ export function message(context, rawTopic, text, channel) {
             task: null,
             topic,
             text: body,
-            plan: {
-                type: "note",
-                requestId: `tb-${crypto.randomBytes(8).toString("hex")}`,
-                body: `［議題：${name}（${topic}）］\n${body}`,
-            },
+            action: { kind: "message", topic: { id: topic, name }, text: body },
         }),
     };
 }
-/** Checks the home and task every agent-directed action names. */
+/** Checks the home and task every agent-directed action names; null when both are fine. */
 function agentTarget(context, home, task) {
-    const placement = placementOf(context, home);
-    if (placement === null)
+    if (!context.homes.some((entry) => entry.id === home))
         return refuse(`不認得 home ${home}。`);
-    return TASK_ID.test(task) ? placement : refuse(`task id 格式不對：${task}`);
+    return TASK_ID.test(task) ? null : refuse(`task id 格式不對：${task}`);
 }
 /** Why `text` cannot be sent to an agent, or null when it can. */
 function directProblem(text) {
@@ -65,24 +51,17 @@ function directProblem(text) {
         return problem;
     return lengthOf(text) > MESSAGE_MAX ? `訊息最多 ${MESSAGE_MAX} 個字。` : null;
 }
-/** A message straight to one agent: written to a main-home worker, relayed by its secondmate otherwise. */
+/** A message straight to one agent of one home. */
 export function direct(context, home, task, text, channel) {
-    const placement = agentTarget(context, home, task);
-    if (typeof placement !== "string")
-        return placement;
+    const target = agentTarget(context, home, task);
+    if (target !== null)
+        return target;
     const problem = directProblem(text);
     if (problem !== null)
         return refuse(problem);
     const topic = placeTask(context.topics, context.homes, home, task).topic;
-    const plan = placement === "main"
-        ? { type: "send", task }
-        : {
-            type: "relay",
-            secondmate: home,
-            remote: placement === "remote",
-            deliveryId: crypto.randomBytes(8).toString("hex"),
-        };
-    return { ok: true, write: context.writes.submit({ channel, home, task, topic, text, plan }) };
+    const action = { kind: "direct", home, task, text };
+    return { ok: true, write: context.writes.submit({ channel, home, task, topic, text, action }) };
 }
 function oneLineProblem(what, text) {
     if (text.trim() === "" || lengthOf(text) > ANSWER_MAX)
@@ -106,6 +85,9 @@ function topicLabel(topics, topic) {
     const name = topicName(topics, topic);
     return name === null ? topic : name;
 }
+function topicRef(topics, topic) {
+    return topic === null ? null : { id: topic, name: topicLabel(topics, topic) };
+}
 /** The last line of a task's tag file as its home last reported it. */
 function lastTagLine(context, home, task) {
     const report = reportOf(context, home);
@@ -122,15 +104,15 @@ function holdTopic(context, home, task, origin) {
         return own;
     return placeTask(context.topics, context.homes, home, origin).topic;
 }
-/** The close mode fm-captain-hold.sh answers takes for what answering `hold` does. */
+/** The mode an answer carries for what answering `hold` does: close the item or let it go on. */
 export function answerMode(home, hold) {
     return answerOutcome(home, hold).on_answer === "close" ? "done" : "release";
 }
-/** An answer to a captain hold, closing or releasing it as the hold recorded, followed by a note telling firstmate. */
+/** An answer to a waiting decision, closing or releasing it as the decision recorded. */
 export function answer(context, input, channel) {
-    const placement = agentTarget(context, input.home, input.task);
-    if (typeof placement !== "string")
-        return placement;
+    const target = agentTarget(context, input.home, input.task);
+    if (target !== null)
+        return target;
     const hold = findHold(context, input.home, input.task);
     if (hold === undefined)
         return refuse(`${input.home}/${input.task} 沒有等你回答的待決事項（可能已經有人答了）。`);
@@ -141,7 +123,6 @@ export function answer(context, input, channel) {
     if (labelProblem !== null)
         return refuse(labelProblem);
     const topic = holdTopic(context, input.home, input.task, hold.origin);
-    const name = topicLabel(context.topics, topic);
     return {
         ok: true,
         write: context.writes.submit({
@@ -150,21 +131,24 @@ export function answer(context, input, channel) {
             task: input.task,
             topic,
             text: input.answer,
-            plan: {
-                type: "answer",
-                placement,
-                line: [input.task, input.answer, input.label, answerMode(input.home, hold)].join("\t"),
-                noteBody: `［議題：${name}］已在看板回答 ${input.home}/${input.task}：${input.answer}`,
-                answered: false,
+            action: {
+                kind: "answer",
+                home: input.home,
+                task: input.task,
+                answer: input.answer,
+                label: input.label,
+                mode: answerMode(input.home, hold),
+                question_sha256: crypto.createHash("sha256").update(hold.question).digest("hex"),
+                topic: topicRef(context.topics, topic),
             },
         }),
     };
 }
 /** Files an agent under a live topic by tagging its task in the home it lives in. */
 export function tagAgent(context, home, task, rawTopic, channel) {
-    const placement = agentTarget(context, home, task);
-    if (typeof placement !== "string")
-        return placement;
+    const target = agentTarget(context, home, task);
+    if (target !== null)
+        return target;
     const topic = resolveTopicId(context.topics.doc, rawTopic);
     if (context.topics.doc.topics[topic] === undefined)
         return refuse(`${rawTopic} 不是看板上還開著的議題。`);
@@ -176,12 +160,12 @@ export function tagAgent(context, home, task, rawTopic, channel) {
             task,
             topic,
             text: `歸到「${topicLabel(context.topics, topic)}」`,
-            plan: {
-                type: "tag",
-                placement,
+            action: {
+                kind: "tag",
+                home,
                 task,
                 topic,
-                lastLineAtSend: lastTagLine(context, home, task),
+                last_tag_line: lastTagLine(context, home, task),
             },
         }),
     };

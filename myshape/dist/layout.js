@@ -20,6 +20,8 @@ export function boardPaths(config) {
         boardDataDir,
         events: path.join(boardDataDir, "events.jsonl"),
         summaries: path.join(boardDataDir, "summaries.jsonl"),
+        notifyPending: path.join(boardDataDir, "notify-pending.json"),
+        aggregator: path.join(boardDataDir, "aggregator.json"),
     };
 }
 const CONFIG_FLAGS = ["home", "root", "commit", "port", "state", "data"];

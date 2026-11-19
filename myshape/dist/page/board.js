@@ -1,7 +1,7 @@
 import { getJson, postJson, takeToken } from "./api.js";
 import { h, replaceChildren } from "./dom.js";
 import { frame } from "./frame.js";
-import { QUEUES } from "./state.js";
+import { QUEUES, agentName, setAgentLabel } from "./state.js";
 const POLL_MS = 5000;
 const TOAST_MS = 6000;
 const NOTIFY_SECONDS = 30;
@@ -20,6 +20,8 @@ const page = {
     notice: null,
 };
 let failures = 0;
+/** The code the board ran when this page first heard from it. */
+let loadedCommit = null;
 let dragged = null;
 let toastTimer;
 /** What a redraw would otherwise lose: which input has focus, its caret, and the opened <details>. */
@@ -68,6 +70,13 @@ function toast(text, countdownUntil) {
         toastTimer = window.setInterval(draw, 1000);
 }
 function accept(view) {
+    loadedCommit ??= view.code_commit;
+    // The board now runs other code: this page's scripts may not understand its data.
+    if (view.code_commit !== loadedCommit) {
+        location.reload();
+        return;
+    }
+    setAgentLabel(view.aggregator.label);
     if (page.view !== null && page.view.boot_id !== view.boot_id && page.pending.size > 0) {
         page.pending.clear();
         page.notice = "看板服務重啟過，進行到一半的確認已作廢，請重做一次。";
@@ -131,13 +140,13 @@ function queueOf(topic) {
 /** Says what a move will and will not do, so nobody expects work to start or stop at once. */
 function moveFeedback(from, to) {
     if (from === "later" && to !== "later") {
-        toast("會通知 first mate 重新評估派工；拖回「待辦」就不通知。", Date.now() + NOTIFY_SECONDS * 1000);
+        toast(`會通知 ${agentName()}；拖回「待辦」就不通知。`, Date.now() + NOTIFY_SECONDS * 1000);
     }
     else if (to === "later") {
-        toast("已移到「待辦」。已經在跑的 worker 不會停；還在排隊的項目要等 first mate 下次重新評估才會被停住。");
+        toast(`已移到「待辦」。已經在跑的 worker 不會停；還在排隊的項目要等 ${agentName()} 下次重新評估才會被停住。`);
     }
     else {
-        toast("順序已更新。first mate 下次重新評估派工時才會照新順序，不會馬上開工。");
+        toast(`順序已更新。${agentName()} 下次重新評估派工時才會照新順序，不會馬上開工。`);
     }
 }
 async function sendDraft(path, body, key) {

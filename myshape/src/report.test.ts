@@ -34,7 +34,15 @@ const FULL = {
     more: true,
     lines: ["a", 1, "b"],
   },
-  secondmates: [{ id: "sm1", remote: true, home: "/h" }, { id: "sm2" }, { home: "no id" }],
+  secondmates: [
+    { id: "sm1", remote: true, home: "/h", read_every_s: 60, read_timeout_s: 400 },
+    { id: "sm2" },
+    { home: "no id" },
+    { id: "main" },
+    { id: "bad id" },
+    { id: "edge", read_every_s: 0.2, read_timeout_s: 99_999 },
+    { id: "word", read_every_s: "10" },
+  ],
 };
 
 function ok(raw: unknown) {
@@ -147,11 +155,34 @@ describe("parseReport", () => {
         more: true,
         lines: ["a", "b"],
       },
+      ledger_hint: null,
+      aggregator: null,
       secondmates: [
-        { id: "sm1", remote: true, home: "/h" },
-        { id: "sm2", remote: false, home: "" },
+        { id: "sm1", read_every_s: 60, read_timeout_s: 400 },
+        { id: "sm2", read_every_s: null, read_timeout_s: null },
+        { id: "edge", read_every_s: 1, read_timeout_s: 3600 },
+        { id: "word", read_every_s: null, read_timeout_s: null },
       ],
     });
+  });
+
+  it("reads a hold with no bucket as due now, and drops one with a word it does not know", () => {
+    const holds = ok({
+      ...FULL,
+      holds: [{ id: "a" }, { id: "b", hold_bucket: null }, { id: "c", hold_bucket: "weird" }],
+    }).holds;
+    expect(holds.map((hold) => `${hold.id}:${hold.hold_bucket}`)).toEqual(["a:live", "b:live"]);
+  });
+
+  it("reads the optional aggregator block and ledger hint", () => {
+    const report = ok({
+      ...FULL,
+      ledger_hint: "turn the ledger on",
+      aggregator: { name: "plain", label: "Plain", update_hint: 5 },
+    });
+    expect(report.ledger_hint).toBe("turn the ledger on");
+    expect(report.aggregator).toEqual({ name: "plain", label: "Plain", update_hint: null });
+    expect(ok({ ...FULL, aggregator: "plain" }).aggregator).toBeNull();
   });
 
   it("fills defaults for everything optional", () => {
@@ -183,6 +214,8 @@ describe("parseReport", () => {
       status_decisions: [{ id: "q", key: "", summary: "" }],
       topics: {},
       ledger: { status: "absent", to_offset: 0, to_prefix_sha256: "-", more: false, lines: [] },
+      ledger_hint: null,
+      aggregator: null,
       secondmates: [],
     });
   });
@@ -199,9 +232,11 @@ describe("parseReport", () => {
     expect(ok({ ...FULL, ledger_enabled: "yes" }).ledger_enabled).toBe(false);
     expect(ok({ ...FULL, tasks: [{ id: "t", state: "" }] }).tasks[0]?.state).toBe("");
     expect(ok({ ...FULL, ledger: { ...FULL.ledger, more: 1 } }).ledger.more).toBe(false);
-    expect(ok({ ...FULL, secondmates: [{ id: "s", remote: "true" }] }).secondmates[0]?.remote).toBe(
-      false,
-    );
+    expect(ok({ ...FULL, secondmates: [{ id: "s", remote: true }] }).secondmates[0]).toEqual({
+      id: "s",
+      read_every_s: null,
+      read_timeout_s: null,
+    });
   });
 
   it("distinguishes another schema from garbage", () => {

@@ -1,7 +1,7 @@
 import { h } from "./dom.js";
 import { mergeConfirm, mergeMenu } from "./home.js";
 import { draftInput, holdCard, light, liveTodos, queuedRow, questionRow, summaryRow, updateRow, when, writeRows, } from "./parts.js";
-import { QUEUE_LABEL } from "./state.js";
+import { QUEUE_LABEL, agentName } from "./state.js";
 const MAX_UPDATES = 200;
 /** A line of text with an edit button that swaps it for an input in place. */
 function editable(page, actions, id, field, text) {
@@ -79,7 +79,7 @@ function decisions(page, view, actions, id) {
     const deferred = holds.filter((hold) => !hold.live);
     return h("section", {}, h("h2", {}, "待決"), topic?.close_reason == null
         ? null
-        : h("div", { class: "card" }, h("span", { class: "pill warn" }, "提議關閉"), ` first mate 認為這個議題可以關了：${topic.close_reason}`, h("div", { class: "btns" }, h("button", { onclick: () => actions.topic("archive", { id }) }, "關閉並封存"), h("button", { onclick: () => actions.topic("keep", { id }) }, "先不關"))), holds
+        : h("div", { class: "card" }, h("span", { class: "pill warn" }, "提議關閉"), ` ${agentName()} 認為這個議題可以關了：${topic.close_reason}`, h("div", { class: "btns" }, h("button", { onclick: () => actions.topic("archive", { id }) }, "關閉並封存"), h("button", { onclick: () => actions.topic("keep", { id }) }, "先不關"))), holds
         .filter((hold) => hold.live && hold.todo === null)
         .map((hold) => holdCard(page, view, actions, hold, false)), deferred.length === 0
         ? null
@@ -111,9 +111,7 @@ function agentCard(page, actions, agent) {
         ? null
         : h("span", { class: "note" }, `最後更新 ${when(agent.updated_at)}`), agent.stale ? h("span", { class: "pill warn" }, "資料過期") : null), h("div", { class: "note" }, `${agent.state} ${agent.detail}`), h("div", { class: "btns" }, draftInput(page, actions, key, "只給這個 agent 的訊息", send), h("button", { onclick: send }, agent.home === "main" ? "直送" : `經 ${agent.home} 轉達`)), agent.home === "main"
         ? null
-        : h("div", { class: "note" }, "「已送達」只代表訊息到了 secondmate 的收件匣，它轉給 worker 可能還要一點時間。"), writeRows(page, actions, (write) => (write.kind === "send" || write.kind === "relay") &&
-        write.home === agent.home &&
-        write.task === agent.task));
+        : h("div", { class: "note" }, "「已送達」只代表訊息到了 secondmate 的收件匣，它轉給 worker 可能還要一點時間。"), writeRows(page, actions, (write) => write.kind === "direct" && write.home === agent.home && write.task === agent.task));
 }
 /** Backlog items of this topic that no worker has been dispatched for, folded by default. */
 function queued(view, id) {
@@ -132,6 +130,6 @@ export function topicPage(page, view, actions, id) {
         h("div", { class: "narrow" }, h("p", {}, h("button", { class: "link", onclick: () => actions.open(null) }, "← 回首頁")), header(page, view, actions, id), handsOn(page, view, actions, id), decisions(page, view, actions, id), updates(view, actions, id), h("section", {}, h("h2", {}, "關聯 agent"), view.agents
             .filter((agent) => agent.topic === id)
             .map((agent) => agentCard(page, actions, agent))), queued(view, id)),
-        h("div", { class: "composer" }, h("div", { class: "inner" }, h("div", { class: "btns" }, draftInput(page, actions, key, `給 first mate 的訊息（會附上議題「${view.topics[id]?.name ?? id}」）`, send), h("button", { class: "primary", onclick: send }, "送給 first mate")), writeRows(page, actions, (write) => write.kind === "note" && write.topic === id))),
+        h("div", { class: "composer" }, h("div", { class: "inner" }, h("div", { class: "btns" }, draftInput(page, actions, key, `給 ${agentName()} 的訊息（會附上議題「${view.topics[id]?.name ?? id}」）`, send), h("button", { class: "primary", onclick: send }, `送給 ${agentName()}`)), writeRows(page, actions, (write) => (write.kind === "message" || write.kind === "notice") && write.topic === id))),
     ];
 }

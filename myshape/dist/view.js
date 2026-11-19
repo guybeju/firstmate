@@ -195,9 +195,9 @@ function homeView(home, input) {
     const age = home.lastOkAt === null ? null : input.nowMs - home.lastOkAt;
     return {
         id: home.id,
-        remote: home.remote,
         version: home.version,
         ledger_enabled: home.report?.ledger_enabled ?? null,
+        ledger_hint: home.report?.ledger_hint ?? null,
         stale: age === null || age > input.staleMs,
         last_ok_seconds_ago: age === null ? null : Math.floor(age / 1000),
         error: home.error,

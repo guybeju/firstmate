@@ -15,7 +15,7 @@ import {
   when,
   writeRows,
 } from "./parts.js";
-import { QUEUE_LABEL } from "./state.js";
+import { QUEUE_LABEL, agentName } from "./state.js";
 import type { Actions, Page, View } from "./state.js";
 
 const MAX_UPDATES = 200;
@@ -162,7 +162,7 @@ function decisions(page: Page, view: View, actions: Actions, id: string): Child 
           "div",
           { class: "card" },
           h("span", { class: "pill warn" }, "提議關閉"),
-          ` first mate 認為這個議題可以關了：${topic.close_reason}`,
+          ` ${agentName()} 認為這個議題可以關了：${topic.close_reason}`,
           h(
             "div",
             { class: "btns" },
@@ -251,10 +251,7 @@ function agentCard(page: Page, actions: Actions, agent: AgentView): Child {
     writeRows(
       page,
       actions,
-      (write) =>
-        (write.kind === "send" || write.kind === "relay") &&
-        write.home === agent.home &&
-        write.task === agent.task,
+      (write) => write.kind === "direct" && write.home === agent.home && write.task === agent.task,
     ),
   );
 }
@@ -318,12 +315,16 @@ export function topicPage(page: Page, view: View, actions: Actions, id: string):
             page,
             actions,
             key,
-            `給 first mate 的訊息（會附上議題「${view.topics[id]?.name ?? id}」）`,
+            `給 ${agentName()} 的訊息（會附上議題「${view.topics[id]?.name ?? id}」）`,
             send,
           ),
-          h("button", { class: "primary", onclick: send }, "送給 first mate"),
+          h("button", { class: "primary", onclick: send }, `送給 ${agentName()}`),
         ),
-        writeRows(page, actions, (write) => write.kind === "note" && write.topic === id),
+        writeRows(
+          page,
+          actions,
+          (write) => (write.kind === "message" || write.kind === "notice") && write.topic === id,
+        ),
       ),
     ),
   ];

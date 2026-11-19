@@ -4,7 +4,7 @@ import type { BoardView } from "#board/view.js";
 
 export interface WriteView {
   id: string;
-  kind: "note" | "send" | "relay" | "answer" | "tag";
+  kind: "message" | "direct" | "answer" | "tag" | "notice";
   home: string;
   task: string | null;
   topic: string | null;
@@ -16,8 +16,21 @@ export interface WriteView {
   created_at: number;
 }
 
+/** Who is on the other side of the board, and whether the board can reach it. */
+export interface AggregatorView {
+  connected: boolean;
+  /** Why the board cannot reach it in this service's life, or null. */
+  unavailable: string | null;
+  name: string | null;
+  label: string;
+  update_hint: string | null;
+}
+
 export type View = BoardView & {
   boot_id: string;
+  /** The service's code; a page loaded with other code reloads itself. */
+  code_commit: string;
+  aggregator: AggregatorView;
   version: string;
   polling: boolean;
   writes: WriteView[];
@@ -59,7 +72,7 @@ export interface Actions {
   ask: (key: string, path: string, body: Record<string, unknown>) => void;
   confirm: (key: string) => void;
   cancel: (key: string) => void;
-  /** Says a hands-on item is done; firstmate checks before it is closed. */
+  /** Says a hands-on item is done; the agent checks before it is closed. */
   claim: (task: string) => void;
   message: (topic: string, key: string) => void;
   direct: (home: string, task: string, key: string) => void;
@@ -79,6 +92,7 @@ export const LIGHT_LABEL: Record<string, string> = {
   unknown: "未知",
 };
 export const WRITE_LABEL: Record<string, string> = {
+  waiting: "等 aggregator 接上",
   sending: "送出中",
   retrying: "重試中",
   delivered: "已送達",
@@ -89,6 +103,18 @@ export const WRITE_LABEL: Record<string, string> = {
   ignored: "已忽略",
 };
 export const BAD_WRITES = ["failed", "undelivered", "unknown"];
+
+let label = "aggregator";
+
+/** Remembers the name the board gave the agent side; called with every view. */
+export function setAgentLabel(value: string): void {
+  label = value;
+}
+
+/** The name the page uses for the agent on the other side. */
+export function agentName(): string {
+  return label;
+}
 
 export function currentTopic(): string | null {
   const match = /^#\/topic\/(.+)$/.exec(location.hash);

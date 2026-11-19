@@ -103,6 +103,17 @@ function parseHistoryEntry(raw: unknown): HistoryEntry | null {
   const by = HISTORY_ACTORS.find((actor) => actor === raw["by"]);
   if (reason !== null) entry.reason = reason;
   if (by !== undefined) entry.by = by;
+  return withPlace(entry, raw);
+}
+
+/** A move's queue and 1-based place, and a goal change's new goal, when the entry has them. */
+function withPlace(entry: HistoryEntry, raw: Record<string, unknown>): HistoryEntry {
+  const position = raw["position"];
+  const goal = oneLine(stringField(raw, "goal") ?? "", GOAL_MAX);
+  if (isQueue(raw["queue"])) entry.queue = raw["queue"];
+  if (typeof position === "number" && Number.isInteger(position) && position > 0)
+    entry.position = position;
+  if (goal !== null) entry.goal = goal;
   return entry;
 }
 
@@ -152,7 +163,9 @@ function parseDoc(raw: unknown): ParsedDoc {
   }
   const queues = isRecord(raw["queues"]) ? raw["queues"] : {};
   for (const queue of QUEUES) doc.queues[queue] = parseQueue(queues[queue], confirmed);
-  const oldestFirst = [...waiting.keys()].sort().map((key) => waiting.get(key) as LeftoverProposal);
+  const oldestFirst = [...waiting.keys()]
+    .toSorted()
+    .map((key) => waiting.get(key) as LeftoverProposal);
   for (const proposal of oldestFirst) doc.queues[proposal.queue].push(proposal.id);
   doc.merged = stringRecord(raw["merged"]);
   doc.history = parseHistory(raw["history"]);

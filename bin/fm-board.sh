@@ -13,6 +13,8 @@
 #   fm-board.sh install-rules
 #   fm-board.sh rules
 #   fm-board.sh migrate-myshape [--check | --undo]
+#   fm-board.sh feed <home> <ledger-offset> <prefix-sha256>
+#   fm-board.sh deliver        (one action record on stdin)
 #
 # The board itself is bin/myshape.sh; this command is what firstmate adds
 # around it. None of these subcommands needs the board service.
@@ -56,6 +58,10 @@
 # it, and comes before any return to older code. In a secondmate home it only
 # tidies the code root. bin/fm-board-migrate-lib.sh holds the steps.
 #
+# feed and deliver are the two programs the board service runs (its feed and
+# action contracts); bin/fm-board-io-lib.sh holds them and says what each
+# runs. The board sets MYSHAPE_HOME to its home, which they use as FM_HOME.
+#
 # --in-home runs tag, answers, or setup inside a LOCAL registered secondmate
 # home. answers forwards stdin to that home's
 # "fm-captain-hold.sh answers --source myshape" and returns its output and
@@ -70,7 +76,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SELF="$SCRIPT_DIR/fm-board.sh"
 TOPIC="$SCRIPT_DIR/myshape.sh"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+case "${1:-}" in
+  feed | deliver) FM_HOME=${MYSHAPE_HOME:-${FM_HOME:-}} ;;
+esac
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+export FM_HOME
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
@@ -91,6 +101,8 @@ TOPICS_FILE="$DATA/topics.json"
 . "$SCRIPT_DIR/fm-board-lib.sh"
 # shellcheck source=bin/fm-board-migrate-lib.sh
 . "$SCRIPT_DIR/fm-board-migrate-lib.sh"
+# shellcheck source=bin/fm-board-io-lib.sh
+. "$SCRIPT_DIR/fm-board-io-lib.sh"
 
 usage() {
   sed -n '2,/^set -euo pipefail$/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
@@ -517,6 +529,8 @@ main() {
     install-rules) cmd_install_rules "$@" ;;
     rules) cmd_rules "$@" ;;
     migrate-myshape) cmd_migrate_myshape "$@" ;;
+    feed) cmd_feed "$@" ;;
+    deliver) cmd_deliver "$@" ;;
     *) usage_error "不認得的子命令：$sub" ;;
   esac
 }

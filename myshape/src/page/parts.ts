@@ -10,7 +10,7 @@ import type {
 } from "#board/view.js";
 import { h } from "./dom.js";
 import type { Child } from "./dom.js";
-import { BAD_WRITES, LIGHT_LABEL, WRITE_LABEL } from "./state.js";
+import { BAD_WRITES, LIGHT_LABEL, WRITE_LABEL, agentName } from "./state.js";
 import type { Actions, Page, View, WriteView } from "./state.js";
 
 const SUMMARY_LABEL: Record<string, string> = {
@@ -130,7 +130,7 @@ function answerOutcomeText(hold: HoldView): string {
   const outcome =
     hold.on_answer === "close"
       ? "送出後這一項就結束，標成完成。"
-      : "送出後解除等待，這一項回到排隊中，由 first mate 接著做。";
+      : `送出後解除等待，這一項回到排隊中，由 ${agentName()} 接著做。`;
   return hold.on_answer_recorded
     ? outcome
     : `${outcome}（開這個決定時沒有註明答了之後怎麼處理，所以照預設不結束它。）`;
@@ -147,7 +147,7 @@ function answerConfirm(page: Page, actions: Actions, key: string, hold: HoldView
     h(
       "div",
       { class: "note" },
-      `會記成你的答覆並通知 first mate。看板自己不會合併或捨棄。這次確認還有 ${seconds} 秒有效。`,
+      `會記成你的答覆並通知 ${agentName()}。看板自己不會合併或捨棄。這次確認還有 ${seconds} 秒有效。`,
     ),
     h("div", { class: "note outcome" }, answerOutcomeText(hold)),
     h(
@@ -237,9 +237,9 @@ function commandBlock(command: string): Child {
 
 const TODO_NOTE: Record<TodoView["state"], (reason: string) => Child> = {
   open: () => null,
-  claimed: () => h("div", { class: "wr" }, "你已按做完了，等 first mate 驗證"),
-  rejected: (reason) => h("div", { class: "wr bad" }, `first mate 驗證沒過：${reason}`),
-  obsolete: (reason) => h("div", { class: "wr" }, `first mate：不再需要了。${reason}`),
+  claimed: () => h("div", { class: "wr" }, `你已按做完了，等 ${agentName()} 驗證`),
+  rejected: (reason) => h("div", { class: "wr bad" }, `${agentName()} 驗證沒過：${reason}`),
+  obsolete: (reason) => h("div", { class: "wr" }, `${agentName()}：不再需要了。${reason}`),
 };
 
 function todoButtons(actions: Actions, hold: HoldView, todo: TodoView, key: string): Child {
@@ -262,7 +262,7 @@ function todoConfirm(page: Page, actions: Actions, key: string): Child {
   return h(
     "div",
     { class: "confirm" },
-    `會記成你的答覆「${String(pending.body["answer"])}」，這一項就從看板拿掉，並通知 first mate。`,
+    `會記成你的答覆「${String(pending.body["answer"])}」，這一項就從看板拿掉，並通知 ${agentName()}。`,
     h(
       "div",
       { class: "btns" },
@@ -356,7 +356,7 @@ export function questionRow(
   return h(
     "div",
     { class: "row" },
-    h("span", { class: "pill" }, "first mate 處理中"),
+    h("span", { class: "pill" }, `${agentName()} 處理中`),
     h("span", { class: "grow" }, `${question.home}/${question.task}：${question.summary}`),
     showTopic ? topicLink(view, question.topic, actions) : null,
   );

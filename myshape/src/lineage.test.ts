@@ -251,4 +251,25 @@ describe("findLines for working out what happened", () => {
     ]);
     expect(findLines(state, "w1", tags)).toEqual(["task main/w1：同 1（2026-11-19）"]);
   });
+
+  it("lists moves and goal changes with who made them", () => {
+    let state = fixture();
+    state = done(
+      topics.stampHistory(
+        topics.move(state, "login", "high", { first: true }, "2026-11-19T00:00:00Z"),
+        state.doc.history.length,
+        "command",
+      ),
+    );
+    state = done(
+      topics.stampHistory(
+        topics.setGoal(state, "login", "只做扣款", "2026-11-19T00:00:01Z"),
+        state.doc.history.length,
+        "page",
+      ),
+    );
+    const lines = findLines(state, "login", [], true);
+    expect(lines).toContain("  2026-11-19T00:00:00Z 移到「高」第 1（用指令）");
+    expect(lines).toContain("  2026-11-19T00:00:01Z 目標改為「只做扣款」（在頁面上）");
+  });
 });

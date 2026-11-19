@@ -54,6 +54,8 @@ function report(extra: Partial<HomeReport> = {}): HomeReport {
     status_decisions: [],
     topics: {},
     ledger: { status: "absent", to_offset: 0, to_prefix_sha256: "-", more: false, lines: [] },
+    ledger_hint: null,
+    aggregator: null,
     secondmates: [],
     ...extra,
   };
@@ -62,7 +64,6 @@ function report(extra: Partial<HomeReport> = {}): HomeReport {
 function home(id: string, extra: Partial<HomeSnapshot> = {}): HomeSnapshot {
   return {
     id,
-    remote: false,
     report: report(),
     lastOkAt: NOW - 1000,
     error: null,
@@ -144,43 +145,42 @@ describe("homes", () => {
         homes: [
           home("main", { lastOkAt: NOW - 180_000 }),
           home("far", {
-            remote: true,
             lastOkAt: NOW - 180_001,
             error: "ssh failed",
             version: "different",
-            report: report({ ledger_enabled: false }),
+            report: report({ ledger_enabled: false, ledger_hint: "turn it on" }),
           }),
-          home("never", { lastOkAt: null, report: null, version: "not-on-fork" }),
+          home("never", { lastOkAt: null, report: null, version: "unreported", error: "gone" }),
         ],
       }),
     );
     expect(view.homes).toEqual([
       {
         id: "main",
-        remote: false,
         version: "same",
         ledger_enabled: true,
+        ledger_hint: null,
         stale: false,
         last_ok_seconds_ago: 180,
         error: null,
       },
       {
         id: "far",
-        remote: true,
         version: "different",
         ledger_enabled: false,
+        ledger_hint: "turn it on",
         stale: true,
         last_ok_seconds_ago: 180,
         error: "ssh failed",
       },
       {
         id: "never",
-        remote: false,
-        version: "not-on-fork",
+        version: "unreported",
         ledger_enabled: null,
+        ledger_hint: null,
         stale: true,
         last_ok_seconds_ago: null,
-        error: null,
+        error: "gone",
       },
     ]);
   });
@@ -472,7 +472,7 @@ describe("agents", () => {
               topics: { "retired-mate": tag("hi"), "old-work": tag("n2") },
             }),
           }),
-          home("far", { remote: true, report: report() }),
+          home("far", { report: report() }),
         ],
         events: [
           dispatched("retired-mate", "secondmate", T0),

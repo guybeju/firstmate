@@ -155,32 +155,32 @@ describe("move", () => {
 
   it("appends to another queue and reports a topic leaving later", () => {
     const state = fixture();
-    const moved = done(topics.move(state, "d", "normal", undefined));
+    const moved = done(topics.move(state, "d", "normal", undefined, NOW));
     expect(order(moved.state)).toBe("high:a normal:b,c,d later:");
     expect(moved.dispatchable).toEqual(["d"]);
     expect(moved.line).toBe("ok d 已移到「一般」");
-    expect(done(topics.move(state, "a", "normal", undefined)).dispatchable).toEqual([]);
-    expect(done(topics.move(state, "a", "later", undefined)).dispatchable).toEqual([]);
-    expect(order(done(topics.move(state, "a", "later", undefined)).state)).toBe(
+    expect(done(topics.move(state, "a", "normal", undefined, NOW)).dispatchable).toEqual([]);
+    expect(done(topics.move(state, "a", "later", undefined, NOW)).dispatchable).toEqual([]);
+    expect(order(done(topics.move(state, "a", "later", undefined, NOW)).state)).toBe(
       "high: normal:b,c later:d,a",
     );
   });
 
   it("places a topic first, last, or before another", () => {
     const state = fixture();
-    expect(order(done(topics.move(state, "c", "normal", { first: true })).state)).toBe(
+    expect(order(done(topics.move(state, "c", "normal", { first: true }, NOW)).state)).toBe(
       "high:a normal:c,b later:d",
     );
-    expect(order(done(topics.move(state, "b", "normal", { last: true })).state)).toBe(
+    expect(order(done(topics.move(state, "b", "normal", { last: true }, NOW)).state)).toBe(
       "high:a normal:c,b later:d",
     );
-    expect(order(done(topics.move(state, "d", "normal", { before: "c" })).state)).toBe(
+    expect(order(done(topics.move(state, "d", "normal", { before: "c" }, NOW)).state)).toBe(
       "high:a normal:b,d,c later:",
     );
-    expect(order(done(topics.move(state, "d", "normal", { first: true })).state)).toBe(
+    expect(order(done(topics.move(state, "d", "normal", { first: true }, NOW)).state)).toBe(
       "high:a normal:d,b,c later:",
     );
-    expect(order(done(topics.move(state, "a", "normal", { before: "b" })).state)).toBe(
+    expect(order(done(topics.move(state, "a", "normal", { before: "b" }, NOW)).state)).toBe(
       "high: normal:a,b,c later:d",
     );
   });
@@ -189,21 +189,31 @@ describe("move", () => {
     const state = fixture();
     for (const position of [undefined, { last: true }, { before: "c" }] as const) {
       const result = done(
-        topics.move(state, "b", "normal", position === undefined ? undefined : { ...position }),
+        topics.move(
+          state,
+          "b",
+          "normal",
+          position === undefined ? undefined : { ...position },
+          NOW,
+        ),
       );
       if (position !== undefined && "last" in position) continue;
       expect(result.changed).toBe(false);
       expect(result.state).toBe(state);
     }
-    expect(done(topics.move(state, "c", "normal", { last: true })).changed).toBe(false);
-    expect(done(topics.move(state, "b", "normal", { first: true })).changed).toBe(false);
+    expect(done(topics.move(state, "c", "normal", { last: true }, NOW)).changed).toBe(false);
+    expect(done(topics.move(state, "b", "normal", { first: true }, NOW)).changed).toBe(false);
   });
 
   it("refuses a bad anchor and an unknown topic", () => {
     const state = fixture();
-    expect(refusal(topics.move(state, "b", "normal", { before: "a" }))).toContain("不在那個佇列");
-    expect(refusal(topics.move(state, "b", "normal", { before: "b" }))).toContain("不在那個佇列");
-    expect(refusal(topics.move(state, "nope", "normal", undefined))).toContain("沒有 nope");
+    expect(refusal(topics.move(state, "b", "normal", { before: "a" }, NOW))).toContain(
+      "不在那個佇列",
+    );
+    expect(refusal(topics.move(state, "b", "normal", { before: "b" }, NOW))).toContain(
+      "不在那個佇列",
+    );
+    expect(refusal(topics.move(state, "nope", "normal", undefined, NOW))).toContain("沒有 nope");
   });
 });
 
@@ -214,16 +224,18 @@ describe("rename, goal, and close-propose", () => {
     expect(renamed.state.doc.topics["a"]?.name).toBe("New");
     expect(renamed.line).toBe("ok a 名稱已改");
     expect(done(topics.rename(renamed.state, "a", "New", NOW)).changed).toBe(false);
-    const goal = done(topics.setGoal(state, "d", "fresh goal"));
+    const goal = done(topics.setGoal(state, "d", "fresh goal", NOW));
     expect(goal.state.doc.topics["d"]?.goal).toBe("fresh goal");
     expect(goal.line).toBe("ok d 目標已改");
     expect(refusal(topics.rename(state, "a", "", NOW))).toContain("名稱");
     expect(refusal(topics.rename(state, "a", "x".repeat(topics.NAME_MAX + 1), NOW))).toContain(
       "名稱",
     );
-    expect(topics.setGoal(state, "a", "x".repeat(topics.NAME_MAX + 1)).ok).toBe(true);
-    expect(refusal(topics.setGoal(state, "a", "x".repeat(topics.GOAL_MAX + 1)))).toContain("目標");
-    expect(refusal(topics.setGoal(state, "nope", "g"))).toContain("沒有 nope");
+    expect(topics.setGoal(state, "a", "x".repeat(topics.NAME_MAX + 1), NOW).ok).toBe(true);
+    expect(refusal(topics.setGoal(state, "a", "x".repeat(topics.GOAL_MAX + 1), NOW))).toContain(
+      "目標",
+    );
+    expect(refusal(topics.setGoal(state, "nope", "g", NOW))).toContain("沒有 nope");
   });
 
   it("records, replaces, and clears a close proposal", () => {
@@ -236,7 +248,7 @@ describe("rename, goal, and close-propose", () => {
     expect(proposed.events[0]).toEqual({
       kind: "topic.close_proposed",
       topic: "a",
-      text: "first mate 提議關閉：all merged",
+      text: "提議關閉：all merged",
     });
     expect(done(topics.closePropose(proposed.state, "a", "all merged", "later")).changed).toBe(
       false,
@@ -341,7 +353,9 @@ describe("merge", () => {
   it("adds nothing to the history when an operation changes nothing or is refused", () => {
     const state = fixture();
     expect(done(topics.rename(state, "a", "A", NOW)).state.doc.history).toEqual([]);
-    expect(done(topics.setGoal(state, "a", "another goal")).state.doc.history).toEqual([]);
+    expect(
+      done(topics.setGoal(state, "a", state.doc.topics["a"]?.goal ?? "", NOW)).state.doc.history,
+    ).toEqual([]);
     const merged = done(topics.merge(state, "b", "a", NOW)).state;
     expect(done(topics.merge(merged, "b", "a", NOW)).state.doc.history).toHaveLength(1);
     expect(done(topics.reopen(state, "a", undefined, NOW)).state.doc.history).toEqual([]);
@@ -617,9 +631,48 @@ describe("why and where a change was made", () => {
     expect(topics.stampHistory(unchangedResult, 0, "page")).toBe(unchangedResult);
     const refused = topics.rename(first.state, "nope", "x", NOW);
     expect(topics.stampHistory(refused, 0, "page")).toBe(refused);
-    const noHistory = topics.setGoal(first.state, "a", "new goal");
+    const noHistory = topics.keepOpen(first.state, "a");
     expect(topics.stampHistory(noHistory, first.state.doc.history.length, "command")).toBe(
       noHistory,
     );
+  });
+});
+
+describe("records of a move, a rename, and a goal change", () => {
+  it("write an update and a history line saying where the topic went or what changed", () => {
+    const state = fixture();
+    const moved = done(topics.move(state, "d", "high", { first: true }, NOW));
+    expect(moved.events).toEqual([
+      {
+        kind: "topic.moved",
+        topic: "d",
+        text: `議題「${state.doc.topics["d"]?.name}」移到「高」第 1`,
+      },
+    ]);
+    expect(moved.state.doc.history.at(-1)).toEqual({
+      at: NOW,
+      kind: "moved",
+      topic: "d",
+      name: state.doc.topics["d"]?.name,
+      queue: "high",
+      position: 1,
+    });
+    const renamed = done(topics.rename(state, "a", "Fresh", NOW));
+    expect(renamed.events).toEqual([
+      {
+        kind: "topic.renamed",
+        topic: "a",
+        text: `議題「${state.doc.topics["a"]?.name}」改名為「Fresh」`,
+      },
+    ]);
+    const goal = done(topics.setGoal(state, "a", "new goal", NOW));
+    expect(goal.events[0]?.kind).toBe("topic.goal_changed");
+    expect(goal.events[0]?.text).toContain("的目標改為「new goal」");
+    expect(goal.state.doc.history.at(-1)).toMatchObject({
+      kind: "goal",
+      topic: "a",
+      goal: "new goal",
+    });
+    expect(done(topics.move(state, "b", "normal", undefined, NOW)).events).toEqual([]);
   });
 });
