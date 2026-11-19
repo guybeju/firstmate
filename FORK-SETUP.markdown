@@ -218,7 +218,11 @@ bin/fm-board.sh install-rules
 - **上游有新版**：只有在 fork 的維護者把上游的 `main` 合併進 `carry` 之後才會到你手上，之後就和「fork 有新版」一樣（[rollout「之後怎麼更新」](myshape/spec/rollout.markdown)）。
   這台機器不用自己合併上游。
 - `carry` 的推送與 base 是 `carry` 的 PR 會跑 fork 自己的 lint 檢查 [`carry-lint.yml`](.github/workflows/carry-lint.yml)，內容是 `bin/fm-lint.sh` 完整的兩個 partition；它只在 fork 的 Actions 開著時才會跑。
-  上游的 CI 只在 `main` 上跑，在 fork 上是停用的，所以 `carry` 沒有測試套件的自動檢查。
+  上游的 CI 只在 `main` 上跑，在 fork 上是停用的，所以上游的測試套件不會在 `carry` 上自動跑。
+  base 是 `carry`、又改到看板或它用到的檔（列在那個檔的 `paths:`）的 PR，另外會跑看板的測試 [`carry-board-tests.yml`](.github/workflows/carry-board-tests.yml)：`myshape/test`、`fm-board/test`、`dispatch-plan/test`、`check-dist.sh`，以及單元測試、型別、lint、格式的檢查，在 GitHub 的機器上跑，不在這台機器上。
+  這個檢查只供參考，不是合併的必要條件；沒改到那些檔的 PR 不會出現這個檢查。
+  任何一個測試印出 `skip:` 時這個檢查就算失敗，job summary 列出每一個 `NOT RUN:`。
+  它用的 pnpm 與 `tasks-axi` 鎖在只給 CI 用的 `ci-tools/board-tests/`。
 - **退回較舊的版本或退回上游**：沒有定好的步驟。
   退版之前先備份 `data/topics.json`，舊版存檔時會丟掉後來才加的欄位（rollout「之後怎麼更新」）。
   要退回看板改名成 myshape 之前的程式，先在每個跑過 `migrate-myshape` 的 home 跑 `bin/fm-board.sh migrate-myshape --undo`，再退程式：舊的程式只認舊的名字。
