@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The board alone: its command and service run from a board-only root (only
 # the board's own files), in a clean environment with a system-only PATH, next
-# to decoy Firstmate files, with nothing on the other side (AT0, AT1, AT8.6 of
-# the board-interface test plan). With TB_STAGE7_TRIPWIRES=1 the root's bin/
+# to decoy Firstmate files, with nothing on the other side until AT8.4 puts a
+# stub aggregator there (AT0, AT1, AT8 of the board-interface test plan). With TB_STAGE7_TRIPWIRES=1 the root's bin/
 # and a bin/ beside the root also hold a tripwire for every other Firstmate
 # script and library, and the run must leave the trip log empty (AT3.2).
 # shellcheck disable=SC2016 # jq filters and the patterns of the static check are literal text.
@@ -14,6 +14,8 @@ set -u
 . "$ROOT/myshape/test/helpers.sh"
 # shellcheck source=myshape/test/standalone-lib.sh
 . "$ROOT/myshape/test/standalone-lib.sh"
+# shellcheck source=myshape/test/signal-lib.sh
+. "$ROOT/myshape/test/signal-lib.sh"
 
 for tool in jq node curl git; do
   command -v "$tool" >/dev/null 2>&1 || { echo "skip: $tool not found"; exit 0; }
@@ -21,6 +23,7 @@ done
 TMP_ROOT=$(fm_test_tmproot tb-s7)
 case "$TMP_ROOT" in /*) ;; *) echo "not ok - no scratch root" >&2; exit 1 ;; esac
 trap 'tb_stop_boards; fm_test_cleanup' EXIT
+sig_init
 
 sa_init
 mkdir -p "$TMP_ROOT/root"
@@ -31,7 +34,8 @@ if [ "${TB_STAGE7_TRIPWIRES:-0}" = 1 ]; then
   ROOT_COMMIT=$(tb_commit_root "$SA_ROOT" "tripwires")
 fi
 SA_ENV=(MYSHAPE_TEST=1 MYSHAPE_NOTIFY_MS=2000 "MYSHAPE_RETRY_MS=100,200"
-  MYSHAPE_RESUME_MS=1000 MYSHAPE_LOCAL_MS=300 MYSHAPE_STALE_MS=1000)
+  MYSHAPE_RESUME_MS=1000 MYSHAPE_READ_MS=300 MYSHAPE_STALE_MS=1000)
+AGG=$TMP_ROOT/agg
 MAIN=$(sa_home main)
 sa_decoys "$MAIN"
 
@@ -77,10 +81,9 @@ http_code() {  # <curl arguments...>
 test_the_environment_is_hardened() {
   local path
   assert_contains "$SA_PATH" "$SA_PATHTRIP:/usr/bin:/bin" "the board's PATH must be the tripwire directory and the system"
-  for path in "$SA_PATHTRIP"/fm-*.sh; do
-    case "${path##*/}" in fm-board.sh | fm-on.sh | fm-inbox.sh) fail "no-tripwire names must be absent from the PATH" ;; esac
-  done
+  assert_absent "$SA_PATHTRIP/fm-board.sh" "the one program the board runs must be absent from the PATH"
   [ -x "$SA_PATHTRIP/fm-tasks-axi.sh" ] || fail "every other Firstmate script must have a tripwire on the PATH"
+  [ -x "$SA_PATHTRIP/fm-inbox.sh" ] || fail "the programs the board ran before B2 must have tripwires on the PATH"
   # shellcheck disable=SC2086 # the file list is a list of words.
   assert_equals "$(cd "$ROOT" && git ls-files -s $TB_BOARD_FILES | awk '{print $4}' | sort | sha256sum)" \
     "$(cd "$SA_ROOT" && git ls-files $TB_BOARD_FILES | sort | sha256sum)" \
@@ -223,9 +226,9 @@ test_the_http_side() {
   assert_equals "main" "$(printf '%s' "$state" | jq -r '[.homes[].id] | join(" ")')" \
     "the board must know only home main, whatever firstmate's registry says"
   assert_not_contains "$state" "ship-a" "the board must not read firstmate's ledger"
-  assert_equals "true|spawn $SA_ROOT/bin/fm-topic-board-read.sh ENOENT" \
-    "$(printf '%s' "$state" | jq -r '.homes[0] | "\(.stale)|\(.error)"')" \
-    "home main must be stale, its reader missing"
+  assert_equals "false|沒有 bin/fm-board.sh|null" \
+    "$(printf '%s' "$state" | jq -r '"\(.aggregator.connected)|\(.aggregator.unavailable)|\(.homes[0].error)"')" \
+    "home main must show only that nothing is connected: no bin/fm-board.sh"
   pass "the page's HTTP checks hold, and the board shows only its own data"
 }
 
@@ -248,17 +251,27 @@ test_old_forms() {
   pass "split with tasks names its new command, the subcommands Firstmate took over are unknown, and nothing is written"
 }
 
-# B1 only: nothing receives what the captain does on the page yet, so every
-# note to the other side fails at once (amendment A3 changes this in B2).
-test_page_actions_fail_with_nothing_connected() {
-  local code writes before
-  # The agent's own moves earlier left a dispatchable notice; only this test's notes are counted.
-  before=$(api_state "$MAIN" '[.writes[].id]')
+# new_writes <ids-json>: the writes the board shows that are not in <ids-json>.
+new_writes() {
+  api_state "$MAIN" --argjson before "$1" '[.writes[] | select(.id as $id | $before | index($id) | not)]'
+}
+
+# waiting_ids: every write still waiting, oldest first, from the audit log.
+waiting_ids() {
+  api_state "$MAIN" '[.writes[] | select(.state == "waiting")] | sort_by(.created_at) | map(.id) | join(" ")'
+}
+
+# AT8.1: with nothing on the other side, every page action takes effect at once.
+test_page_actions_complete_with_nothing_connected() {
+  local code
+  BEFORE_AT8=$(api_state "$MAIN" '[.writes[].id]')
   t create "One" --goal "g" --id one >/dev/null
   t create "Two" --goal "g" --id two >/dev/null
   t create "Three" --goal "g" --id three >/dev/null
   t create "Four" --goal "g" --id four >/dev/null
   t create "Five" --goal "g" --id five --queue later >/dev/null
+  t create "Six" --goal "g" --id six --queue later >/dev/null
+  t create "Seven" --goal "g" --id seven --queue later >/dev/null
   t close-propose four --reason "done?" >/dev/null
   code=$(api "$MAIN" topics/merge '{"from":"two","into":"one"}' | jq -r '.confirm')
   assert_equals true "$(api "$MAIN" topics/merge "{\"from\":\"two\",\"into\":\"one\",\"confirm\":\"$code\"}" | jq -r '.ok')" \
@@ -276,14 +289,102 @@ test_page_actions_fail_with_nothing_connected() {
   assert_equals "three=later five=normal" \
     "$(t list --json | jq -r '[.[] | select(.id == "three" or .id == "five") | "\(.id)=\(.queue)"] | sort | reverse | join(" ")')" \
     "the reopen and the move must take effect at once"
+  pass "with nothing connected every page action takes effect at once"
+}
+
+# AT8.2: nothing is shown as failed while nobody is there to receive it.
+test_nothing_fails_with_nothing_connected() {
+  local writes
   sleep 3.5
-  writes=$(api_state "$MAIN" '[.writes[] | "\(.state)|\(.error)"] | sort | unique | join(";")')
-  assert_equals "failed|spawn $SA_ROOT/bin/fm-inbox.sh ENOENT" "$writes" "every note must end failed, its program missing"
-  assert_equals 5 "$(api_state "$MAIN" --argjson before "$before" '[.writes[] | select(.id as $id | $before | index($id) | not)] | length')" \
-    "the merge, the archive, the keep, the dispatchable notice and the message are the five notes"
-  assert_equals "one=2" "$(api_state "$MAIN" '[.writes[] | select(.topic == "one")] | "one=\(length)"')" \
-    "the topic card must count the notes that did not get through"
-  pass "with nothing connected the page actions take effect and their notes fail, as B1 expects"
+  writes=$(new_writes "$BEFORE_AT8")
+  assert_equals 5 "$(printf '%s' "$writes" | jq 'length')" \
+    "the merge, the archive, the keep, the message and five's dispatchable notice are the five writes"
+  assert_equals "waiting:0" "$(printf '%s' "$writes" | jq -r 'map("\(.state):\(.attempt)") | unique | join(" ")')" \
+    "every write must wait at attempt 0"
+  assert_equals "message notice" "$(printf '%s' "$writes" | jq -r 'map(.kind) | unique | join(" ")')" \
+    "the writes are a message and notices"
+  assert_equals 0 "$(api_state "$MAIN" '[.writes[] | select(.state == "failed" or .state == "undelivered" or .state == "unknown")] | length')" \
+    "no write may count as failed, undelivered or unknown"
+  assert_equals "false|null" "$(api_state "$MAIN" '"\(.aggregator.connected)|\(.homes[0].error)"')" \
+    "home main must show only the not-connected note"
+  pass "with nothing connected the writes wait at attempt 0 and none counts as failed"
+}
+
+# AT8.3: the waiting writes and the delay before a dispatchable notice both
+# survive the service dying.
+test_waiting_survives_a_crash() {
+  local waiting after
+  waiting=$(waiting_ids)
+  t stop >/dev/null
+  sa_child_board "$MAIN"
+  sa_crash_child "$MAIN"
+  t list >/dev/null || fail "the next command must bring the board back"
+  sleep 1.5
+  assert_equals "$waiting" "$(waiting_ids)" "(a) the same writes must still wait after a crash and the resume window"
+  assert_equals 0 "$(api_state "$MAIN" '[.writes[] | select(.state == "waiting" and .attempt != 0)] | length')" \
+    "(a) a waiting write must stay at attempt 0"
+
+  t stop >/dev/null
+  sa_child_board "$MAIN"
+  api "$MAIN" topics/move '{"id":"six","queue":"normal"}' >/dev/null
+  sleep 1
+  sa_crash_child "$MAIN"
+  t list >/dev/null
+  sleep 2.5
+  after=$(api_state "$MAIN" '[.writes[] | select(.kind == "notice" and .topic == "six")] | length')
+  if signal_dry_run; then
+    printf 'ok - skip: (b) needs the crash the dry run does not send\n'
+  else
+    assert_equals 1 "$after" "(b) six's notice must be recorded once its delay ends after a crash"
+  fi
+
+  api "$MAIN" topics/move '{"id":"seven","queue":"normal"}' >/dev/null
+  t restart >/dev/null
+  api "$MAIN" topics/move '{"id":"seven","queue":"later"}' >/dev/null
+  sleep 2.5
+  assert_equals 0 "$(api_state "$MAIN" '[.writes[] | select(.topic == "seven")] | length')" \
+    "(c) a topic moved out and back across a restart must send nothing"
+  pass "waiting writes and a pending dispatchable notice survive a crash and a restart"
+}
+
+# AT8.4: once an aggregator is there, it gets every waiting write once, in order.
+test_an_aggregator_receives_the_waiting_writes() {
+  local waiting received later
+  waiting=$(waiting_ids)
+  printf '{}\n' > "$AGG/plain/main.json"
+  sa_install_stub plain "$AGG"
+  t restart >/dev/null || fail "restart with the stub failed"
+  sleep 2
+  received=$(jq -r -s 'map(.id) | join(" ")' "$AGG/received.jsonl")
+  assert_equals "$waiting" "$received" "every waiting write must reach the aggregator once, oldest first"
+  assert_equals 0 "$(api_state "$MAIN" '[.writes[] | select(.state == "waiting")] | length')" "nothing may still wait"
+  assert_equals "delivered" "$(api_state "$MAIN" --arg ids "$waiting" '[.writes[] | select(.id as $id | $ids | split(" ") | index($id))] | map(.state) | unique | join(" ")')" \
+    "every released write must be delivered"
+  later=$(api "$MAIN" messages '{"topic":"one","text":"之後的"}' | jq -r '.write_id')
+  sleep 1
+  assert_equals "$later" "$(jq -r -s 'last | .id' "$AGG/received.jsonl")" "a write made after connecting must come after them"
+  t restart >/dev/null
+  sleep 1.5
+  assert_equals "$(( $(wc -w <<< "$waiting") + 1 ))" "$(grep -c '' "$AGG/received.jsonl")" \
+    "another restart must send nothing again"
+  pass "a connected aggregator receives every waiting write once, in record order, before newer ones"
+}
+
+# AT8.5: a connected aggregator's failures still show.
+test_a_connected_aggregators_failures_show() {
+  local failed tired
+  printf '%s\n' '{"outcome":"failed","error":"refused by plain"}' > "$AGG/play"
+  failed=$(api "$MAIN" messages '{"topic":"one","text":"會失敗"}' | jq -r '.write_id')
+  sleep 1
+  assert_equals "failed|refused by plain" \
+    "$(api_state "$MAIN" --arg id "$failed" '.writes[] | select(.id == $id) | "\(.state)|\(.error)"')" \
+    "a failed outcome must show as failed with its reason"
+  printf '%s\n' '{"outcome":"retry"}' '{"outcome":"retry"}' '{"outcome":"retry"}' > "$AGG/play"
+  tired=$(api "$MAIN" messages '{"topic":"one","text":"一直重試"}' | jq -r '.write_id')
+  sleep 2
+  assert_equals "undelivered" "$(api_state "$MAIN" --arg id "$tired" '.writes[] | select(.id == $id) | .state')" \
+    "retries that run out must end undelivered"
+  pass "with an aggregator connected, failures and spent retries still show"
 }
 
 test_status_and_stop() {
@@ -302,7 +403,7 @@ test_status_and_stop() {
 test_only_the_boards_files() {
   local file extra=""
   for file in data/topics.json data/topics-archive.json data/myshape/events.jsonl \
-    data/myshape/summaries.jsonl state/myshape/audit.jsonl state/myshape/port \
+    data/myshape/summaries.jsonl data/myshape/notify-pending.json state/myshape/audit.jsonl state/myshape/port \
     state/myshape/service.log state/myshape/token; do
     assert_present "$MAIN/$file" "the board must have written $file"
   done
@@ -312,7 +413,8 @@ test_only_the_boards_files() {
     case " $SA_DECOYS " in *" $file "*) continue ;; esac
     case "$file" in
       config/myshape-port | data/topics.json | data/topics-archive.json | data/myshape/events.jsonl | \
-        data/myshape/summaries.jsonl | data/myshape/offsets.json | state/myshape/token | \
+        data/myshape/summaries.jsonl | data/myshape/offsets.json | data/myshape/notify-pending.json | \
+        data/myshape/aggregator.json | state/myshape/token | \
         state/myshape/port | state/myshape/service.log | state/myshape/service.log.1 | \
         state/myshape/audit.jsonl | state/myshape/startup-error) ;;
       *) extra+=" $file" ;;
@@ -340,12 +442,13 @@ test_lifecycle() {
   sa "$home" stop >/dev/null
 
   port=$(cat "$home/config/myshape-port")
-  node -e 'require("node:net").createServer().listen(Number(process.argv[1]), "127.0.0.1"); setTimeout(() => {}, 60000);' "$port" &
+  # The holder lets go by itself after 8 s, so a signal dry run, which ends nothing, still frees the port.
+  node -e 'require("node:net").createServer().listen(Number(process.argv[1]), "127.0.0.1"); setTimeout(() => process.exit(0), 8000);' "$port" &
   holder=$!
   sleep 0.5
   rc=0
   out=$(sa "$home" open 2>&1) || rc=$?
-  kill "$holder"
+  kill_own_child "$holder"
   wait "$holder" 2>/dev/null
   assert_equals 69 "$rc" "open on a taken port must exit 69"
   assert_contains "$out" "埠 $port 被別的程式佔用" "open must say why it could not start"
@@ -383,5 +486,7 @@ test_nothing_is_left() {
 
 fm_test_run test_the_environment_is_hardened test_help_needs_nothing test_the_token_guard \
   test_open_and_the_running_service test_the_agents_topic_commands test_summaries_with_nothing_connected \
-  test_the_http_side test_old_forms test_page_actions_fail_with_nothing_connected test_status_and_stop \
+  test_the_http_side test_old_forms test_page_actions_complete_with_nothing_connected \
+  test_nothing_fails_with_nothing_connected test_waiting_survives_a_crash \
+  test_an_aggregator_receives_the_waiting_writes test_a_connected_aggregators_failures_show test_status_and_stop \
   test_only_the_boards_files test_lifecycle test_nothing_is_left

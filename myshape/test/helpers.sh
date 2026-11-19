@@ -129,9 +129,31 @@ tb_board_count() {
 }
 
 # tb_stop_boards: kill every board started under TMP_ROOT. Registered on EXIT so
-# a failed assertion never leaves a service behind.
+# a failed assertion never leaves a service behind. In a signal dry run
+# (myshape/test/signal-lib.sh) it signals nothing: it logs each board the
+# pattern matches, with its ancestry, and stops it through its own socket.
 tb_stop_boards() {
-  pkill -KILL -f "board-server.js.*--state $TMP_ROOT/" 2>/dev/null || true
+  local pid state
+  if [ -z "${FM_TEST_SIGNAL_DRY_RUN:-}" ]; then
+    pkill -KILL -f "board-server.js.*--state $TMP_ROOT/" 2>/dev/null || true
+    return 0
+  fi
+  for pid in $(pgrep -f "board-server.js.*--state $TMP_ROOT/" || true); do
+    [ -z "${SIGNAL_CHECK:-}" ] || "$SIGNAL_CHECK" "$$" "$FM_TEST_SIGNAL_LOG" tb_stop_boards "$pid" >/dev/null
+    state=$(ps -ww -o args= -p "$pid" | sed -n 's/.*--state \([^ ]*\).*/\1/p')
+    [ -z "$state" ] || tb_socket_stop "$state/myshape/board.sock"
+  done
+}
+
+# tb_socket_stop <socket>: ask the board on <socket> to stop, which it does by
+# exiting; no signal is sent. Quiet when nothing answers.
+tb_socket_stop() {
+  node -e '
+    const connection = require("node:net").connect(process.argv[1]);
+    connection.on("connect", () => connection.write(JSON.stringify({ v: 1, op: "stop", args: {} }) + "\n"));
+    connection.on("data", () => connection.end());
+    connection.on("error", () => process.exit(0));
+  ' "$1" 2>/dev/null || true
 }
 
 # tb_listeners <port>: every local address something listens on at that TCP

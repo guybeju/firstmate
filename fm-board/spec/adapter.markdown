@@ -10,17 +10,18 @@
 
 | 路徑 | 內容 |
 | --- | --- |
-| `bin/fm-board.sh` | 轉接指令：`tag`、`setup`、帶 task 的 `split`、`--in-home`、`install-rules`、`rules`，與一次性的 `migrate-myshape` |
+| `bin/fm-board.sh` | 轉接指令：看板執行的 `feed` 與 `deliver`（第 3 節），`tag`、`setup`、帶 task 的 `split`、`--in-home`、`install-rules`、`rules`，與一次性的 `migrate-myshape` |
+| `bin/fm-board-io-lib.sh` | `feed` 與 `deliver` 的程式；只有 `fm-board.sh` source 它 |
 | `bin/fm-board-migrate-lib.sh` | `migrate-myshape` 的步驟（C57）；只有 `fm-board.sh` source 它，每個 home 都搬完之後拿掉 |
 | `bin/fm-topic.sh` | 改名前的指令名稱留下的提示（第 2 節）；每個 home 都搬完之後拿掉 |
 | `bin/fm-board-lib.sh` | 找同機 secondmate 的 home、在那個 home 執行指令；`fm-board.sh` 與 `fm-topic-board-read.sh` source 它 |
 | `bin/fm-dispatch-plan.sh` | `order`：照看板的佇列排出該派、該 hold、該解除的 backlog 項目 |
 | `fm-board/rules/` | 三個規則範本，副檔名 `.md.tmpl`（fork 不能新增追蹤的 `.md`） |
-| `fm-board/test/` | `run.sh` 與這一側的測試：`tag`、`setup`、`--in-home`（`stage-1-tag.sh`），帶 task 的 `split`（`stage-3-split.sh`），規則與安裝說明（`stage-6-*.sh`、`check-guide.sh`），改名前的名字與 `migrate-myshape`（`stage-8-*.sh`） |
+| `fm-board/test/` | `run.sh` 與這一側的測試：`feed`（`stage-1-feed.sh`），`deliver`（`stage-2-deliver.sh`），`tag`、`setup`、`--in-home`（`stage-1-tag.sh`），帶 task 的 `split`（`stage-3-split.sh`），規則與安裝說明（`stage-6-*.sh`、`check-guide.sh`），改名前的名字與 `migrate-myshape`（`stage-8-*.sh`） |
 | `dispatch-plan/test/` | `run.sh` 與 `order` 的測試（`stage-1-order.sh`） |
 | `fm-board/spec/` | 這一頁 |
 
-`bin/` 底下的五支和看板的指令一樣，要通過 `bin/fm-lint.sh <檔>` 與 bash 3.2 的語法檢查。
+`bin/` 底下的六支和看板的指令一樣，要通過 `bin/fm-lint.sh <檔>` 與 bash 3.2 的語法檢查。
 `fm-board.sh` 要在 git 裡是可執行的：遠端 home 的 `tag` 與 `setup` 經 `fm-on.sh` 跑，它只執行追蹤、可執行的 `bin/fm-*.sh`。
 
 ## 2. 舊的寫法
@@ -43,8 +44,58 @@ stderr 第一行指出新的指令，第二行說使用者還要做什麼：這�
 
 ## 3. 看板怎麼用到這一側
 
-看板服務的白名單（contracts 第 7 節）裡，W5、W7、W8、W9 跑的是 `fm-board.sh`：同機 secondmate 的作答（`--in-home <sm> answers`），以及頁面上的「歸併到…」（主 home、同機、經 `fm-on.sh` 到遠端的 `tag`）。
-頁面在 home 的帳本沒開時顯示的指令也是 `fm-board.sh setup`。
+看板服務只執行 `bin/fm-board.sh` 的兩個子命令（contracts 第 7 節）；它們的程式在 `bin/fm-board-io-lib.sh`，檔頭寫明每一種跑什麼。
+看板在環境變數 `MYSHAPE_HOME` 給它的 home，這兩個子命令把它當成 `FM_HOME`。
+
+### 3.1 `feed <home> <offset> <sha>`
+
+| `<home>` | 跑 |
+| --- | --- |
+| `main` | `fm-topic-board-read.sh <offset> <sha>` |
+| 登記的同機 secondmate | `fm-topic-board-read.sh --in-home <id> <offset> <sha>` |
+| 登記的遠端 secondmate | `fm-on.sh <id> fm-topic-board-read.sh <offset> <sha>`；`fm-on.sh` 說那邊沒有這支追蹤的程式時，exit 4，stderr 一行「還沒換到 fork：…再回主 home 跑 /updatefirstmate。它的 agent 不會顯示。」 |
+| 其他 | exit 2，什麼都不跑 |
+
+讀到的回報原樣交給看板，另外加上：
+
+- 主 home 的回報加 `aggregator`：`{"name":"firstmate","label":"first mate","update_hint":"請在主 home 跑 /updatefirstmate。"}`。
+- `ledger_enabled` 是 `false` 的 home 加 `ledger_hint`，一行「home <id> 的帳本未開，它的 task 不會有更新。在主 home 的終端機跑 <指令>」；指令是 `bin/fm-board.sh setup`（主 home）、`bin/fm-board.sh --in-home <id> setup`（同機）或 `bin/fm-on.sh <id> fm-board.sh setup`（遠端）。
+- `secondmates[]` 裡遠端的 secondmate 加 `read_every_s: 60`、`read_timeout_s: 400`，所以遠端的 home 讀得和以前一樣慢；`remote` 與 `home` 兩個欄位照舊留著，給還在直接讀彙整腳本的舊版看板。
+
+彙整腳本 `fm-topic-board-read.sh` 的輸出（contracts 第 4 節的形狀）：
+
+- `tasks[]`、`holds[]` 取自 `fm-fleet-snapshot.sh --json`：`tasks` 與 `backlog.records[]`。`holds[]` 只收 `hold_kind` 是 captain 的紀錄。`origin` 從 hold 內文的 `Captain hold origin:` 那一行取出，取不到就是空字串。`on_answer` 取自 `Captain hold on answer:` 那一行（`fm-captain-hold.sh hold --on-answer` 寫的），沒有那一行或值不是 `close`、`release` 就是 `null`。
+- `ledger.lines` 從 offset 起、每次最多 256 KiB 的完整行；還有沒讀完的就 `more: true`。offset 超過檔案長度、或前綴雜湊對不上，回 `continuity-broken`。沒有帳本檔回 `absent`。`fm-on.sh` 每個 job 的輸出上限是 1 MiB。
+- `secondmates[]` 只在主 home 的輸出裡有，資料取自上游的 `fm-secondmate-registry-lib.sh` 逐行解析 `data/secondmates.md`。
+- 腳本自己設 `FM_CREW_STATE_NO_FORGE=1`。
+
+測試：`fm-board/test/stage-1-feed.sh`（每個欄位、和 `myshape/test/contract/report-main.json` 一樣的欄位結構、三種 home、exit 4）。
+
+### 3.2 `deliver`
+
+從 stdin 讀一行動作紀錄（contracts 7.1），跑下面的指令，在 stdout 印一行結果，印了結果就以 0 結束。
+
+| `kind` | home | 跑 | 結果 |
+| --- | --- | --- | --- |
+| `message` | — | `fm-inbox.sh note --request-id tb-<id> -`，stdin「［議題：<名稱>（<id>）］」換行後接文字 | exit 0 已送達；3 重試（存了但沒叫醒 first mate，同一個 id 重放會補叫醒）；其他失敗 |
+| `notice` | — | 同上，stdin 是 `text` | 同上 |
+| `direct` | `main` | `fm-send.sh <task> <文字>` | 0 已送達；輸出有 `is not resolvable` 是失敗「這個 worker 已經結束或找不到，訊息沒有送出。」；其他失敗 |
+| `direct` | secondmate | `fm-send.sh <id> --fire-and-forget <id 的 SHA-256 前 16 位> 轉給 <task>：<文字>` | 0 已送達；3 而且是遠端的是重試；其他失敗 |
+| `answer` | `main` | `fm-captain-hold.sh answers --source myshape`，stdin `<task>\t<answer>\t<label>\t<mode>` | 見下 |
+| `answer` | 同機 | `fm-board.sh --in-home <id> answers` | 見下 |
+| `answer` | 遠端 | `fm-on.sh --stdin <id> fm-captain-hold.sh answers --source myshape` | 見下；exit 255 是重試 |
+| `tag` | `main`／同機／遠端 | `fm-board.sh tag`／`fm-board.sh --in-home <id> tag`／`fm-on.sh <id> fm-board.sh tag`，參數 `<task> <議題 id>` | 0 已送達；遠端 255 重試；其他失敗 |
+
+- 作答逐行讀 stdout：`closed: <task>` 之後接著送通知 `fm-inbox.sh note --request-id tb-<id>-note -`，內容「［議題：<名稱>］已在看板回答 <home>/<task>：<答案>」（沒有議題是「未分類」），結果照 `message`；`skipped: <task> (already closed)`、`(… records a different captain decision …)`、`(not held for the captain)` 是已由別處處理；其他的 `skipped:`、`refused:` 是失敗。同樣的答案重放一次，`answers` 回 `closed:`、什麼都不改，所以作答到一半重來是安全的。
+- 紀錄帶 `legacy_request_id`（看板改版前寫下的寫入）時，`message` 與 `notice` 用它當 request id。
+- `home` 不是 `main` 也不是登記的 secondmate、紀錄不是合法的 JSON、`kind` 不認得、欄位不完整：結果都是失敗。
+- 給 worker 的文字以 `/`、`$`、`!` 或 `-` 開頭也是失敗；看板本來就擋，這裡再擋一次，因為 `fm-send.sh` 不收 `--` 終止符。
+
+這些通知的內容和改版前一樣（contracts 第 7 節改版前是看板自己跑這些指令）；差別只有「議題變成可派」的通知改成說發生了什麼（「議題「X」離開「待辦」，排在「一般」第 3」），不再寫「請跑 order 重新評估」，和每一個頁面上的決定各送一則。
+
+測試：`fm-board/test/stage-2-deliver.sh`（每一種紀錄對三種 home 跑的指令、參數、stdin 與 `FM_HOME`，每一種結果，通知的內容逐位元組；裝了 `tasks-axi` 時用真的 `fm-captain-hold.sh` 作答一次）；第三到五段的看板測試經 `tb_make_fake_root` 跑真的 `fm-board.sh`。
+
+### 3.3 看板自己的指令還會跑的
 
 在看板自己存「要你動手」的項目之前，`myshape.sh todo add` 與 `todo done` 還會執行（不 source）四個 first mate 的指令：`fm-topic-board-read.sh`（判斷 task 是什麼）、`fm-captain-hold.sh hold`、`fm-board.sh tag`、`fm-captain-hold.sh answers`。
 
@@ -56,7 +107,7 @@ stderr 第一行指出新的指令，第二行說使用者還要做什麼：這�
 | 1 | 被拒絕或失敗，確定沒寫入 |
 | 2 | 用法錯 |
 
-例外：`--in-home <id> answers` 原樣傳回 `fm-captain-hold.sh` 的 exit code 與輸出；`split` 在看板拒絕或連不上時傳回 `myshape.sh` 的 exit code（3、69 的意思見 contracts 第 9 節）。
+例外：`feed` 與 `deliver` 照第 3 節；`--in-home <id> answers` 原樣傳回 `fm-captain-hold.sh` 的 exit code 與輸出；`split` 在看板拒絕或連不上時傳回 `myshape.sh` 的 exit code（3、69 的意思見 contracts 第 9 節）。
 
 ## 5. 寫的檔
 
@@ -92,3 +143,42 @@ stderr 第一行指出新的指令，第二行說使用者還要做什麼：這�
 | `bin/fm-fleet-snapshot.sh --json` | `fm-dispatch-plan.sh order`、`migrate-myshape` 找要換原因的 hold | 和彙整腳本相同（contracts 第 11.1 節） | `dispatch-plan/test/stage-1-order.sh` 全部 |
 | `bin/fm-tasks-axi.sh hold <id> --reason <文字>`、`unhold <id>` | `order` 只印成給 first mate 照著跑的指令；`migrate-myshape` 用 `hold` 換掉沒有種類的 hold 的原因 | 指令的形狀；對已經 hold 的項目再 `hold` 一次只換原因、中間不解除，但會拿掉 hold 的種類（tasks-axi 0.2.6 實測），所以有種類的 hold 不換 | `stage-1-order.sh` 的 `test_sections` 只檢查印出來的字串；`stage-8-migrate.sh` 用真的 `tasks-axi` |
 | `bin/fm-captain-hold.sh answers --source myshape` | `fm-board.sh --in-home <id> answers` | 在那個 home 執行並原樣傳回 | `stage-1-tag.sh` 的 `test_in_home_answers_passes_through`（替身） |
+
+「真的」是測試執行 checkout 裡真的那支指令；「替身」是測試用自己寫的假指令取代它，只檢查送出去的參數與 stdin，並照劇本回應。替身的那幾列，框架改了輸出或 exit code，測試不會失敗，要靠人對照這兩張表。
+
+### 7.1 `feed` 讀的
+
+| 框架的東西 | 誰用 | 這一側靠的是 | 測試 |
+| --- | --- | --- | --- |
+| `bin/fm-fleet-snapshot.sh --json`，環境變數 `FM_SNAPSHOT_SECONDMATES=1`、`FM_SNAPSHOT_BUDGET=1`、`FM_CREW_STATE_NO_FORGE=1`、`FM_HOME` | `fm-topic-board-read.sh` | exit 0 並在 stdout 印一個 JSON 物件；失敗時非 0。用到的欄位見下一張表 | 真的：`fm-board/test/stage-1-feed.sh`、`stage-1-read.sh` 全部、`stage-3-data.sh` 全部 |
+| `state/fleet-ledger.jsonl` | `fm-topic-board-read.sh` 逐位元組分段讀；服務解析每一行 | 只會從尾端增加的 JSONL。每行是物件，有字串 `event`、字串 `task`、數字 `ts`；另外用到 `kind`、`pr`、`text`、`state`。`event` 認得 `task.dispatched`、`task.status`、`task.pr_ready`、`task.merged`、`task.cleaned_up`，其他的照原樣顯示 | `stage-1-read.sh` 的 `test_ledger_delta_and_continuity`；`stage-3-data.sh` 的 `test_updates_and_topics`、`test_ledger_is_stored_once_and_survives_rewrites`（帳本是測試自己寫的固定內容，不是框架產生的） |
+| `config/fleet-ledger` 存在與否 | `fm-topic-board-read.sh` | 檔案存在就是這個 home 的帳本開著（由 first mate 這一側的 `fm-board.sh setup` 建立） | `stage-3-data.sh` 的 `test_home_status` |
+| `bin/fm-primary-scope-lib.sh` 的 `fm_root_is_secondmate_home <home>` | `fm-topic-board-read.sh`、`fm-topic-session-start.sh` | 回傳值分辨 secondmate home（標記檔 `.fm-secondmate-home`） | 真的：`stage-1-read.sh` 的 `test_secondmates_and_in_home`；`stage-2-startup.sh` 的 `test_secondmate_home_gets_nothing` |
+| `bin/fm-secondmate-registry-lib.sh` 的 `secondmate_registry_parse_line`（設 `SECONDMATE_REGISTRY_ID`、`_HOME`、`_REMOTE`）與 `secondmate_registry_field <登記檔> <id> remote\|home` | `fm-topic-board-read.sh`，經 `fm-board-lib.sh` | `data/secondmates.md` 每個 `- ` 開頭的行解析出 id、home、是不是遠端 | 真的：`stage-1-read.sh` 的 `test_secondmates_and_in_home` |
+| `bin/fm-timeout-lib.sh` 的 `fm_run_timed <秒> <指令…>` 與 `fm_timed_out <exit code>` | `fm-topic-session-start.sh` | 指令超過秒數就被停下，回 `fm_timed_out` 認得的 exit code；其他時候回指令自己的 exit code | 真的：`stage-2-startup.sh` 全部（沒有逾時的情況） |
+| `data/backlog.md` 的項目行格式 | 經 snapshot 間接讀；看板自己不解析 | 測試的 backlog 是照這個格式手寫的；hold 的原因用 `fm-hold-v1:<base64>` 編碼時由 snapshot 解回原文 | `stage-4-writes.sh` 的 `test_hands_on_items`（編碼過的原因）；`stage-5-page.sh` |
+
+snapshot 的 JSON 裡用到的欄位（少了哪一個，對應的東西就從看板上消失或顯示成未知，不會報錯；`fm-topic-board-read.sh` 讀它們）：
+
+| 路徑 | 用途 |
+| --- | --- |
+| `generated` | 這次讀取的時間 |
+| `tasks[].id`、`.kind`、`.current_state.state`、`.current_state.source`、`.current_state.detail` | agent 的燈號。`state` 是 `working` 且 `detail` 剛好是 `harness busy (fm-spawn)` 時當成「還沒開始」（C32） |
+| `tasks[].hints.open_decisions[]` 的 `verb`（只取 `needs-decision`）、`key`、`summary` | worker 提問 |
+| `backlog.records[]` 的 `structured`、`state`（`queued`、`done`）、`id`、`title`、`kind` | 排隊中的項目 |
+| `backlog.records[]` 的 `hold_kind`（`captain`）、`hold_reason`、`hold_bucket`（`live`、`aged`、`dated`、`blocked`）、`hold_until`、`hold_age_days`、`unresolved_blocker_ids` | 待決事項、要你動手的項目、排隊項目在等什麼 |
+| `backlog.records[].body_lines[]` 裡 `Captain hold origin: <id>` 那一行 | 待決事項沒有自己的議題標記時，跟著來源 task 的議題 |
+| `backlog.records[].body_lines[]` 裡 `Captain hold on answer: close\|release` 那一行 | 作答時送 `done` 還是 `release`（第 8 節） |
+| `backlog.records[].body_lines[]` 裡 `topic: <議題 id>` 那一行 | 排隊中的項目沒有議題標記時用它（C51）；first mate 轉交項目時寫的 |
+
+### 7.2 `deliver` 跑的
+
+argv 的確切形狀與結果怎麼判在第 3.2 節。
+
+| 框架的指令 | 這一側靠的是 | 測試 |
+| --- | --- | --- |
+| `bin/fm-inbox.sh note --request-id <id> -` | exit 0 是送到（重放同一個 id 也是 0）；exit 3 是存了但沒叫醒 first mate，用同一個 id 重放會補叫醒；其他是失敗 | 替身：`fm-board/test/stage-2-deliver.sh`；`stage-4-writes.sh` 的 `test_message_to_firstmate`、`test_answer_notice_survives_a_restart`、`test_dispatchable_notice`、`test_decisions_made_on_the_page_reach_firstmate` |
+| `bin/fm-send.sh <task-id> <文字>` 與 `<sm> --fire-and-forget <16 位十六進位> <文字>` | exit 0 是送到；exit 3 是自己重試後仍未確認；不接受 `--` 終止符，所以開頭是 `/`、`$`、`!`、`-` 的文字由看板擋下 | 替身：`fm-board/test/stage-2-deliver.sh`；`stage-4-writes.sh` 的 `test_direct_message`、`test_retries_run_out` |
+| `bin/fm-on.sh <sm> <指令…>` 與 `--stdin` | 在遠端 home 執行並把 stdout、exit code 傳回；exit 255 是連線層失敗，可以重試 | 替身：`fm-board/test/stage-2-deliver.sh`、`stage-3-data.sh`（遠端 home 是本機的目錄）、`stage-4-writes.sh` 的 `test_answers`、`test_tagging` |
+| `bin/fm-captain-hold.sh answers --source myshape`，stdin 一行 `<task-id>\t<answer>\t<label>\t<mode>` | 逐行讀 stdout：`closed: <id>` 是成功；`skipped: <id> (already closed)`、`(… records a different captain decision …)`、`(not held for the captain)` 是別處已處理；其他的 `skipped:`、`refused:` 是失敗。`mode` 是 `done` 或 `release` | 替身：`fm-board/test/stage-2-deliver.sh`；`stage-4-writes.sh` 的 `test_answers`、`stage-5-http.sh` 的 `test_answer_takes_two_steps`。真的：`test_hands_on_item_with_the_real_hold_tool`，只有裝了 `tasks-axi` 才跑，涵蓋 `done` 與 `release` |
+| `bin/fm-captain-hold.sh hold <id> --title <標題> --reason <多行文字> --on-answer close` | 建立或更新 captain hold；原因可以有換行、括號、引號，讀回來一字不差；重複執行會更新原因。`--on-answer` 寫成內文的 `Captain hold on answer:` 一行，之後重複 hold 不帶它也保留 | 真的：`test_hands_on_item_with_the_real_hold_tool`（同上，要 `tasks-axi`）。替身：`test_hands_on_commands` |

@@ -316,6 +316,7 @@ function statusData(service: Service): Record<string, unknown> {
   return {
     ...healthData(service),
     polling: service.poller.active,
+    aggregator: aggregatorView(service),
     homes: service.poller.snapshots().map((home) => ({ id: home.id, version: home.version })),
     events_bytes: fileSize(service.paths.events),
     summaries_bytes: fileSize(service.paths.summaries),
@@ -969,7 +970,7 @@ function claimNotices(
  */
 function notifyDecision(service: Service, notices: PageNotice[]): void {
   for (const notice of notices) {
-    const text = notice.event === "todo.claimed" ? notice.line : `使用者在看板上：${notice.line}`;
+    const text = `使用者在看板上：${notice.line}`;
     submitNotice(
       service,
       {

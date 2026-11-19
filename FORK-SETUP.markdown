@@ -158,7 +158,8 @@ bin/myshape.sh open
 bin/myshape.sh status
 ```
 
-**確認**：有 `看板服務：在跑`、`輪詢：進行中`，每一行 `home <id>：` 都是 `相同`（只有主 home 時只有 `home main：相同`）。
+**確認**：有 `看板服務：在跑`、`輪詢：進行中`、`aggregator：已接上（first mate）`，每一行 `home <id>：` 都是 `相同`（只有主 home 時只有 `home main：相同`）。
+看板經 `bin/fm-board.sh` 讀 first mate 的資料、把頁面上的動作交給 first mate（[adapter](fm-board/spec/adapter.markdown) 第 3 節）；那支程式不在時這一行是 `aggregator：沒有接上（沒有 bin/fm-board.sh）`，頁面上的動作照常完成，要送出的會等到下一次服務啟動、程式在了再依序送出。
 剛打開時那一行可能是 `還沒讀到`，等一下再看。
 
 服務第一次成功啟動之後，主 first mate 每次開 session 都會檢查它：沒在跑就啟動，並在啟動摘要 fleet state 那一段的最後印一行 `看板服務：在跑`、`看板服務：原本沒在跑，已啟動`、`看板服務：原本沒有回應，已重新啟動` 或 `看板服務：無法啟動：<原因>`（[`bin/fm-topic-session-start.sh`](bin/fm-topic-session-start.sh)）。
@@ -170,7 +171,7 @@ bin/myshape.sh status
   沒有 `node` 或低於 22、`myshape/dist/` 不完整（回第 3 步更新）、`config/myshape-port` 不合法，都在這一行說明。
   開 session 時的 `看板服務：無法啟動：<原因>` 是同一個原因，照著修，下一次開 session 或任何一個看板指令會再試。
 - 上一次啟動失敗的原因在 `state/myshape/startup-error`，服務的輸出在 `state/myshape/service.log`（contracts 第 3 節）。
-- 某個 home 顯示 `還沒換到 fork`、`版本不相容` 或 `版本不同`，或頁面說帳本未開，表示那個 home 不在同一版或沒開帳本；只有主 home 時不會出現，有 second mate 時見第 8 節。
+- 某個 home 顯示 `無法回報`（頁面上那個 home 的橫幅說原因，例如 `還沒換到 fork`）、`版本不相容` 或 `版本不同`，或頁面說帳本未開，表示那個 home 不在同一版或沒開帳本；只有主 home 時不會出現，有 second mate 時見第 8 節。
 - 不用時 `bin/myshape.sh stop` 停掉服務；主 first mate 下一次開 session 時會再把它啟動。
 
 ## 6. 裝規則，重開 session
@@ -245,7 +246,7 @@ second mate 本身怎麼佈建照上游：同機的見 [secondmate-provisioning 
 3. **每個 home 開帳本**：同機的是 `bin/fm-board.sh --in-home <id> setup`，遠端的是 `bin/fm-on.sh <id> fm-board.sh setup`。
    遠端那一行能跑、回 `ok setup …`，就表示那台已經跟到有 `fm-board.sh` 的 `carry`（rollout R-1）。
 4. **確認每個 home 都在同一版**：打開看板停留一分鐘以上（讓遠端輪到一次），`bin/myshape.sh status` 的每一行 `home <id>：` 都要是 `相同`。
-   `還沒換到 fork` 表示那台遠端還沒跟到 `carry`：停在這裡，不要做下一步，也不要拿掉任何一邊的 `config/self-update-source`，記下那台的更新錯誤訊息再處理（rollout R-1）。
+   `無法回報`、頁面上那個 home 的橫幅寫 `還沒換到 fork`，表示那台遠端還沒跟到 `carry`：停在這裡，不要做下一步，也不要拿掉任何一邊的 `config/self-update-source`，記下那台的更新錯誤訊息再處理（rollout R-1）。
 5. **最後才裝規則**（第 6 步）：共用的那段規則會叫每個 second mate 跑 `fm-board.sh`，所以要等上一步全過。
    裝完重開主 first mate 的 session；second mate 在主 home 下一次啟動檢查把共用檔傳過去之後重啟。
 

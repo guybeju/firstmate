@@ -302,19 +302,28 @@ todo_add() {
   printf '%s\n' "ok ${words[0]} 已放上看板的「要你動手」（議題 ${topic}）"
 }
 
-# todo done <task-id>: firstmate checked that the captain did it; close the item.
+# agent_label: the name the board's texts use for the agent side, the label
+# of the last root report the service kept, else "aggregator".
+agent_label() {
+  local label=""
+  label=$(jq -r '.label // empty' "$DATA/myshape/aggregator.json" 2>/dev/null) || label=""
+  printf '%s\n' "${label:-aggregator}"
+}
+
+# todo done <task-id>: the agent checked that the captain did it; close the item.
 todo_done() {
-  local id=${1:-} kind out
+  local id=${1:-} kind out label
   [ "$#" -eq 1 ] || usage_error "todo done 的用法是 <task-id>"
   tb_valid_id "$id" || usage_error "task id 格式不對：$id"
   kind=$(todo_kind "$id")
   # Only an open hands-on item is fed to the intake: it would close any captain hold it is given.
   [ "$kind" = todo ] ||
     tb_die 1 "$id 不是開著的「要你動手」項目，沒有關任何東西（已經關過的話不用再跑）。"
-  out=$(printf '%s\t做完了\tfirst mate 已驗證\tdone\n' "$id" |
+  label=$(agent_label)
+  out=$(printf '%s\t做完了\t%s 已驗證\tdone\n' "$id" "$label" |
     "$SCRIPT_DIR/fm-captain-hold.sh" answers --source myshape) ||
     tb_die 1 "$id 沒有關：$(printf '%s' "$out" | head -n 1)"
-  printf '%s\n' "ok $id 已關（做完了，first mate 已驗證）"
+  printf '%s\n' "ok $id 已關（做完了，$label 已驗證）"
 }
 
 cmd_todo() {

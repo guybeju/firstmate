@@ -14,7 +14,7 @@ done
 TMP_ROOT=$(fm_test_tmproot tb-s5p)
 trap 'tb_stop_boards; fm_test_cleanup' EXIT
 
-export MYSHAPE_TEST=1 MYSHAPE_LOCAL_MS=2000 MYSHAPE_REMOTE_MS=60000
+export MYSHAPE_TEST=1 MYSHAPE_READ_MS=2000
 export FM_SNAPSHOT_NOW=2026-07-25T00:00:00Z
 export TB_LOG="$TMP_ROOT/calls.log" TB_PLAY="$TMP_ROOT/play" TB_REMOTES="$TMP_ROOT/remotes"
 mkdir -p "$TB_PLAY" "$TB_REMOTES"

@@ -403,7 +403,7 @@ export function keepOpen(state, rawId) {
     return changed(next, `ok ${id} 先不關`);
 }
 const TODO_LINE = {
-    claimed: "已記下做完了，等 first mate 驗證",
+    claimed: "已記下做完了，等驗證",
     rejected: "已標成驗證沒過，回到要使用者動手",
     obsolete: "已標成不再需要，等使用者撤下",
 };

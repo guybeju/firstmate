@@ -758,7 +758,7 @@ describe("hands-on items", () => {
     expect(parseTodo("動手：重啟 x\n說明：a\n續：b")?.commands).toEqual(["說明：a\n續：b"]);
   });
 
-  it("shows the mark firstmate or the captain left, and no option buttons", () => {
+  it("shows the mark the agent or the captain left, and no option buttons", () => {
     const state = topics();
     state.doc.todos = {
       claimed: { state: "claimed", at: "t" },

@@ -192,7 +192,7 @@ export default async function run(page) {
   // Drag a topic out of "later": the order follows, and the notice is announced.
   await page.evaluate(`(() => { const d = ${drag("Parked", "high", "Login")}; d.fire(d.onto, "drop", 0); d.fire(d.card, "dragend", 0); return true; })()`);
   await page.waitFor("the dragged topic in the high queue", queueHas("high", "Parked"));
-  await page.waitFor("the dispatch notice countdown", has("秒後會通知 first mate 重新評估派工"));
+  await page.waitFor("the dispatch notice countdown", has("秒後會通知 first mate；拖回"));
   const order = await page.evaluate(`[...document.querySelectorAll('.queue[data-queue="high"] .topic .name')].map((el) => el.textContent).join(",")`);
   if (order !== "Parked,Login") throw new Error(`dropping above a card must insert before it, got ${order}`);
   // A drag that ends without a drop puts the card back.

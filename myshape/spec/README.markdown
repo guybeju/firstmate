@@ -31,19 +31,20 @@
                                    ├─ 看板服務（node，主 home，常駐）
 myshape.sh ──Unix socket（0600）──┘      │  獨家寫入 data/topics.json 等
    │                                      │
-   │ list（只讀檔）                       ├─ 讀：fm-topic-board-read.sh（主 home、同機、經 fm-on.sh 到遠端）
-   │                                      └─ 寫：fm-inbox.sh、fm-send.sh、fm-captain-hold.sh、fm-board.sh tag
+   │ list（只讀檔）                       ├─ 讀：bin/fm-board.sh feed <home> <offset> <sha>
+   │                                      └─ 寫：bin/fm-board.sh deliver（一行動作紀錄）
    ▼
 data/topics.json（只讀）
 
-first mate 這一側：fm-board.sh（tag、setup、帶 task 的 split、--in-home、install-rules、rules）、fm-dispatch-plan.sh（order）
+first mate 這一側：fm-board.sh（feed、deliver、tag、setup、帶 task 的 split、--in-home、install-rules、rules）、fm-dispatch-plan.sh（order）
    ▼
 各 home 的 data/<task-id>/topic、config/fleet-ledger、偏好檔
 ```
 
 - **看板服務**只在主 home，按需啟動、獨立常駐；主 home 每次開 session 時，沒在跑的服務也會被啟動。它是議題資料唯一的寫入者。
 - **`bin/myshape.sh`** 是 first mate 與使用者用的看板指令，只 source 自己的 `myshape-lib.sh`。`list` 只讀檔，服務掛了也能用；其餘經 socket 找服務。讀寫 first mate 自己的檔的指令在 first mate 這一側（[adapter](../../fm-board/spec/adapter.markdown)）。
-- **`bin/fm-topic-board-read.sh`** 是每個 home 都有的唯讀彙整腳本，也是服務唯一的讀取來源。
+- **另一邊的 aggregator** 只經 code root 的 `bin/fm-board.sh` 與看板往來：`feed` 印一個 home 的回報，`deliver` 收一行動作紀錄、回一行結果（[contracts](contracts.markdown) 第 4、7 節）。看板不知道 home 在哪台機器上。
+- **first mate 的 `fm-board.sh feed`** 照 home 跑每個 home 都有的唯讀彙整腳本 `bin/fm-topic-board-read.sh`（主 home、同機、經 `fm-on.sh` 到遠端）；`deliver` 跑 `fm-inbox.sh`、`fm-send.sh`、`fm-captain-hold.sh` 與 `fm-board.sh tag`（[adapter](../../fm-board/spec/adapter.markdown) 第 3 節）。
 - **遠端 home** 只需要 `fm-topic-board-read.sh`、`fm-board.sh`、帳本旗標與 `jq`。
 
 ## 不變的原則

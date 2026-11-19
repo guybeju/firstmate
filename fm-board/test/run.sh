@@ -12,7 +12,7 @@ TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   exit 2
 }
 
-"${BASH:-bash}" "$TEST_DIR/check-signals.sh"
+"${BASH:-bash}" "$TEST_DIR/../../myshape/test/check-signals.sh"
 ran=0
 for script in "$TEST_DIR"/stage-*.sh; do
   [ -f "$script" ] || continue

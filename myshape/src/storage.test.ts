@@ -348,7 +348,7 @@ describe("store", () => {
           goal: "g",
           status: "proposed",
           created_at: "2026-11-18T02:00:00Z",
-          proposed_by: "firstmate",
+          proposed_by: "an agent",
           suggested_queue: "high",
         },
       },

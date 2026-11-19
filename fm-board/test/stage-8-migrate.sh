@@ -12,40 +12,19 @@
 # shellcheck disable=SC2016 # jq filters are literal text.
 set -u
 
-"${BASH:-bash}" "$(dirname "${BASH_SOURCE[0]}")/check-signals.sh" >/dev/null || exit 1
+"${BASH:-bash}" "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/myshape/test/check-signals.sh" >/dev/null || exit 1
 
 # shellcheck source=tests/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tests/lib.sh"
 # shellcheck source=myshape/test/helpers.sh
 . "$ROOT/myshape/test/helpers.sh"
+# shellcheck source=myshape/test/signal-lib.sh
+. "$ROOT/myshape/test/signal-lib.sh"
 
 BASE=5324261c
 BASE_BOARD_FILES="bin/fm-topic.sh bin/fm-topic-lib.sh topic-board/dist topic-board/public topic-board/package.json"
 LIVE_BOARD_PORT=47819
 
-# FM_TEST_SIGNAL_DRY_RUN=1: the guarded helper sends nothing and instead writes
-# one line per call to FM_TEST_SIGNAL_LOG (an absolute path), so the targets
-# can be read before a real run; the assertions that need a killed run are
-# skipped, and every shim and migration ends by itself.
-# FM_TEST_SIGNAL_DRY_RUN=unfixed: the same, and the run cut inside S7 also
-# logs the target the shim chose before the fix (the parent of its parent),
-# with the migration orphaned the way it was when that shim's first target
-# died. Nothing is signalled in either mode.
-case "${FM_TEST_SIGNAL_DRY_RUN:-}" in
-  '' | 1 | unfixed) ;;
-  *) echo "not ok - FM_TEST_SIGNAL_DRY_RUN must be 1, unfixed, or unset" >&2; exit 1 ;;
-esac
-signal_dry_run() {
-  [ -n "${FM_TEST_SIGNAL_DRY_RUN:-}" ]
-}
-if signal_dry_run; then
-  case "${FM_TEST_SIGNAL_LOG:-}" in
-    /*) ;;
-    *) echo "not ok - FM_TEST_SIGNAL_DRY_RUN needs FM_TEST_SIGNAL_LOG, an absolute path for its log" >&2; exit 1 ;;
-  esac
-  printf '# signal dry run (%s): nothing is signalled; each target is logged to %s\n' \
-    "$FM_TEST_SIGNAL_DRY_RUN" "$FM_TEST_SIGNAL_LOG"
-fi
 for tool in jq node git tasks-axi; do
   command -v "$tool" >/dev/null 2>&1 || { echo "skip: $tool not found"; exit 0; }
 done
@@ -53,66 +32,13 @@ git -C "$ROOT" cat-file -e "$BASE^{commit}" 2>/dev/null || { echo "not ok - base
 TMP_ROOT=$(fm_test_tmproot fm-board-s8m)
 case "$TMP_ROOT" in /*) ;; *) echo "not ok - no scratch root" >&2; exit 1 ;; esac
 trap 'tb_stop_boards; fm_test_cleanup' EXIT
+sig_init
 
 OLD_ROOT=$TMP_ROOT/old-board
 tb_make_board_root "$OLD_ROOT" "$BASE" "$BASE_BOARD_FILES" >/dev/null
 SHIMS=$TMP_ROOT/shims
 mkdir -p "$SHIMS"
 
-# signal-check <test-pid> <log-file or ""> <source> [arguments...]: the guard's
-# verdict on the arguments of one signal call, "accepted <pid>" or "refused:
-# <why>". Only one positive pid that is a direct child of the test script, and
-# not the user's service manager, is accepted. With a log file it appends one
-# line: the raw arguments as received, then the parsed target, its command,
-# the verdict and the target's ancestry up to pid 1. It never signals.
-SIGNAL_CHECK=$TMP_ROOT/signal-check
-cat > "$SIGNAL_CHECK" <<'SH'
-#!/bin/sh
-test_pid=$1 log=$2 source=$3
-shift 3
-raw="argc=$#"
-for arg in "$@"; do raw="$raw [$arg]"; done
-target=- command=-
-if [ "$#" -ne 1 ]; then
-  verdict="refused: takes exactly one pid, got $# arguments"
-else
-  case "$1" in
-    '') verdict="refused: the pid is empty" ;;
-    *[!0-9]*) verdict="refused: '$1' is not a positive pid (a flag, a negative pid or a process group)" ;;
-    0*) verdict="refused: '$1' is 0 or starts with 0" ;;
-    *)
-      target=$1
-      parent=$(ps -o ppid= -p "$target" 2>/dev/null | tr -d ' ')
-      command=$(ps -o args= -p "$target" 2>/dev/null || true)
-      if [ "$target" -le 1 ]; then
-        verdict="refused: pid $target is 1 or less"
-      elif [ "$target" = "$test_pid" ]; then
-        verdict="refused: pid $target is the test script itself"
-      elif [ "$parent" != "$test_pid" ]; then
-        verdict="refused: pid $target is not a child of the test script $test_pid (its parent: ${parent:-none})"
-      else
-        case "$command" in
-          *systemd*) verdict="refused: pid $target is $command" ;;
-          *) verdict="accepted $target" ;;
-        esac
-      fi
-      ;;
-  esac
-fi
-if [ -n "$log" ]; then
-  chain="" pid=$target levels=0
-  while [ "$pid" != - ] && [ -n "$pid" ] && [ "$levels" -lt 64 ]; do
-    chain="$chain < $pid $(ps -o args= -p "$pid" 2>/dev/null || printf '(gone)')"
-    [ "$pid" -gt 1 ] 2>/dev/null || break
-    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
-    levels=$((levels + 1))
-  done
-  printf 'source=%s | raw: %s | target=%s command=%s | %s | ancestry: %s\n' \
-    "$source" "$raw" "$target" "${command:--}" "$verdict" "${chain# < }" >> "$log"
-fi
-printf '%s\n' "$verdict"
-SH
-chmod +x "$SIGNAL_CHECK"
 
 # unfixed-launcher <marker> <pid-file> <command...>: used only by the unfixed
 # dry run. It starts the command in the background, records its pid, and exits
@@ -175,7 +101,7 @@ new() {
   local home=$1 root=$2
   shift 2
   assert_scratch "$home"
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" MYSHAPE_LOCAL_MS=300 "$ROOT/bin/myshape.sh" "$@"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" MYSHAPE_READ_MS=300 "$ROOT/bin/myshape.sh" "$@"
 }
 
 # old <home> <fm-topic.sh arguments...>: the base's own board command.
@@ -342,27 +268,6 @@ no_shims() {
     "$SHIMS/unfixed.logged" "$SHIMS/unfixed.pid"
 }
 
-# kill_own_child <pid>: the test's one signal command (the boards' own stop
-# commands, the migration's S1 and the cleanup on exit send theirs). signal-check
-# judges the raw arguments, and only an accepted pid is signalled; anything
-# else fails the test unsent. In a dry run nothing is sent and signal-check
-# logs the call. The pid is a child this shell has not waited for, so it
-# cannot have been reused.
-kill_own_child() {
-  local verdict log=""
-  ! signal_dry_run || log=$FM_TEST_SIGNAL_LOG
-  verdict=$("$SIGNAL_CHECK" "$$" "$log" kill_own_child "$@")
-  if signal_dry_run; then
-    return 0
-  fi
-  case "$verdict" in "accepted "*) ;; *) fail "signal guard: $verdict" ;; esac
-  kill -KILL "${verdict#accepted }"
-}
-
-# dry_log <line>: one line in the dry run's log.
-dry_log() {
-  ! signal_dry_run || printf '%s\n' "$1" >> "$FM_TEST_SIGNAL_LOG"
-}
 
 # cut_run <home> <code-root>: run the migration with the shims in place, end it
 # while a shim waits at its cut point, and leave its exit code in CUT_RC. The

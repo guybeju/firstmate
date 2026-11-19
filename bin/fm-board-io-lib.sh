@@ -132,7 +132,7 @@ fmb_error_text() {
 
 # fmb_field <record> <jq path>: one string field of the record, "" when absent.
 fmb_field() {
-  jq -r "$2 // \"\" | if type == \"string\" then . else tostring end" <<< "$1"
+  jq -r "($2)? // \"\" | if type == \"string\" then . else tostring end" <<< "$1" 2>/dev/null || true
 }
 
 # fmb_note <request-id> <body>: hands firstmate a note and prints the outcome.
@@ -160,6 +160,8 @@ fmb_request_id() {
 
 fmb_deliver_message() {
   local body
+  tb_valid_id "$(fmb_field "$1" .topic.id)" && [ -n "$(fmb_field "$1" .topic.name)" ] ||
+    { fmb_outcome failed "訊息沒有議題"; return; }
   body="［議題：$(fmb_field "$1" .topic.name)（$(fmb_field "$1" .topic.id)）］"$'\n'"$(fmb_field "$1" .text)"
   fmb_note "$(fmb_request_id "$1")" "$body"
 }
@@ -258,7 +260,10 @@ fmb_deliver_tag() {
   home=$(fmb_field "$1" .home)
   task=$(fmb_field "$1" .task)
   topic=$(fmb_field "$1" .topic)
-  tb_valid_id "$task" && tb_valid_id "$topic" || { fmb_outcome failed "task 或議題 id 格式不對"; return; }
+  if ! tb_valid_id "$task" || ! tb_valid_id "$topic"; then
+    fmb_outcome failed "task 或議題 id 格式不對"
+    return
+  fi
   if [ "$home" = main ]; then
     fmb_run "" "$SELF" tag "$task" "$topic"
   else

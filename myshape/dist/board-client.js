@@ -10,7 +10,7 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { CodedError, fileSize, isAlive, readPidFile } from "./files.js";
+import { CodedError, fileSize, isAlive, isRecord, readPidFile } from "./files.js";
 import { boardPaths, parseConfigArgs } from "./layout.js";
 const EXIT_REFUSED = 1;
 const EXIT_USAGE = 2;
@@ -319,9 +319,16 @@ const VERSION_LABEL = {
     same: "相同",
     different: "版本不同",
     incompatible: "版本不相容",
-    "not-on-fork": "還沒換到 fork",
+    unreported: "無法回報",
     unknown: "還沒讀到",
 };
+/** Whether the service reaches the agent side, and why not. */
+function aggregatorLine(raw) {
+    const aggregator = isRecord(raw) ? raw : {};
+    if (aggregator["connected"] === true)
+        return `aggregator：已接上（${String(aggregator["label"])}）`;
+    return `aggregator：沒有接上（${String(aggregator["unavailable"] ?? "看板沒有回報原因")}）`;
+}
 /** One line per home with how its code version compares to the main home's. */
 function homeLines(homes) {
     if (!Array.isArray(homes))
@@ -346,7 +353,7 @@ async function status(config, paths) {
         const data = outcome.kind === "answer" ? (outcome.response.data ?? {}) : {};
         lines.push("看板服務：在跑", `pid：${state.data.pid}`, `埠：${state.data.port}`, `程式版本：${state.data.code_commit}`, ...(state.data.code_commit === config.commit
             ? []
-            : [`目前的程式是 ${config.commit}；下一個指令或 restart 會換成新版`]), `啟動時間：${state.data.started_at}`, `輪詢：${data["polling"] === true ? "進行中" : "沒在跑"}`, ...homeLines(data["homes"]));
+            : [`目前的程式是 ${config.commit}；下一個指令或 restart 會換成新版`]), `啟動時間：${state.data.started_at}`, `輪詢：${data["polling"] === true ? "進行中" : "沒在跑"}`, aggregatorLine(data["aggregator"]), ...homeLines(data["homes"]));
     }
     else {
         lines.push(state.kind === "hung" ? "看板服務：沒有回應" : "看板服務：沒在跑", `上次的 pid：${readTrimmed(paths.pid)}`, `上次的埠：${readTrimmed(paths.port)}`);

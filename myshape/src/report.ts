@@ -33,7 +33,7 @@ export interface ReportQueued {
   topic_hint: string | null;
 }
 
-/** What answering a hold does to its item, as `fm-captain-hold.sh hold --on-answer` recorded it. */
+/** What answering a hold does to its item, as the aggregator recorded it on the hold. */
 export type OnAnswer = "close" | "release";
 const ON_ANSWER: readonly OnAnswer[] = ["close", "release"];
 
