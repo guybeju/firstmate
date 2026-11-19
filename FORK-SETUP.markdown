@@ -42,6 +42,7 @@ fork 的首頁顯示的是 `main`，和上游一樣，但首頁右側 About 的�
 這一頁的第 2、3、5、6 步曾在 Linux 上一個暫時的 home 裡照本頁走過一遍，用 curl 代替瀏覽器開看板；第 4 步（開 session、補齊工具到能派工）與第 8 節沒有從零走過。
 
 macOS 上 `bin/myshape*.sh` 與 `bin/fm-board.sh` 用的是 `PATH` 上第一個 `bash`（腳本第一行是 `#!/usr/bin/env bash`），細節在 handover 第 1 節。
+遠端的 second mate 會跑 `bin/fm-dispatch-plan.sh` 的 `order` 與 `queues-in`（第 8 節第 6 點）；它們照 bash 3.2 與 BSD 工具寫，但 `dispatch-plan/test` 還沒在 Mac 上跑過。
 
 ## 1. 需要的東西
 
@@ -186,8 +187,8 @@ bin/fm-board.sh install-rules
 它把兩段規則各寫成一個標記區塊，放進 `data/captain.md` 與 `data/captain-shared.md`，區塊外的內容不動，寫之前備份到 `state/fm-board/rules-backup/`。
 規則是 first mate 的，所以安裝的指令與範本（`fm-board/rules/`）都在 first mate 這一側。
 
-**確認**：輸出有 `captain.md：新增（v10）` 與 `captain-shared.md：新增（v4）`（已經裝過的是 `已更新` 或 `已是最新`）。
-之後 `bin/fm-board.sh rules` 印出 `規則：captain.md 和範本相同（v10）；captain-shared.md 和範本相同（v4）`。
+**確認**：輸出有 `captain.md：新增（v11）` 與 `captain-shared.md：新增（v5）`（已經裝過的是 `已更新` 或 `已是最新`）。
+之後 `bin/fm-board.sh rules` 印出 `規則：captain.md 和範本相同（v11）；captain-shared.md 和範本相同（v5）`。
 裝完重開主 first mate 的 session：規則在下一次 session 開始或下一次壓縮之後才生效（`install-rules` 自己也會印這一句）。
 重開的 session 的啟動摘要裡會有第 5 步說的那一行；服務一直開著時是 `看板服務：在跑`。
 
@@ -210,7 +211,7 @@ bin/fm-board.sh install-rules
   bin/fm-board.sh migrate-myshape
   ```
   它停掉舊服務，把 `state/topic-board`、`data/topic-board`、`config/topic-board-port` 搬到新名字，核對搬過去的每個檔，換掉兩個規則檔裡舊標記的區塊（不用另外跑 `install-rules`），把看板自己下的 hold 的原因改成新的開頭 `看板佇列：`，清掉 checkout 裡改名前留下的 `topic-board/`，最後重新打開看板並印出網址；然後重開 session。
-  **確認**：最後一行是 `已搬完`，前面有 `S6：… 個檔的校驗碼和搬之前相同` 與 `… 都和搬之前相同`；`bin/fm-board.sh migrate-myshape --check` 印 `已搬完`；`bin/fm-board.sh rules` 印 `規則：captain.md 和範本相同（v10）；captain-shared.md 和範本相同（v4）`；`bin/myshape.sh status` 是 `看板服務：在跑`，`程式版本：` 等於 `git -C <clone> rev-parse HEAD`。
+  **確認**：最後一行是 `已搬完`，前面有 `S6：… 個檔的校驗碼和搬之前相同` 與 `… 都和搬之前相同`；`bin/fm-board.sh migrate-myshape --check` 印 `已搬完`；`bin/fm-board.sh rules` 印 `規則：captain.md 和範本相同（v11）；captain-shared.md 和範本相同（v5）`；`bin/myshape.sh status` 是 `看板服務：在跑`，`程式版本：` 等於 `git -C <clone> rev-parse HEAD`。
   **不對時**：照它印的那一行處理後原樣再跑一次；中途停掉也一樣，再跑一次會接著做完。
   有 second mate 時，每個 second mate 的 home 也跑一次（遠端的是 `bin/fm-on.sh <id> fm-board.sh migrate-myshape`）：那裡沒有看板的檔，只清那個 code root；共用的規則檔照平常由主 home 傳過去。
   還沒重開的 session 照舊規則跑 `bin/fm-topic.sh` 時，那支舊名字什麼都不做，只回改用哪個指令與使用者還要跑什麼。
@@ -248,8 +249,27 @@ second mate 本身怎麼佈建照上游：同機的見 [secondmate-provisioning 
    遠端那一行能跑、回 `ok setup …`，就表示那台已經跟到有 `fm-board.sh` 的 `carry`（rollout R-1）。
 4. **確認每個 home 都在同一版**：打開看板停留一分鐘以上（讓遠端輪到一次），`bin/myshape.sh status` 的每一行 `home <id>：` 都要是 `相同`。
    `無法回報`、頁面上那個 home 的橫幅寫 `還沒換到 fork`，表示那台遠端還沒跟到 `carry`：停在這裡，不要做下一步，也不要拿掉任何一邊的 `config/self-update-source`，記下那台的更新錯誤訊息再處理（rollout R-1）。
-5. **最後才裝規則**（第 6 步）：共用的那段規則會叫每個 second mate 跑 `fm-board.sh`，所以要等上一步全過。
+5. **最後才裝規則**（第 6 步）：共用的那段規則會叫每個 second mate 跑 `fm-board.sh` 與 `fm-dispatch-plan.sh`，所以要等上一步全過。
    裝完重開主 first mate 的 session；second mate 在主 home 下一次啟動檢查把共用檔傳過去之後重啟。
+6. **有遠端的 second mate 時，讓主 home 把佇列送過去**。
+   second mate 派工前跑的 `fm-dispatch-plan.sh order` 照看板的高、一般、待辦排；同機的直接讀主 home 的議題檔，這一步不用做。
+   遠端的那台讀不到主 home 的檔，由主 home 的 watcher 每 5 分鐘跑一次固定的檢查，把一份佇列副本送過去（[dispatch-plan 的說明](dispatch-plan/spec/dispatch-plan.markdown)）。
+   在主 home 跑：
+   ```
+   printf '#!/usr/bin/env bash\nexport FM_HOME=%q\nexec %q queues-push --check\n' "$PWD" "$PWD/bin/fm-dispatch-plan.sh" > state/dispatch-queues.check.sh
+   chmod 700 state/dispatch-queues.check.sh
+   bin/fm-check-register.sh dispatch-queues
+   bin/fm-dispatch-plan.sh queues-push
+   ```
+   檢查的內容只是呼叫這支指令，所以之後更新程式不會改到它，不用重新登記。
+   **確認**：登記那一行印 `registered: state/dispatch-queues.check.sh`；`queues-push` 對每個遠端 second mate 印一行 `<id>：已送出（<時間>）`。
+   然後 `bin/fm-on.sh <id> fm-dispatch-plan.sh order` 的第一行是 `照主 home 推來的佇列副本（<時間>，<幾> 分鐘前）。`，時間是剛才那一次送出的時間。
+   **不對時**：
+   - `<id>：送不出去（…）`：括號裡是原因，例如連不到那台；下一輪會再試。
+   - `<id>：那邊還不能收副本（…）`：那台的 code root 還沒更新到有 `queues-in` 的版本，回第 1 與第 4 點；之後每小時再試一次。
+   - 只有主 home 有 session 在跑時 watcher 才會送；沒有 session 的時候，遠端照最後一份副本排，`order` 的第一行寫出副本多舊，超過一小時會多一句提醒。
+     同一台超過一小時沒送到時，主 first mate 會收到一則通知，同一段時間只有一則。
+   - 不要了就跑 `bin/fm-check-unregister.sh dispatch-queues`。
 
 之後新增的遠端 second mate：在那台機器手動 clone code root 之後先做上面的第 1 點，再照上游的流程佈建 home；不把已經存在的 `origin` 改成指向 fork（rollout「之後怎麼更新」）。
 
@@ -280,7 +300,7 @@ second mate 本身怎麼佈建照上游：同機的見 [secondmate-provisioning 
 - `myshape.sh`、`fm-board.sh`、`fm-dispatch-plan.sh` 後面接的每個子命令都列在那支指令開頭的用法裡。
 - 提到的每個 `config/<名稱>` 都出現在 `bin/` 的某支腳本裡。
 - 寫成 `/<技能>` 或「`<名稱>` 技能」的，在 `.agents/skills/` 底下都有那個技能。
-- 寫在 `captain.md` 與 `captain-shared.md` 後面的版本（例如 `（v10）`）等於 `fm-board/rules/` 裡範本的版本。
+- 寫在 `captain.md` 與 `captain-shared.md` 後面的版本（例如 `（v11）`）等於 `fm-board/rules/` 裡範本的版本。
 
 只能靠人或 agent 讀過才能確認的：
 

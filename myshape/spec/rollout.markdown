@@ -70,5 +70,5 @@
 
 - **退回上游沒有定**。home 一旦在 `carry` 上，就不是上游的祖先；拿掉 `self-update-source` 之後更新會中止，要手動處理。
 - 上游的 CI 只在 `main` 的 push 與 base 是 `main` 的 PR 上跑（`.github/workflows/ci.yml:3-10`、`no-mistakes-required.yml:4-8`）。`carry` 上沒有任何自動檢查，全靠各段驗收裡列的本機指令。
-- 轉交給 secondmate 之後才改順序、拖進待辦或封存，傳不到 secondmate。
+- 轉交給 secondmate 之後才改順序、拖進待辦或封存：同機的 secondmate 下一次跑 `order` 就照新的排；遠端的要等主 home 把佇列副本送到，只有主 home 有 session 時才送，最多約 5 分鐘（[dispatch-plan](../../dispatch-plan/spec/dispatch-plan.markdown) 第 4、5 節）。
 - 議題進出待辦之後，要等 first mate 下一次跑 `order` 才會同步 hold；中間這段，新移進待辦的議題底下還沒 hold 的項目可能被派出去。
