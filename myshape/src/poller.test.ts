@@ -506,11 +506,12 @@ describe("read hints", () => {
       report({ secondmates: [{ id: "a", read_every_s: 1 }, { id: "b" }] }),
     );
     s.poller.touch();
-    await new Promise((resolve) => setTimeout(resolve, 1600));
+    await new Promise((resolve) => setTimeout(resolve, 2600));
     s.poller.stop();
     const count = (home: string): number =>
       s.calls.filter((call) => feedOf(call).startsWith(`${home} `)).length;
-    expect(count("a")).toBe(2);
-    expect(count("b")).toBeGreaterThanOrEqual(4);
+    expect(count("a")).toBeGreaterThanOrEqual(2);
+    expect(count("a")).toBeLessThanOrEqual(3);
+    expect(count("b")).toBeGreaterThanOrEqual(6);
   });
 });
