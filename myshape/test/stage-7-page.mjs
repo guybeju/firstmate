@@ -38,7 +38,7 @@ function dropOnQueue(name, queue) {
 
 async function connected(page) {
   await page.waitFor("the fed work", has("建置"));
-  await page.waitFor("the agent's label in the page data", has("j2 問 agent 的事"), 15000);
+  await page.waitFor("the fed workers", has("j1 working"), 15000);
   await noFirstmate(page, "the home page");
 
   // AT10.1: a drag out of later changes the order, and the toast names plain.
@@ -51,8 +51,9 @@ async function connected(page) {
   // AT10.2: 未分類 offers filing for a worker, answers for a decision, nothing for a queued item.
   await page.waitFor("the unsorted worker", has("j-loose"));
   const unsorted = await page.evaluate(`(() => {
-    const rows = [...document.querySelectorAll(".row, .card")];
-    const of = (text) => rows.find((row) => row.innerText.includes(text) && row.innerText.length < 400);
+    const rows = [...document.querySelectorAll(".row, .card, .meta")];
+    // The innermost row or card that holds the text.
+    const of = (text) => rows.filter((row) => row.textContent.includes(text)).sort((a, b) => a.textContent.length - b.textContent.length)[0];
     const worker = of("j-loose"), decision = of("沒有議題的決定"), queued = of("沒有議題的排隊");
     return [worker?.querySelector("select") !== null && worker !== undefined,
             decision !== undefined && [...decision.querySelectorAll("button")].some((b) => b.textContent === "要"),
@@ -88,6 +89,8 @@ async function connected(page) {
   await page.waitFor("the red banner", has("看板服務沒有回應"), 25000);
   topic("open");
   await page.waitFor("the page to recover", `!${has("看板服務沒有回應")}`, 25000);
+  // The restarted board must have read w2 once before w2 stops answering.
+  await page.waitFor("w2's worker after the restart", has("w2-job"), 25000);
   fs.writeFileSync(`${process.env.TB_AGG}/control/w2`, "sleep 30\n");
   await page.waitFor("the yellow banner for w2", has("home w2 已經"), 25000);
   fs.rmSync(`${process.env.TB_AGG}/control/w2`);
@@ -107,7 +110,7 @@ async function alone(page) {
   await page.evaluate(dropOnQueue("二", "normal"));
   await page.click(".topic button", "一");
   await page.waitFor("the topic page", has("關聯 agent"));
-  await page.type("textarea", "沒人收也要留著");
+  await page.type(`[data-key="message:one"]`, "沒人收也要留著");
   await page.click("button", "送給 aggregator");
   await page.waitFor("the waiting message", has("等 aggregator 接上"));
   await sleep(3000);

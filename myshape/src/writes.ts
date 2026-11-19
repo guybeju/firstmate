@@ -230,6 +230,8 @@ export class WriteEngine {
     this.records.set(record.id, record);
     this.audit(record, { sending: record });
     if (this.connected) this.enqueue(record, false);
+    // A waiting write changes nothing else later, so the page must hear of it now.
+    else this.host.onChange();
     return record;
   }
 

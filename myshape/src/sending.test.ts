@@ -595,7 +595,9 @@ describe("no deliverer", () => {
   it("leaves every write waiting at attempt 0, with nothing run and nothing failed", async () => {
     const h = harness({}, "沒有 bin/fm-board.sh");
     const message = sent(actions.message(h.context, "billing", "a", "browser"));
+    expect(h.changes()).toBe(1);
     const direct = sent(actions.direct(h.context, "main", "ship-a", "b", "browser"));
+    expect(h.changes()).toBe(2);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect([message.state, direct.state]).toEqual(["waiting", "waiting"]);
     expect([message.attempt, direct.attempt]).toEqual([0, 0]);

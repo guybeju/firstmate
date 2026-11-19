@@ -118,6 +118,9 @@ export class WriteEngine {
         this.audit(record, { sending: record });
         if (this.connected)
             this.enqueue(record, false);
+        // A waiting write changes nothing else later, so the page must hear of it now.
+        else
+            this.host.onChange();
         return record;
     }
     /** Sends a failed write again under the same id. */
