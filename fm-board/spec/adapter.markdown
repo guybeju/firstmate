@@ -15,14 +15,15 @@
 | `bin/fm-board-migrate-lib.sh` | `migrate-myshape` 的步驟（C57）；只有 `fm-board.sh` source 它，每個 home 都搬完之後拿掉 |
 | `bin/fm-topic.sh` | 改名前的指令名稱留下的提示（第 2 節）；每個 home 都搬完之後拿掉 |
 | `bin/fm-board-lib.sh` | 找同機 secondmate 的 home、在那個 home 執行指令；`fm-board.sh` 與 `fm-topic-board-read.sh` source 它 |
-| `bin/fm-dispatch-plan.sh` | `order`：照看板的佇列排出該派、該 hold、該解除的 backlog 項目 |
+| `bin/fm-dispatch-plan.sh` | `order`：照看板的佇列排出該派、該 hold、該解除的 backlog 項目，在每個 home；`queues-in`、`queues-push`：把佇列副本送到遠端的 second mate（[dispatch-plan](../../dispatch-plan/spec/dispatch-plan.markdown)） |
 | `fm-board/rules/` | 三個規則範本，副檔名 `.md.tmpl`（fork 不能新增追蹤的 `.md`） |
 | `fm-board/test/` | `run.sh` 與這一側的測試：`feed`（`stage-1-feed.sh`），`deliver`（`stage-2-deliver.sh`），`tag`、`setup`、`--in-home`（`stage-1-tag.sh`），帶 task 的 `split`（`stage-3-split.sh`），規則與安裝說明（`stage-6-*.sh`、`check-guide.sh`），改名前的名字與 `migrate-myshape`（`stage-8-*.sh`） |
-| `dispatch-plan/test/` | `run.sh` 與 `order` 的測試（`stage-1-order.sh`） |
+| `dispatch-plan/test/` | `run.sh` 與 `fm-dispatch-plan.sh` 的測試（`stage-1` 到 `stage-4`） |
+| `dispatch-plan/spec/` | `fm-dispatch-plan.sh` 的說明 |
 | `fm-board/spec/` | 這一頁 |
 
 `bin/` 底下的六支和看板的指令一樣，要通過 `bin/fm-lint.sh <檔>` 與 bash 3.2 的語法檢查。
-`fm-board.sh` 要在 git 裡是可執行的：遠端 home 的 `tag` 與 `setup` 經 `fm-on.sh` 跑，它只執行追蹤、可執行的 `bin/fm-*.sh`。
+`fm-board.sh` 與 `fm-dispatch-plan.sh` 要在 git 裡是可執行的：遠端 home 的 `tag`、`setup`、`order` 與 `queues-in` 經 `fm-on.sh` 跑，它只執行追蹤、可執行的 `bin/fm-*.sh`。
 
 ## 2. 舊的寫法
 
@@ -39,7 +40,7 @@ stderr 第一行指出新的指令，第二行說使用者還要做什麼：這�
 | `fm-topic.sh split … <task>…` | `fm-board.sh split <議題 id> <新名稱> --goal <一行> <task>…`；不帶 task 的 `split` 還是看板的 |
 | `fm-topic.sh install-rules` | `fm-board.sh install-rules` |
 | `fm-topic.sh status` 的「規則：」那一行 | `fm-board.sh rules` |
-| `fm-topic.sh order` | `fm-dispatch-plan.sh order`，內容不變 |
+| `fm-topic.sh order` | `fm-dispatch-plan.sh order` |
 | 其他的 `fm-topic.sh …` | `myshape.sh`，參數相同 |
 
 ## 3. 看板怎麼用到這一側
@@ -114,6 +115,7 @@ stderr 第一行指出新的指令，第二行說使用者還要做什麼：這�
 | 路徑 | 權限 | 誰寫 |
 | --- | --- | --- |
 | `data/<task-id>/topic` | 0644 | `tag`；每個 home 各自一份，看板經彙整腳本讀 |
+| `state/dispatch-plan/` | 0700 | `fm-dispatch-plan.sh`：遠端 second mate 的 `queues.json`（`queues-in`），主 home 的 `pushed/`（`queues-push`） |
 | `config/fleet-ledger` | — | `setup`；上游的帳本旗標 |
 | `data/captain.md`、`data/captain-shared.md` 裡的標記區塊 | — | `install-rules` |
 | `state/fm-board/rules-backup/` | 0700 | `install-rules` 寫入前的備份 |
@@ -136,8 +138,11 @@ stderr 第一行指出新的指令，第二行說使用者還要做什麼：這�
 
 | 框架的東西 | 誰用 | 靠的是 | 測試 |
 | --- | --- | --- | --- |
-| `bin/fm-primary-scope-lib.sh` 的 `fm_root_is_secondmate_home <home>` | `fm-board.sh`、`fm-dispatch-plan.sh` | 回傳值分辨 secondmate home | `fm-board/test/stage-1-tag.sh` 的 `test_tag_in_secondmate_home_checks_format_only`；`dispatch-plan/test/stage-1-order.sh` 的 `test_falls_open_without_a_usable_topic_file` |
-| `bin/fm-secondmate-registry-lib.sh` 的 `secondmate_registry_field`、`secondmate_registry_parse_line` | `fm-board-lib.sh`、`fm-board.sh install-rules` | `data/secondmates.md` 解析出 id、home、是不是遠端 | `stage-1-tag.sh` 的 `test_in_home_routes_to_a_local_secondmate` |
+| `bin/fm-primary-scope-lib.sh` 的 `fm_root_is_secondmate_home <home>` | `fm-board.sh`、`fm-dispatch-plan.sh` | 回傳值分辨 secondmate home | `fm-board/test/stage-1-tag.sh` 的 `test_tag_in_secondmate_home_checks_format_only`；`dispatch-plan/test/stage-2-sources.sh` 的 `test_remote_mate_falls_open_without_a_usable_copy` |
+| `bin/fm-secondmate-registry-lib.sh` 的 `secondmate_registry_field`、`secondmate_registry_parse_line` | `fm-board-lib.sh`、`fm-board.sh install-rules`、`fm-dispatch-plan.sh queues-push` | `data/secondmates.md` 解析出 id、home、是不是遠端 | `stage-1-tag.sh` 的 `test_in_home_routes_to_a_local_secondmate`；`dispatch-plan/test/stage-4-queues-push.sh` 的 `test_pushes_once_per_mate_whose_copy_differs` |
+| `bin/fm-wake-lib.sh` 的 `fm_firstmate_root_home <home>`，與它讀的 `.fm-secondmate-parent`（`fm-secondmate-parent.v1`） | `fm-dispatch-plan.sh order`，在 subshell 裡載入 | 同機的上層一路往上找到這台機器最上層的 home；遠端的上層停在自己 | `stage-2-sources.sh` 的 `test_local_mate_reads_the_main_homes_queues`、`test_local_child_of_a_remote_mate_reads_its_copy` |
+| `bin/fm-on.sh --stdin <id> <指令> …` | `fm-dispatch-plan.sh queues-push` | 把 stdin 交給遠端的指令；遠端的 stdout 與 exit code 原樣回來，255 表示連不到 | `stage-4-queues-push.sh` 用假的 `fm-on.sh`；真的那一條沒有測 |
+| `bin/fm-check-register.sh <id>` 與 watcher 的檢查（`bin/fm-watch.sh`：每 5 分鐘、最多 30 秒、印出的第一行變成通知、丟掉 exit code 與 stderr） | 主 home 的 `state/dispatch-queues.check.sh` | 登記的是位元組，所以檢查只呼叫 `fm-dispatch-plan.sh queues-push --check` | 沒有測：設定在 [FORK-SETUP](../../FORK-SETUP.markdown) 第 8 節第 6 點 |
 | `bin/fm-config-inherit-lib.sh` 的 `shared_captain_header_valid <檔>` | `fm-board.sh install-rules` | 共用檔的檔頭上游收不收 | `stage-6-rules.sh` 的 `test_creates_both_files`、`test_refuses_a_shared_file_with_a_bad_header` |
 | `bin/fm-startup-memory-budget.sh report` | `fm-board.sh install-rules` | 只印它的輸出；失敗時印一句替代的話 | `stage-6-rules.sh` 的 `test_creates_both_files` |
 | `bin/fm-fleet-snapshot.sh --json` | `fm-dispatch-plan.sh order`、`migrate-myshape` 找要換原因的 hold | 和彙整腳本相同（contracts 第 11.1 節） | `dispatch-plan/test/stage-1-order.sh` 全部 |

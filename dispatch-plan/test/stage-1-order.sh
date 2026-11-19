@@ -10,7 +10,8 @@ set -u
 
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 TMP_ROOT=$(fm_test_tmproot dispatch-plan-stage-1-order)
-PLAN="$ROOT/bin/fm-dispatch-plan.sh"
+# shellcheck source=dispatch-plan/test/helpers.sh
+. "$ROOT/dispatch-plan/test/helpers.sh"
 
 # Queued items, in backlog order:
 #   n1 (t2/normal)  h1 (billing/high)  h2 (billing/high)  u1 (untagged)
@@ -56,14 +57,6 @@ write_tags() {
   # A task tagged with a leftover proposal, not yet in any queue, ranks as untagged.
   mkdir -p "$home/data/p1"
   printf 'idea 2026-07-01T00:00:00Z\n' > "$home/data/p1/topic"
-}
-
-# section <output> <header>: the task ids listed under one section header.
-section() {
-  printf '%s\n' "$1" | awk -v header="$2" '
-    /^[^ ]/ { active = ($0 == header) ; next }
-    active { sub(/^  /, ""); split($0, cols, "\t"); printf "%s ", cols[1] }
-  '
 }
 
 test_sections() {
@@ -145,12 +138,35 @@ test_falls_open_without_a_usable_topic_file() {
   out=$(tb_run "$home" "$PLAN" order) || fail "order failed on an unreadable topic file"
   assert_contains "$out" "讀不懂" "order did not explain the unreadable topic file"
   assert_equals "" "$(section "$out" "該 hold：")" "an unreadable topic file must not produce holds"
-  home=$(tb_make_secondmate_home order-sm sm1)
-  write_backlog "$home"
-  out=$(tb_run "$home" "$PLAN" order) || fail "order failed in a secondmate home"
-  assert_contains "$out" "secondmate home" "order did not explain it is in a secondmate home"
-  assert_equals "" "$(section "$out" "該 hold：")" "a secondmate home must not produce holds"
-  pass "order lets dispatch proceed when the topic file is missing, unreadable, or elsewhere"
+  pass "order lets dispatch proceed when the topic file is missing or unreadable"
+}
+
+# An untagged queued item ranks under the topic its body's bare "topic: <id>"
+# line names, the line first mate writes when it routes an item; a tag wins.
+test_ranks_an_untagged_item_by_its_topic_line() {
+  local home out
+  home=$(tb_make_home order-hint)
+  tb_write_topics "$home"
+  {
+    printf '## In flight\n\n## Queued\n'
+    printf -- '- [ ] n1 - Normal (repo: sample) (kind: ship)\n'
+    printf -- '- [ ] u1 - Untagged (repo: sample) (kind: ship)\n'
+    printf -- '- [ ] t1 - Routed (repo: sample) (kind: ship)\n  Some note.\n  topic: billing\n'
+    printf -- '- [ ] t2 - Routed, tagged too (repo: sample) (kind: ship)\n  topic: billing\n'
+    printf -- '- [ ] t3 - Routed to an alias (repo: sample) (kind: ship)\n  topic: old-billing\n'
+    printf -- '- [ ] t4 - Routed to a parked topic (repo: sample) (kind: ship)\n  topic: parked\n'
+    printf -- '- [ ] t5 - Not a bare line (repo: sample) (kind: ship)\n  topic: billing, later\n'
+    printf '\n## Done\n'
+  } > "$home/data/backlog.md"
+  mkdir -p "$home/data/n1" "$home/data/t2"
+  printf 't2 2026-07-01T00:00:00Z\n' > "$home/data/n1/topic"
+  printf 't2 2026-07-01T00:00:00Z\n' > "$home/data/t2/topic"
+  out=$(tb_run "$home" "$PLAN" order)
+  assert_equals "t1 t3 n1 t2 u1 t5 " "$(section "$out" "可派：")" \
+    "a topic line must rank an untagged item, follow a merged alias, and lose to a tag"
+  assert_equals "t4 " "$(section "$out" "該 hold：")" "a topic line naming a parked topic must ask for a hold"
+  assert_contains "$out" "$(printf 't1\t帳務重構\t高')" "the line must show the topic named by the body"
+  pass "order ranks an untagged item by its topic line, and a tag wins"
 }
 
 # A hold the board made before the rename to myshape still starts with
@@ -180,7 +196,8 @@ test_falls_open_when_the_snapshot_fails() {
   tb_write_topics "$home"
   root="$TMP_ROOT/order-root"
   mkdir -p "$root/bin"
-  cp "$ROOT"/bin/fm-dispatch-plan.sh "$ROOT"/bin/myshape-lib.sh "$ROOT"/bin/fm-primary-scope-lib.sh "$root/bin/"
+  cp "$ROOT"/bin/fm-dispatch-plan.sh "$ROOT"/bin/myshape-lib.sh "$ROOT"/bin/fm-primary-scope-lib.sh \
+    "$ROOT"/bin/fm-secondmate-registry-lib.sh "$root/bin/"
   printf '#!/usr/bin/env bash\nexit 1\n' > "$root/bin/fm-fleet-snapshot.sh"
   chmod +x "$root/bin/fm-fleet-snapshot.sh"
   out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-dispatch-plan.sh" order) ||
@@ -190,4 +207,5 @@ test_falls_open_when_the_snapshot_fails() {
 }
 
 fm_test_run test_sections test_lists_hands_on_items_waiting_for_a_check \
-  test_falls_open_without_a_usable_topic_file test_warns_about_holds_from_before_the_rename test_falls_open_when_the_snapshot_fails
+  test_falls_open_without_a_usable_topic_file test_ranks_an_untagged_item_by_its_topic_line \
+  test_warns_about_holds_from_before_the_rename test_falls_open_when_the_snapshot_fails

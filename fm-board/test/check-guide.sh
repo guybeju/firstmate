@@ -11,7 +11,7 @@
 #   - every config/<name> it names appears in some script under bin/;
 #   - every `/<skill>` and every `<skill>` 技能 has .agents/skills/<skill>/SKILL.md;
 #   - every version written after captain.md or captain-shared.md, such as
-#     "（v10）", equals the version on the first line of its template in
+#     "（v11）", equals the version on the first line of its template in
 #     fm-board/rules/.
 # Prints one "not ok" line per problem and exits 1, or one "ok" line and 0.
 #

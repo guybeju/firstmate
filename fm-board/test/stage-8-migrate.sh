@@ -346,7 +346,7 @@ assert_moved() {  # <home> <code-root> <old-pid>
   assert_equals 1 "$(tb_board_count "$home")" "exactly one board must serve the home"
   assert_contains "$(new "$home" "$root" status)" "看板服務：在跑" "the new board must run"
   assert_contains "$(new "$home" "$root" status)" "程式版本：$(git -C "$root" rev-parse HEAD)" "the board must run the code root's commit"
-  assert_equals "規則：captain.md 和範本相同（v10）；captain-shared.md 和範本相同（v4）" "$(tb_run "$home" "$BOARD" rules)" \
+  assert_equals "規則：captain.md 和範本相同（v11）；captain-shared.md 和範本相同（v5）" "$(tb_run "$home" "$BOARD" rules)" \
     "both rules files must hold the current blocks"
   assert_equals 0 "$(cat "$home/data/captain.md" "$home/data/captain-shared.md" | grep -c '<!-- topic-board:')" \
     "no old marker may be left"
@@ -564,7 +564,7 @@ test_both_markers_and_a_broken_marker() {
   ready_to_migrate "$home"
   cat "$ROOT/fm-board/rules/captain.block.md.tmpl" >> "$home/data/captain.md"
   mig "$home" "$root" >/dev/null || fail "the migration failed with both markers"
-  assert_equals "規則：captain.md 和範本相同（v10）；captain-shared.md 和範本相同（v4）" "$(tb_run "$home" "$BOARD" rules)" \
+  assert_equals "規則：captain.md 和範本相同（v11）；captain-shared.md 和範本相同（v5）" "$(tb_run "$home" "$BOARD" rules)" \
     "a file with both markers must end with only the new block"
   new "$home" "$root" stop >/dev/null
 
@@ -580,7 +580,7 @@ test_both_markers_and_a_broken_marker() {
   assert_not_contains "$out" "已搬完" "a run that left a file must not say 已搬完"
   assert_equals "$(printf '<!-- topic-board:begin v9 -->\n- 沒有結尾')" "$(cat "$home/data/captain.md")" "the broken file must be left alone"
   assert_present "$home/state/myshape/token" "everything else must still move"
-  assert_contains "$(tb_run "$home" "$BOARD" rules)" "captain-shared.md 和範本相同（v4）" "the other file must be replaced"
+  assert_contains "$(tb_run "$home" "$BOARD" rules)" "captain-shared.md 和範本相同（v5）" "the other file must be replaced"
   printf '# 整理好了\n' > "$home/data/captain.md"
   assert_contains "$(mig "$home" "$root")" "已搬完" "after the file is fixed a rerun must finish"
   new "$home" "$root" stop >/dev/null
@@ -697,7 +697,7 @@ test_a_home_without_a_board_gets_no_board() {
   git -C "$ROOT" show "$BASE:fm-board/rules/captain.block.md.tmpl" > "$home/data/captain.md"
   out=$(mig "$home" "$root") || fail "the migration failed in a home without a board: $out"
   assert_contains "$out" "已搬完" "a home with only a rules block must finish"
-  assert_contains "$(tb_run "$home" "$BOARD" rules)" "captain.md 和範本相同（v10）；captain-shared.md 未裝" \
+  assert_contains "$(tb_run "$home" "$BOARD" rules)" "captain.md 和範本相同（v11）；captain-shared.md 未裝" \
     "only the file with an old block may be written"
   assert_absent "$home/state/myshape" "no board may start where none ran"
   assert_equals 0 "$(tb_board_count "$home")" "no board may start where none ran"
