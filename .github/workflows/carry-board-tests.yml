@@ -77,9 +77,10 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           for tool in bash git jq curl ps sha256sum ss pgrep node npm pnpm tasks-axi firefox; do
             path=$(command -v "$tool" || echo 'missing')
+            # stderr is dropped: firefox writes a sandbox warning there first.
             case "$tool" in
-              ps|ss|pgrep) version=$("$tool" -V 2>&1 | head -n 1 || true) ;;
-              *) version=$("$tool" --version 2>&1 | head -n 1 || true) ;;
+              ps|ss|pgrep) version=$("$tool" -V 2>/dev/null | head -n 1 || true) ;;
+              *) version=$("$tool" --version 2>/dev/null | head -n 1 || true) ;;
             esac
             echo "$tool: $path: $version"
             echo "| $tool | $path | $version |" >> "$GITHUB_STEP_SUMMARY"
