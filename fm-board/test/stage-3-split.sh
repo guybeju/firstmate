@@ -5,8 +5,8 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tests/lib.sh"
-# shellcheck source=topic-board/test/helpers.sh
-. "$ROOT/topic-board/test/helpers.sh"
+# shellcheck source=myshape/test/helpers.sh
+. "$ROOT/myshape/test/helpers.sh"
 
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 command -v node >/dev/null 2>&1 || { echo "skip: node not found"; exit 0; }
@@ -104,7 +104,7 @@ test_split_is_refused_in_a_secondmate_home() {
   out=$(tb_run "$LOCAL_SM" "$BOARD" split docs X --goal g sp-3 2>&1) || rc=$?
   assert_equals 1 "$rc" "split must be refused in a secondmate home"
   assert_contains "$out" "只在主 home" "the refusal must say topics live in the main home"
-  assert_absent "$LOCAL_SM/state/topic-board" "a refused split must not start a board in the secondmate home"
+  assert_absent "$LOCAL_SM/state/myshape" "a refused split must not start a board in the secondmate home"
   pass "split runs only in the main home"
 }
 

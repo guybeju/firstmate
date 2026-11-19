@@ -4,7 +4,7 @@
 # only; defines functions and has no side effects on source.
 #
 # The caller must already have sourced fm-secondmate-registry-lib.sh and
-# fm-topic-lib.sh.
+# myshape-lib.sh.
 
 # tb_local_secondmate_home <registry-file> <secondmate-id>: print the home of a
 # LOCAL registered secondmate. Returns 1 after printing the reason to stderr

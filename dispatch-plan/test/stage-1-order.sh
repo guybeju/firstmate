@@ -5,8 +5,8 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tests/lib.sh"
-# shellcheck source=topic-board/test/helpers.sh
-. "$ROOT/topic-board/test/helpers.sh"
+# shellcheck source=myshape/test/helpers.sh
+. "$ROOT/myshape/test/helpers.sh"
 
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 TMP_ROOT=$(fm_test_tmproot dispatch-plan-stage-1-order)
@@ -33,8 +33,8 @@ write_backlog() {
 - [ ] u1 - Untagged (repo: sample) (kind: ship)
 - [ ] p1 - Proposed topic item (repo: sample) (kind: ship)
 - [ ] l1 - Later not held (repo: sample) (kind: ship)
-- [ ] l2 - Later held (repo: sample) (kind: ship) (hold: topic-board：議題 parked 在待辦)
-- [ ] r1 - Release me (repo: sample) (kind: ship) (hold: topic-board：議題 billing 在待辦)
+- [ ] l2 - Later held (repo: sample) (kind: ship) (hold: 看板佇列：議題 parked 在待辦)
+- [ ] r1 - Release me (repo: sample) (kind: ship) (hold: 看板佇列：議題 billing 在待辦)
 - [ ] a1 - Archived not held (repo: sample) (kind: ship)
 - [ ] o1 - Other hold (repo: sample) (kind: ship) (hold: waiting for a vendor)
 - [ ] b1 - Blocked blocked-by: n1 (repo: sample) (kind: ship)
@@ -78,9 +78,9 @@ test_sections() {
   assert_equals "l1 a1 " "$(section "$out" "該 hold：")" "items of parked or archived topics must be listed to hold"
   assert_equals "r1 " "$(section "$out" "該解除：")" "a board hold on a non-parked topic must be listed to release"
   assert_equals "l2 " "$(section "$out" "停著：")" "a board hold on a parked topic must be listed as parked"
-  assert_contains "$out" 'bin/fm-tasks-axi.sh hold l1 --reason "topic-board：議題 parked 在待辦"' \
+  assert_contains "$out" 'bin/fm-tasks-axi.sh hold l1 --reason "看板佇列：議題 parked 在待辦"' \
     "the hold line must carry the command to run"
-  assert_contains "$out" 'bin/fm-tasks-axi.sh hold a1 --reason "topic-board：議題 gone 在封存"' \
+  assert_contains "$out" 'bin/fm-tasks-axi.sh hold a1 --reason "看板佇列：議題 gone 在封存"' \
     "an archived topic must say so in the hold reason"
   assert_contains "$out" "bin/fm-tasks-axi.sh unhold r1" "the release line must carry the command to run"
   printf '%s\n' "$out" | awk '/^可派：/ { on = 1; next } /^[^ ]/ { on = 0 } on' | grep '^  r1	' | grep -q '先照「該解除」解除' ||
@@ -123,7 +123,7 @@ test_lists_hands_on_items_waiting_for_a_check() {
   out=$(tb_run "$home" "$PLAN" order)
   assert_equals "td1 " "$(section "$out" "等你驗證：")" \
     "only an open hands-on item the captain says is done waits for a check"
-  assert_contains "$out" "$(printf 'td1\t帳務重構\t高\t← 使用者說做完了；驗證後跑 bin/fm-topic.sh todo done td1，沒成功就跑 bin/fm-topic.sh todo failed td1 --reason <一行>')" \
+  assert_contains "$out" "$(printf 'td1\t帳務重構\t高\t← 使用者說做完了；驗證後跑 bin/myshape.sh todo done td1，沒成功就跑 bin/myshape.sh todo failed td1 --reason <一行>')" \
     "the line must carry both commands"
   assert_not_contains "$(section "$out" "可派：")" "td" "a hands-on item is never dispatchable"
   pass "order lists the hands-on items the captain says are done"
@@ -153,13 +153,34 @@ test_falls_open_without_a_usable_topic_file() {
   pass "order lets dispatch proceed when the topic file is missing, unreadable, or elsewhere"
 }
 
+# A hold the board made before the rename to myshape still starts with
+# topic-board：; it is the board's no longer, so order warns and lists it nowhere.
+test_warns_about_holds_from_before_the_rename() {
+  local home out
+  home=$(tb_make_home order-old-marker)
+  tb_write_topics "$home"
+  write_backlog "$home"
+  write_tags "$home"
+  out=$(tb_run "$home" "$PLAN" order)
+  assert_not_contains "$out" "舊標記" "no warning while every board hold has the new prefix"
+  sed -i.bak 's/(hold: 看板佇列：議題 parked/(hold: topic-board：議題 parked/; s/(hold: 看板佇列：議題 billing/(hold: topic-board：議題 billing/' \
+    "$home/data/backlog.md"
+  out=$(tb_run "$home" "$PLAN" order)
+  assert_equals "有 2 個舊標記的 hold，先跑 bin/fm-board.sh migrate-myshape" "$(printf '%s\n' "$out" | head -n 1)" \
+    "order must lead with the count of old-prefix holds and the command"
+  assert_equals "" "$(section "$out" "停著：")" "an old-prefix hold is not the board's to park"
+  assert_equals "" "$(section "$out" "該解除：")" "an old-prefix hold is not the board's to release"
+  assert_not_contains "$(section "$out" "可派：")" "r1" "an old-prefix hold must not become dispatchable"
+  pass "order warns about holds from before the rename and leaves them held"
+}
+
 test_falls_open_when_the_snapshot_fails() {
   local home root out
   home=$(tb_make_home order-nosnap)
   tb_write_topics "$home"
   root="$TMP_ROOT/order-root"
   mkdir -p "$root/bin"
-  cp "$ROOT"/bin/fm-dispatch-plan.sh "$ROOT"/bin/fm-topic-lib.sh "$ROOT"/bin/fm-primary-scope-lib.sh "$root/bin/"
+  cp "$ROOT"/bin/fm-dispatch-plan.sh "$ROOT"/bin/myshape-lib.sh "$ROOT"/bin/fm-primary-scope-lib.sh "$root/bin/"
   printf '#!/usr/bin/env bash\nexit 1\n' > "$root/bin/fm-fleet-snapshot.sh"
   chmod +x "$root/bin/fm-fleet-snapshot.sh"
   out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-dispatch-plan.sh" order) ||
@@ -169,4 +190,4 @@ test_falls_open_when_the_snapshot_fails() {
 }
 
 fm_test_run test_sections test_lists_hands_on_items_waiting_for_a_check \
-  test_falls_open_without_a_usable_topic_file test_falls_open_when_the_snapshot_fails
+  test_falls_open_without_a_usable_topic_file test_warns_about_holds_from_before_the_rename test_falls_open_when_the_snapshot_fails

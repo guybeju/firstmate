@@ -12,8 +12,9 @@
 #   fm-board.sh --in-home <secondmate-id> setup
 #   fm-board.sh install-rules
 #   fm-board.sh rules
+#   fm-board.sh migrate-myshape [--check | --undo]
 #
-# The board itself is bin/fm-topic.sh; this command is what firstmate adds
+# The board itself is bin/myshape.sh; this command is what firstmate adds
 # around it. None of these subcommands needs the board service.
 #
 # tag    Appends "<topic-id> <UTC time>" to this home's data/<task-id>/topic.
@@ -27,7 +28,7 @@
 # setup  Creates this home's config/fleet-ledger flag. Safe to repeat.
 #
 # split makes a new confirmed topic out of part of <topic-id> with
-# "fm-topic.sh split", right after it in the same queue, and retags the named
+# "myshape.sh split", right after it in the same queue, and retags the named
 # tasks to it. Every task must be tagged with <topic-id> now; a task of a local
 # secondmate is written as <secondmate-id>/<task-id>, and a remote secondmate's
 # task cannot be moved this way. The tasks are checked before anything is
@@ -35,44 +36,61 @@
 # reused and the rest moved. Main home only.
 #
 # install-rules writes the board's rules into this home's data/captain.md and
-# data/captain-shared.md, each as one block between "<!-- topic-board:begin"
-# and "<!-- topic-board:end -->" lines. An existing block is replaced whole;
+# data/captain-shared.md, each as one block between "<!-- myshape:begin"
+# and "<!-- myshape:end -->" lines. An existing block is replaced whole;
 # nothing outside the block is changed, and each file is backed up to
-# state/fm-board/rules-backup/ before it is written. Main home only; it needs
-# neither the board service nor node. rules prints one line saying whether each
-# block matches the templates in fm-board/rules/.
+# state/fm-board/rules-backup/ before it is written. A block with the board's
+# old marker ("<!-- topic-board:begin") is replaced in place the same way, and
+# removed when the file also has a block with the new marker, so a file never
+# keeps both. Main home only; it needs neither the board service nor node.
+# rules prints one line saying whether each block matches the templates in
+# fm-board/rules/, and reports a block that still has the old marker as
+# 舊標記（vN）.
+#
+# migrate-myshape moves this home, once, from the board's names before its
+# rename (state/topic-board, data/topic-board, config/topic-board-port, the
+# "<!-- topic-board:begin" rules marker, the code root's topic-board/
+# leftovers) to myshape's, while the board is stopped, and starts the board
+# again. --check writes nothing and prints what would move and every refusal,
+# or 已搬完. A rerun after an interruption finishes the job; --undo reverses
+# it, and comes before any return to older code. In a secondmate home it only
+# tidies the code root. bin/fm-board-migrate-lib.sh holds the steps.
 #
 # --in-home runs tag, answers, or setup inside a LOCAL registered secondmate
 # home. answers forwards stdin to that home's
-# "fm-captain-hold.sh answers --source topic-board" and returns its output and
+# "fm-captain-hold.sh answers --source myshape" and returns its output and
 # exit code unchanged.
 #
 # Exit codes: 0 success (including an identical repeat), 1 refused or failed
-# with nothing written, 2 usage error. split passes on fm-topic.sh's exit code
+# with nothing written, 2 usage error. split passes on myshape.sh's exit code
 # when the board refuses or cannot be reached.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SELF="$SCRIPT_DIR/fm-board.sh"
-TOPIC="$SCRIPT_DIR/fm-topic.sh"
+TOPIC="$SCRIPT_DIR/myshape.sh"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 RULES_DIR="$FM_ROOT/fm-board/rules"
-RULES_BEGIN='<!-- topic-board:begin'
-RULES_END='<!-- topic-board:end -->'
+RULES_BEGIN='<!-- myshape:begin'
+RULES_END='<!-- myshape:end -->'
+OLD_RULES_BEGIN='<!-- topic-board:begin'
+OLD_RULES_END='<!-- topic-board:end -->'
 TOPICS_FILE="$DATA/topics.json"
 
 # shellcheck source=bin/fm-primary-scope-lib.sh
 . "$SCRIPT_DIR/fm-primary-scope-lib.sh"
 # shellcheck source=bin/fm-secondmate-registry-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
-# shellcheck source=bin/fm-topic-lib.sh
-. "$SCRIPT_DIR/fm-topic-lib.sh"
+# shellcheck source=bin/myshape-lib.sh
+. "$SCRIPT_DIR/myshape-lib.sh"
 # shellcheck source=bin/fm-board-lib.sh
 . "$SCRIPT_DIR/fm-board-lib.sh"
+# shellcheck source=bin/fm-board-migrate-lib.sh
+. "$SCRIPT_DIR/fm-board-migrate-lib.sh"
 
 usage() {
   sed -n '2,/^set -euo pipefail$/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
@@ -273,17 +291,18 @@ cmd_in_home() {
   fi
   if [ "$1" = answers ]; then
     [ "$#" -eq 1 ] || usage_error "answers 不收參數，答案一行走 stdin"
-    tb_exec_in_home "$home" "$SCRIPT_DIR/fm-captain-hold.sh" answers --source topic-board
+    tb_exec_in_home "$home" "$SCRIPT_DIR/fm-captain-hold.sh" answers --source myshape
   fi
   tb_exec_in_home "$home" "$SELF" "$@"
 }
 
-# Where the rules block sits in <file>: prints "none", "ok <begin-line>
-# <end-line>", or "broken <what is wrong>" when the two markers do not form
-# exactly one block. A marker line may be indented or carry text after the
-# marker, so a block that an editor or a curation pass reshaped is still found.
-rules_block() {
-  awk -v begin="$RULES_BEGIN" -v end="$RULES_END" '
+# block_at <file> <begin-marker> <end-marker>: where that marker's block sits
+# in <file>: prints "none", "ok <begin-line> <end-line>", or "broken <what is
+# wrong>" when the two markers do not form exactly one block. A marker line may
+# be indented or carry text after the marker, so a block that an editor or a
+# curation pass reshaped is still found.
+block_at() {
+  awk -v begin="$2" -v end="$3" '
     { line = $0; sub(/^[ \t]+/, "", line) }
     index(line, begin) == 1 { begins = begins " " NR; b++ }
     index(line, end) == 1 { ends = ends " " NR; e++ }
@@ -295,28 +314,55 @@ rules_block() {
   ' "$1"
 }
 
-# The "vN" on a block's first line, for people; the content decides what is current.
-rules_version() {
-  sed -n '1s/^.*topic-board:begin \(v[0-9]*\).*$/\1/p'
+# rules_blocks <file>: the block with this marker and the block with the
+# board's old marker, as "<block_at answer>|<block_at answer>". The old marker
+# is recognised only so that its block is replaced; a file never keeps both.
+rules_blocks() {
+  printf '%s|%s\n' "$(block_at "$1" "$RULES_BEGIN" "$RULES_END")" \
+    "$(block_at "$1" "$OLD_RULES_BEGIN" "$OLD_RULES_END")"
 }
 
-# One file's rules state: 未裝, 和範本相同（vN）, or 和範本不同（vN）.
+# The "vN" on a block's first line, under either marker, for people; the
+# content decides what is current.
+rules_version() {
+  sed -n -E '1s/^.*(myshape|topic-board):begin (v[0-9]*).*$/\2/p'
+}
+
+# block_text <file> <block_at answer>: the lines of that block.
+block_text() {
+  local first last
+  read -r _ first last <<< "$2"
+  sed -n "${first},${last}p" "$1"
+}
+
+# One file's rules state: 未裝, 和範本相同（vN）, 和範本不同（vN）, 舊標記（vN）
+# for a block that still has the old marker, or 標記不完整.
 rules_state() {  # <file> <template>
-  local file=$1 template=$2 block first last installed
+  local file=$1 template=$2 blocks new old installed state
   [ -f "$file" ] || { printf '未裝'; return 0; }
-  block=$(rules_block "$file")
-  case "$block" in
-    none) printf '未裝' ;;
-    ok\ *)
-      read -r _ first last <<< "$block"
-      installed=$(sed -n "${first},${last}p" "$file")
+  blocks=$(rules_blocks "$file")
+  new=${blocks%%|*}
+  old=${blocks#*|}
+  case "$new|$old" in
+    broken* | *\|broken*) printf '標記不完整'; return 0 ;;
+  esac
+  case "$new" in
+    none) state='' ;;
+    *)
+      installed=$(block_text "$file" "$new")
       if [ "$installed" = "$(cat "$template")" ]; then
-        printf '和範本相同（%s）' "$(printf '%s\n' "$installed" | rules_version)"
+        state="和範本相同（$(printf '%s\n' "$installed" | rules_version)）"
       else
-        printf '和範本不同（%s）' "$(printf '%s\n' "$installed" | rules_version)"
+        state="和範本不同（$(printf '%s\n' "$installed" | rules_version)）"
       fi
       ;;
-    *) printf '標記不完整' ;;
+  esac
+  case "$old" in
+    none) printf '%s' "${state:-未裝}" ;;
+    *)
+      [ -z "$state" ] || state="${state}，另有"
+      printf '%s舊標記（%s）' "$state" "$(block_text "$file" "$old" | rules_version)"
+      ;;
   esac
 }
 
@@ -327,32 +373,52 @@ cmd_rules() {
     "$(rules_state "$DATA/captain-shared.md" "$RULES_DIR/captain-shared.block.md.tmpl")"
 }
 
+# without_block <file> <block_at answer> [replacement-file]: <file> with that
+# block taken out, or replaced by the replacement's lines. Bytes outside the
+# block are kept as they are.
+without_block() {
+  local file=$1 first last
+  read -r _ first last <<< "$2"
+  head -n "$((first - 1))" "$file"
+  [ -z "${3:-}" ] || cat "$3"
+  tail -n "+$((last + 1))" "$file"
+}
+
 # Print what <file> should contain once <template> is installed, or return 1
-# after explaining why the file is left alone.
+# after explaining why the file is left alone. The block with this marker is
+# replaced in place; without one, a block with the old marker is replaced in
+# place; with both, the old one is taken out; with neither, the template is
+# appended.
 rules_new_content() {  # <file> <template> [header-template]
-  local file=$1 template=$2 header=${3:-} block first last
+  local file=$1 template=$2 header=${3:-} blocks new old rest
   if [ ! -f "$file" ]; then
     [ -z "$header" ] || cat "$header"
     cat "$template"
     return 0
   fi
-  block=$(rules_block "$file")
-  case "$block" in
-    none)
+  blocks=$(rules_blocks "$file")
+  new=${blocks%%|*}
+  old=${blocks#*|}
+  case "$new|$old" in
+    broken* | *\|broken*)
+      case "$new" in broken*) ;; *) new=$old ;; esac
+      printf '%s\n' "${file##*/}：標記不成對（${new#broken }），沒有動這個檔。請手動整理成一對標記，或把它們都刪掉。" >&2
+      return 1
+      ;;
+    none\|none)
       cat "$file"
       [ -z "$(tail -c 1 "$file")" ] || printf '\n'
       [ ! -s "$file" ] || printf '\n'
       cat "$template"
       ;;
-    ok\ *)
-      read -r _ first last <<< "$block"
-      head -n "$((first - 1))" "$file"
-      cat "$template"
-      tail -n "+$((last + 1))" "$file"
-      ;;
+    none\|*) without_block "$file" "$old" "$template" ;;
+    *\|none) without_block "$file" "$new" "$template" ;;
     *)
-      printf '%s\n' "${file##*/}：標記不成對（${block#broken }），沒有動這個檔。請手動整理成一對標記，或把它們都刪掉。" >&2
-      return 1
+      rest=$(mktemp "${TMPDIR:-/tmp}/fm-board-rules.XXXXXX")
+      without_block "$file" "$new" "$template" > "$rest"
+      # Taking the new block out moved every later line; find the old one again.
+      without_block "$rest" "$(block_at "$rest" "$OLD_RULES_BEGIN" "$OLD_RULES_END")"
+      rm -f "$rest"
       ;;
   esac
 }
@@ -393,9 +459,15 @@ install_rules_file() {  # <file> <template> [header-template]
     before=$(rules_state "$file" "$template")
     backup="$STATE/fm-board/rules-backup/$name.$(date -u +%Y%m%dT%H%M%SZ)"
     cp -p "$file" "$backup"
+    RULES_BACKUP=$backup
     mv "$fresh" "$file"
     case "$before" in
       未裝) printf '%s\n' "${name}：新增（${after}），原檔備份在 $backup" ;;
+      *，另有舊標記*) printf '%s\n' "${name}：已更新（${after}），舊標記的區塊也拿掉了，原檔備份在 $backup" ;;
+      舊標記*)
+        before=${before#舊標記（}
+        printf '%s\n' "${name}：已更新（舊標記 ${before%）} → ${after}），原檔備份在 $backup"
+        ;;
       *) printf '%s\n' "${name}：已更新（$before → ${after}），原檔備份在 $backup" ;;
     esac
   fi
@@ -444,6 +516,7 @@ main() {
     split) cmd_split "$@" ;;
     install-rules) cmd_install_rules "$@" ;;
     rules) cmd_rules "$@" ;;
+    migrate-myshape) cmd_migrate_myshape "$@" ;;
     *) usage_error "不認得的子命令：$sub" ;;
   esac
 }

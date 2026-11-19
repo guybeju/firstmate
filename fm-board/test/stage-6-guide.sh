@@ -38,8 +38,8 @@ test_real_guide_passes() {
 test_catches_wrong_names() {
   expect_caught link '[壞](docs/no-such-file.md#x)' "link target does not exist: docs/no-such-file.md"
   expect_caught script '`bin/fm-no-such-script.sh`' "bin/fm-no-such-script.sh"
-  expect_caught subcommand '`bin/fm-topic.sh frobnicate`' "fm-topic.sh has no subcommand 'frobnicate'"
-  expect_caught moved-subcommand '`bin/fm-topic.sh setup`' "fm-topic.sh has no subcommand 'setup'"
+  expect_caught subcommand '`bin/myshape.sh frobnicate`' "myshape.sh has no subcommand 'frobnicate'"
+  expect_caught moved-subcommand '`bin/myshape.sh setup`' "myshape.sh has no subcommand 'setup'"
   expect_caught board-subcommand '`bin/fm-board.sh frobnicate`' "fm-board.sh has no subcommand 'frobnicate'"
   expect_caught in-home '`bin/fm-board.sh --in-home <id> frob`' "fm-board.sh has no subcommand 'frob'"
   expect_caught plan-subcommand '`bin/fm-dispatch-plan.sh frobnicate`' "fm-dispatch-plan.sh has no subcommand 'frobnicate'"

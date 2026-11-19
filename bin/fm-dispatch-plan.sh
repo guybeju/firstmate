@@ -14,6 +14,9 @@
 #        unresolved blocker) are in no section: upstream's own gates decide
 #        those. Without a usable topic file, items the board held earlier are
 #        still listed under 停著 so that a leftover hold is not forgotten.
+#        A hold whose reason still starts with the board's prefix from before
+#        the rename (topic-board：) is in no section; order prints one line
+#        first, naming how many there are and bin/fm-board.sh migrate-myshape.
 #
 # It reads the board's data/topics.json and data/topics-archive.json, the
 # home's data/<task-id>/topic tag files, and the backlog through
@@ -30,13 +33,17 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 TOPICS_FILE="$DATA/topics.json"
 ARCHIVE_FILE="$DATA/topics-archive.json"
-OWN_HOLD_PREFIX='topic-board：'
+OWN_HOLD_PREFIX='看板佇列：'
+# The prefix the board's holds had before the rename to myshape. A hold that
+# still starts with it is not the board's to order any more; order only warns
+# until bin/fm-board.sh migrate-myshape has rewritten it.
+OLD_HOLD_PREFIX='topic-board：'
 TODO_MARKER='動手：'
 
 # shellcheck source=bin/fm-primary-scope-lib.sh
 . "$SCRIPT_DIR/fm-primary-scope-lib.sh"
-# shellcheck source=bin/fm-topic-lib.sh
-. "$SCRIPT_DIR/fm-topic-lib.sh"
+# shellcheck source=bin/myshape-lib.sh
+. "$SCRIPT_DIR/myshape-lib.sh"
 
 usage() {
   sed -n '2,/^set -euo pipefail$/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
@@ -101,6 +108,7 @@ cmd_order() {
   fi
   tags=$(order_tags)
   printf '%s' "$snapshot" | jq -r --arg note "$note" --arg tags "$tags" --arg own "$OWN_HOLD_PREFIX" --arg marker "$TODO_MARKER" \
+    --arg old "$OLD_HOLD_PREFIX" \
     --slurpfile live "$topics" --slurpfile gone "$archive" '
     ($live[0] // null) as $doc
     | ($gone[0].topics // {}) as $archived
@@ -141,7 +149,9 @@ cmd_order() {
     | ($items | map(select(.parked and (.own_hold | not) and (.other_hold | not)))) as $to_hold
     | ($items | map(select($doc != null and .own_hold and (.parked | not)))) as $to_release
     | ($items | map(select(.own_hold and (.parked or $doc == null)))) as $parked
-    | (if $note != "" then $note else empty end),
+    | ([ .backlog.records[] | select(.state == "queued" and ((.hold_reason // "") | startswith($old))) ] | length) as $stale
+    | (if $stale > 0 then "有 \($stale) 個舊標記的 hold，先跑 bin/fm-board.sh migrate-myshape" else empty end),
+      (if $note != "" then $note else empty end),
       "可派：",
       ($ready[] | line
         + (if .own_hold then "\t← 還被看板的 hold 擋著，先照「該解除」解除" else "" end)
@@ -155,7 +165,7 @@ cmd_order() {
       ($items | map(select(.claimed)) as $claimed
        | if ($claimed | length) == 0 then empty
          else "等你驗證：",
-              ($claimed[] | line + "\t← 使用者說做完了；驗證後跑 bin/fm-topic.sh todo done \(.id)，沒成功就跑 bin/fm-topic.sh todo failed \(.id) --reason <一行>")
+              ($claimed[] | line + "\t← 使用者說做完了；驗證後跑 bin/myshape.sh todo done \(.id)，沒成功就跑 bin/myshape.sh todo failed \(.id) --reason <一行>")
          end)
   ' || {
     printf '%s\n' "讀不到 backlog，照平常的方式派工。"

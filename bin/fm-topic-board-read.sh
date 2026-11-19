@@ -43,8 +43,8 @@ LEDGER_MAX_BYTES=262144
 . "$SCRIPT_DIR/fm-primary-scope-lib.sh"
 # shellcheck source=bin/fm-secondmate-registry-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
-# shellcheck source=bin/fm-topic-lib.sh
-. "$SCRIPT_DIR/fm-topic-lib.sh"
+# shellcheck source=bin/myshape-lib.sh
+. "$SCRIPT_DIR/myshape-lib.sh"
 # shellcheck source=bin/fm-board-lib.sh
 . "$SCRIPT_DIR/fm-board-lib.sh"
 

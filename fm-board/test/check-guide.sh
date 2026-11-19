@@ -4,14 +4,14 @@
 # fails here instead of on a new machine. It checks names only, never prose:
 #   - every relative Markdown link points at an existing file (anchors after
 #     '#' are not checked);
-#   - every bin/fm-*.sh it names exists and is executable;
-#   - every "fm-topic.sh <sub>", "fm-board.sh <sub>" (also after
+#   - every bin/fm-*.sh and bin/myshape.sh it names exists and is executable;
+#   - every "myshape.sh <sub>", "fm-board.sh <sub>" (also after
 #     "--in-home <id>") and "fm-dispatch-plan.sh <sub>" names a subcommand
 #     listed in that script's usage header;
 #   - every config/<name> it names appears in some script under bin/;
 #   - every `/<skill>` and every `<skill>` 技能 has .agents/skills/<skill>/SKILL.md;
 #   - every version written after captain.md or captain-shared.md, such as
-#     "（v9）", equals the version on the first line of its template in
+#     "（v10）", equals the version on the first line of its template in
 #     fm-board/rules/.
 # Prints one "not ok" line per problem and exits 1, or one "ok" line and 0.
 #
@@ -60,7 +60,7 @@ check_scripts() {
   while IFS= read -r script; do
     [ -n "$script" ] || continue
     [ -x "$ROOT/$script" ] || problem "script does not exist or is not executable: $script"
-  done <<< "$(cited 'bin/fm-[A-Za-z0-9_-]+\.sh')"
+  done <<< "$(cited 'bin/(fm-[A-Za-z0-9_-]+|myshape)\.sh')"
 }
 
 # usage_subcommands <script>: the subcommands bin/<script>'s usage header
@@ -105,7 +105,7 @@ check_skills() {
 # check_version <preference-file> <its regex> <template>
 check_version() {
   local file=$1 pattern=$2 template=$3 expected use found
-  expected=$(sed -n '1s/^.*topic-board:begin \(v[0-9]*\).*$/\1/p' "$ROOT/fm-board/rules/$template")
+  expected=$(sed -n '1s/^.*myshape:begin \(v[0-9]*\).*$/\1/p' "$ROOT/fm-board/rules/$template")
   [ -n "$expected" ] || {
     problem "cannot read the version of fm-board/rules/$template"
     return 0
@@ -120,7 +120,7 @@ check_version() {
 
 check_links
 check_scripts
-check_subcommands fm-topic.sh
+check_subcommands myshape.sh
 check_subcommands fm-board.sh
 check_subcommands fm-dispatch-plan.sh
 check_config_files
