@@ -31,7 +31,7 @@ for tool in jq node curl git; do
 done
 TMP_ROOT=$(fm_test_tmproot tb-s7i)
 case "$TMP_ROOT" in /*) ;; *) echo "not ok - no scratch root" >&2; exit 1 ;; esac
-trap 'tb_stop_boards; fm_test_cleanup' EXIT
+trap 'tb_stop_boards; sig_leftovers; fm_test_cleanup' EXIT
 sig_init
 
 FIRSTMATE_NAMES='fm-[A-Za-z0-9_-]+\.sh|secondmates\.md|captain(-shared)?\.md|fleet-ledger|\.fm-secondmate-home|backlog\.md|fm-hold-v1'
@@ -131,7 +131,7 @@ test_no_firstmate_words() {
   local found
   found=$(literal_words "$ROOT/myshape/src")
   assert_equals "" "$found" "no string literal of the board's code may name Firstmate"
-  found=$(grep -nEi 'first mate|firstmate|/updatefirstmate' "$ROOT/bin/myshape.sh" | grep -vE '^[0-9]+:[[:space:]]*#' || true)
+  found=$(cd "$ROOT" && grep -nEi 'first mate|firstmate|/updatefirstmate' bin/myshape.sh | grep -vE '^[0-9]+:[[:space:]]*#' || true)
   assert_equals "" "$found" "no code line of myshape.sh may name Firstmate"
   pass "the board's texts name no Firstmate, with no exception (AT3.1b)"
 }

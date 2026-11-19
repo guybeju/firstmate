@@ -26,7 +26,7 @@ for tool in jq node curl git sha256sum; do
 done
 TMP_ROOT=$(fm_test_tmproot tb-s7a)
 case "$TMP_ROOT" in /*) ;; *) echo "not ok - no scratch root" >&2; exit 1 ;; esac
-trap 'tb_stop_boards; fm_test_cleanup' EXIT
+trap 'tb_stop_boards; sig_leftovers; fm_test_cleanup' EXIT
 sig_init
 
 sa_init
@@ -100,8 +100,19 @@ wait_for() {  # <description> <command...>: retry the command for up to 15 secon
   done
 }
 
-received() {  # <agg-dir> [jq filter]: the action records received, as one JSON array
-  jq -c -s "${2:-.}" "$1/received.jsonl"
+received() {  # <agg-dir> [jq arguments...] [jq filter]: what the filter makes of every action record received, as one array
+  local agg=$1
+  shift
+  [ "$#" -gt 0 ] || set -- .
+  jq -r -c -s "$@" "$agg/received.jsonl"
+}
+
+is() {  # <expected> <command...>: the command prints exactly <expected>
+  [ "$("${@:2}")" = "$1" ]
+}
+
+at_least() {  # <n> <command...>: the command prints a number of at least <n>
+  [ "$("${@:2}")" -ge "$1" ]
 }
 
 received_count() {  # <agg-dir>
@@ -113,7 +124,7 @@ write_state() {  # <home> <write-id>
 }
 
 write_is() {  # <home> <write-id> <state>
-  [ "$(write_state "$1" "$2")" = "$3" ]
+  is "$3" write_state "$1" "$2"
 }
 
 feeds_of() {  # <agg-dir> <home>: how many feed calls that home got
@@ -130,7 +141,7 @@ test_fm_setup() {
   f create "建置" --goal "把 x 建起來" --id solo >/dev/null
   f create "收尾" --goal "收乾淨" --id wrap >/dev/null
   refresh "$FMH"
-  wait_for "the fixture to reach the page" [ "$(state_of "$FMH" '[.agents[] | select(.task == "t1")] | length')" = 1 ]
+  wait_for "the fixture to reach the page" is 1 state_of "$FMH" '[.agents[] | select(.task == "t1")] | length'
   pass "the board reads the Firstmate-shaped stub"
 }
 
@@ -149,8 +160,8 @@ test_fm_work_reaches_the_page() {
     "a hold must carry the options of its last line"
   assert_equals "solo|which way for the cache?" "$(jq -r '.questions[] | select(.task == "t1") | "\(.topic)|\(.summary)"' <<< "$state")" \
     "a worker question must be under its topic"
-  assert_equals "task.cleaned_up task.merged task.dispatched task.pr_ready task.status task.dispatched" \
-    "$(jq -r '[.updates[] | select(.source == "ledger" and (.task == "t1" or .task == "gone-merged" or .task == "gone-dropped")) | .event] | .[0:6] | join(" ")' <<< "$state")" \
+  assert_equals "task.cleaned_up task.dispatched task.merged task.dispatched task.pr_ready task.status task.dispatched" \
+    "$(jq -r '[.updates[] | select(.source == "ledger" and (.task == "t1" or .task == "gone-merged" or .task == "gone-dropped")) | .event] | join(" ")' <<< "$state")" \
     "the timeline must show the fixture ledger, newest first"
   assert_equals "https://example.invalid/pr/7" "$(jq -r '.updates[] | select(.event == "task.pr_ready") | .pr' <<< "$state")" \
     "a PR-ready event must carry its link"
@@ -197,7 +208,7 @@ test_fm_answers() {
   sleep 0.5
   assert_equals 0 "$(received_count "$AGG_FM")" "nothing may be sent after the first step"
   post "$FMH" holds/answer "{\"home\":\"main\",\"task\":\"call-close\",\"answer\":\"A\",\"label\":\"A\",\"mode\":\"release\",\"confirm\":\"$code\"}" >/dev/null
-  wait_for "the answer to arrive" [ "$(received_count "$AGG_FM")" = 1 ]
+  wait_for "the answer to arrive" is 1 received_count "$AGG_FM"
   assert_equals "answer|main|call-close|A|A|done|solo" \
     "$(received "$AGG_FM" '.[0] | "\(.kind)|\(.home)|\(.task)|\(.answer)|\(.label)|\(.mode)|\(.topic.id)"')" \
     "a hold recorded close must send done, whatever the request said"
@@ -206,13 +217,13 @@ test_fm_answers() {
   for mode in release none; do
     : > "$AGG_FM/received.jsonl"
     two_step "$FMH" holds/answer "{\"home\":\"main\",\"task\":\"call-$mode\",\"answer\":\"好\",\"label\":\"好\"}" >/dev/null
-    wait_for "the $mode answer" [ "$(received_count "$AGG_FM")" = 1 ]
+    wait_for "the $mode answer" is 1 received_count "$AGG_FM"
     assert_equals release "$(received "$AGG_FM" '.[0].mode')" "a hold recorded $mode must send release"
   done
   assert_equals null "$(received "$AGG_FM" '.[0].topic')" "a hold with no topic is answered from 未分類 like any other"
   : > "$AGG_FM/received.jsonl"
   two_step "$FMH" holds/answer '{"home":"sm1","task":"call-sm","answer":"好","label":"好"}' >/dev/null
-  wait_for "the sm1 answer" [ "$(received_count "$AGG_FM")" = 1 ]
+  wait_for "the sm1 answer" is 1 received_count "$AGG_FM"
   assert_equals "sm1|done" "$(received "$AGG_FM" '.[0] | "\(.home)|\(.mode)"')" "an answer to sm1's hold must name home sm1"
   code=$(post "$FMH" holds/answer '{"home":"main","task":"call-close","answer":"B","label":"B"}' | jq -r '.confirm')
   jq '.holds[0].question = "改過的問題"' "$AGG_FM/fm/main.json" > "$AGG_FM/fm/main.json.tmp" && mv "$AGG_FM/fm/main.json.tmp" "$AGG_FM/fm/main.json"
@@ -233,7 +244,7 @@ test_fm_filing() {
   assert_equals "tag|sm1|sm-loose|solo|" "$(received "$AGG_FM" '.[0] | "\(.kind)|\(.home)|\(.task)|\(.topic)|\(.last_tag_line)"')" \
     "the filing record must name the home, the task, the topic and the tag line it saw"
   refresh "$FMH"
-  wait_for "the worker to move under its topic" [ "$(state_of "$FMH" '.agents[] | select(.task == "sm-loose") | .topic')" = solo ]
+  wait_for "the worker to move under its topic" is solo state_of "$FMH" '.agents[] | select(.task == "sm-loose") | .topic'
   pass "a filed worker of a further home moves under its topic once the aggregator reports the tag (AT2.5)"
 }
 
@@ -249,14 +260,14 @@ test_fm_notices() {
   two_step "$FMH" topics/merge '{"from":"gone","into":"wrap"}' >/dev/null
   post "$FMH" topics/archive '{"id":"shelf"}' >/dev/null
   post "$FMH" topics/keep '{"id":"kept"}' >/dev/null
-  wait_for "three notices" [ "$(received_count "$AGG_FM")" = 3 ]
+  wait_for "three notices" is 3 received_count "$AGG_FM"
   assert_equals "topic.merged:wrap topic.archived:shelf topic.kept:kept" \
     "$(received "$AGG_FM" 'map("\(.event):\(.topic.id)") | join(" ")')" "a merge, an archive and a keep must each send a notice"
   : > "$AGG_FM/received.jsonl"
   post "$FMH" topics/move '{"id":"mover","queue":"normal"}' >/dev/null
   sleep 1
   assert_equals 0 "$(received_count "$AGG_FM")" "nothing may be sent before the delay"
-  wait_for "the dispatchable notice" [ "$(received_count "$AGG_FM")" = 1 ]
+  wait_for "the dispatchable notice" is 1 received_count "$AGG_FM"
   text=$(received "$AGG_FM" '.[0].text')
   assert_equals "topic.dispatchable|mover" "$(received "$AGG_FM" '.[0] | "\(.event)|\(.topic.id)"')" "a move out of later must send a dispatchable notice"
   assert_equals "議題「移動」離開「待辦」，排在「一般」最後" "$text" "the notice must name the queue and the place"
@@ -269,7 +280,7 @@ test_fm_notices() {
   sleep 3
   assert_equals 0 "$(received_count "$AGG_FM")" "a topic dragged back before the delay must send nothing"
   post "$FMH" topics/reopen '{"id":"shelf","queue":"high"}' >/dev/null
-  wait_for "the reopen notice" [ "$(received_count "$AGG_FM")" = 1 ]
+  wait_for "the reopen notice" is 1 received_count "$AGG_FM"
   assert_contains "$(received "$AGG_FM" '.[0].text')" "議題「封存」重開，排在「高」" "a reopening must send a dispatchable notice"
   pass "merges, archives, keeps and reopenings notify the aggregator, and a dispatchable notice waits and dictates nothing (AT2.6, AT2.7)"
 }
@@ -321,17 +332,19 @@ test_fm_a_crash_mid_write() {
   f stop >/dev/null
   SA_ENV=("${BASE_ENV[@]}" TB_STUB=fm "TB_AGG=$AGG_FM")
   sa_child_board "$FMH"
+  refresh "$FMH"
+  wait_for "the further homes to be known again" is 3 state_of "$FMH" '.homes | length'
   printf '%s\n' 'sleep 3 {"outcome":"delivered"}' 'sleep 3 {"outcome":"delivered"}' 'sleep 3 {"outcome":"delivered"}' > "$AGG_FM/play"
   : > "$AGG_FM/received.jsonl"
   message=$(post "$FMH" messages '{"topic":"solo","text":"途中"}' | jq -r '.write_id')
   direct_sm=$(post "$FMH" direct '{"home":"sm1","task":"sm-loose","text":"途中"}' | jq -r '.write_id')
   direct_far=$(post "$FMH" direct '{"home":"far1","task":"far-work","text":"途中"}' | jq -r '.write_id')
-  wait_for "all three under way" [ "$(received_count "$AGG_FM")" = 3 ]
+  wait_for "all three under way" is 3 received_count "$AGG_FM"
   sa_crash_child "$FMH"
   SA_ENV=("${BASE_ENV[@]}")
   : > "$AGG_FM/play"
   sleep 3.5
-  f list >/dev/null || fail "the next command must bring the board back"
+  f open >/dev/null || fail "the next command must bring the board back"
   if signal_dry_run; then
     printf 'ok - skip: the crash checks need the crash the dry run does not send\n'
     return 0
@@ -349,18 +362,18 @@ test_fm_whole_page_states() {
   local state
   printf 'exit4 far1 is not on the fork\n' > "$AGG_FM/control/far1"
   refresh "$FMH"
-  wait_for "far1 to stop reporting" [ "$(state_of "$FMH" '.homes[] | select(.id == "far1") | .version')" = unreported ]
+  wait_for "far1 to stop reporting" is unreported state_of "$FMH" '.homes[] | select(.id == "far1") | .version'
   state=$(state_of "$FMH")
   assert_equals "far1 is not on the fork" "$(jq -r '.homes[] | select(.id == "far1") | .error' <<< "$state")" "exit 4's line must be far1's banner"
   assert_equals 0 "$(jq '[.agents[] | select(.home == "far1" and .finished == false)] | length' <<< "$state")" "far1's workers must be dropped"
   rm "$AGG_FM/control/far1"
   printf 'garbage\n' > "$AGG_FM/control/sm1"
   refresh "$FMH"
-  wait_for "sm1 to report garbage" [ "$(state_of "$FMH" '.homes[] | select(.id == "sm1") | .error')" = "讀到的資料不是合法的 JSON" ]
+  wait_for "sm1 to report garbage" is "讀到的資料不是合法的 JSON" state_of "$FMH" '.homes[] | select(.id == "sm1") | .error'
   assert_equals 1 "$(state_of "$FMH" '[.agents[] | select(.home == "sm1" and .task == "sm-loose")] | length')" "garbage must keep the last report"
   printf 'schema2\n' > "$AGG_FM/control/sm1"
   refresh "$FMH"
-  wait_for "sm1 to be incompatible" [ "$(state_of "$FMH" '.homes[] | select(.id == "sm1") | .version')" = incompatible ]
+  wait_for "sm1 to be incompatible" is incompatible state_of "$FMH" '.homes[] | select(.id == "sm1") | .version'
   printf 'sleep 30\n' > "$AGG_FM/control/sm1"
   sleep 5
   assert_equals true "$(state_of "$FMH" '.homes[] | select(.id == "sm1") | .stale')" "a home that stops answering must go stale"
@@ -432,7 +445,7 @@ JSON
   p create "B" --goal "g" --id B >/dev/null
   p create "L" --goal "g" --id L --queue later >/dev/null
   refresh "$PH"
-  wait_for "plain's work to reach the page" [ "$(state_of "$PH" '[.agents[] | select(.task == "j1")] | length')" = 1 ]
+  wait_for "plain's work to reach the page" is 1 state_of "$PH" '[.agents[] | select(.task == "j1")] | length'
   pass "the board reads an aggregator written only from the contract"
 }
 
@@ -475,12 +488,12 @@ test_plain_ledger() {
 # AT6.4: a second home of plain's.
 test_plain_second_home() {
   local code
-  wait_for "w2 to be read" [ "$(feeds_of "$AGG_PLAIN" w2)" -ge 1 ]
+  wait_for "w2 to be read" at_least 1 feeds_of "$AGG_PLAIN" w2
   : > "$AGG_PLAIN/received.jsonl"
   two_step "$PH" holds/answer '{"home":"w2","task":"w2-call","answer":"好","label":"好"}' >/dev/null
   post "$PH" agents/tag '{"home":"w2","task":"w2-job","topic":"solo"}' >/dev/null
   post "$PH" direct '{"home":"w2","task":"w2-job","text":"你好"}' >/dev/null
-  wait_for "three w2 actions" [ "$(received_count "$AGG_PLAIN")" = 3 ]
+  wait_for "three w2 actions" is 3 received_count "$AGG_PLAIN"
   assert_equals "w2 w2 w2" "$(received "$AGG_PLAIN" 'map(.home) | join(" ")')" "every action about w2 must name home w2"
   assert_equals "release" "$(received "$AGG_PLAIN" '.[] | select(.kind == "answer") | .mode')" "an unrecorded hold must send release"
   code=0
@@ -494,12 +507,12 @@ test_plain_banners() {
   local state
   printf 'exit4 w2 is offline for maintenance\n' > "$AGG_PLAIN/control/w2"
   refresh "$PH"
-  wait_for "w2's banner" [ "$(state_of "$PH" '.homes[] | select(.id == "w2") | .version')" = unreported ]
+  wait_for "w2's banner" is unreported state_of "$PH" '.homes[] | select(.id == "w2") | .version'
   assert_equals "w2 is offline for maintenance" "$(state_of "$PH" '.homes[] | select(.id == "w2") | .error')" "exit 4's line must be the banner"
   rm "$AGG_PLAIN/control/w2"
   jq '.code_commit = "plain-0.2"' "$AGG_PLAIN/plain/w2.json" > "$AGG_PLAIN/plain/w2.tmp" && mv "$AGG_PLAIN/plain/w2.tmp" "$AGG_PLAIN/plain/w2.json"
   refresh "$PH"
-  wait_for "w2's version" [ "$(state_of "$PH" '.homes[] | select(.id == "w2") | .version')" = different ]
+  wait_for "w2's version" is different state_of "$PH" '.homes[] | select(.id == "w2") | .version'
   state=$(state_of "$PH")
   assert_equals "null" "$(jq -r '.aggregator.update_hint' <<< "$state")" "plain gives no update advice"
   pass "another aggregator's banners carry only its own line and the board's neutral words (AT6.5)"

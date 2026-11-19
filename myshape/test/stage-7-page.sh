@@ -21,7 +21,7 @@ for tool in jq node curl git firefox; do
 done
 TMP_ROOT=$(fm_test_tmproot tb-s7p)
 case "$TMP_ROOT" in /*) ;; *) echo "not ok - no scratch root" >&2; exit 1 ;; esac
-trap 'tb_stop_boards; fm_test_cleanup' EXIT
+trap 'tb_stop_boards; sig_leftovers; fm_test_cleanup' EXIT
 sig_init
 
 sa_init

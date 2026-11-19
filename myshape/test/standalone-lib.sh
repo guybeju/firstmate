@@ -149,6 +149,9 @@ sa() {
   local home=$1
   shift
   sa_assert_scratch "$home"
+  case "${1:-}" in
+    open | stop | restart) ! declare -F sig_product_target >/dev/null || sig_product_target "$home" "$1" ;;
+  esac
   env -i HOME="$TMP_ROOT/h" PATH="${SA_CMD_PATH:-$SA_PATH}" LANG=C.UTF-8 TMPDIR="$SA_TMPDIR" FM_HOME="$home" \
     ${SA_ENV[@]+"${SA_ENV[@]}"} "$SA_ROOT/bin/myshape.sh" "$@"
 }

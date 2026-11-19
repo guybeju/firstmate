@@ -15,7 +15,7 @@ set -u
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 command -v node >/dev/null 2>&1 || { echo "skip: node not found"; exit 0; }
 TMP_ROOT=$(fm_test_tmproot tb-s4)
-trap 'tb_stop_boards; fm_test_cleanup' EXIT
+trap 'tb_stop_boards; sig_leftovers; fm_test_cleanup' EXIT
 sig_init
 
 export MYSHAPE_TEST=1 MYSHAPE_READ_MS=60000
@@ -39,6 +39,7 @@ cat > "$MAIN/data/secondmates.md" <<EOF
 EOF
 
 t() {
+  case "${1:-}" in open | stop | restart) sig_product_target "$MAIN" "$1" ;; esac
   FM_HOME="$MAIN" FM_ROOT_OVERRIDE="$CODE_ROOT" "$CODE_ROOT/bin/myshape.sh" "$@"
 }
 

@@ -22,7 +22,7 @@ for tool in jq node curl git; do
 done
 TMP_ROOT=$(fm_test_tmproot tb-s7)
 case "$TMP_ROOT" in /*) ;; *) echo "not ok - no scratch root" >&2; exit 1 ;; esac
-trap 'tb_stop_boards; fm_test_cleanup' EXIT
+trap 'tb_stop_boards; sig_leftovers; fm_test_cleanup' EXIT
 sig_init
 
 sa_init
@@ -318,7 +318,7 @@ test_waiting_survives_a_crash() {
   t stop >/dev/null
   sa_child_board "$MAIN"
   sa_crash_child "$MAIN"
-  t list >/dev/null || fail "the next command must bring the board back"
+  t open >/dev/null || fail "the next command must bring the board back"
   sleep 1.5
   assert_equals "$waiting" "$(waiting_ids)" "(a) the same writes must still wait after a crash and the resume window"
   assert_equals 0 "$(api_state "$MAIN" '[.writes[] | select(.state == "waiting" and .attempt != 0)] | length')" \
@@ -329,14 +329,10 @@ test_waiting_survives_a_crash() {
   api "$MAIN" topics/move '{"id":"six","queue":"normal"}' >/dev/null
   sleep 1
   sa_crash_child "$MAIN"
-  t list >/dev/null
+  t open >/dev/null
   sleep 2.5
   after=$(api_state "$MAIN" '[.writes[] | select(.kind == "notice" and .topic == "six")] | length')
-  if signal_dry_run; then
-    printf 'ok - skip: (b) needs the crash the dry run does not send\n'
-  else
-    assert_equals 1 "$after" "(b) six's notice must be recorded once its delay ends after a crash"
-  fi
+  assert_equals 1 "$after" "(b) six's notice must be recorded once its delay ends after a crash"
 
   api "$MAIN" topics/move '{"id":"seven","queue":"normal"}' >/dev/null
   t restart >/dev/null
@@ -351,8 +347,8 @@ test_waiting_survives_a_crash() {
 test_an_aggregator_receives_the_waiting_writes() {
   local waiting received later
   waiting=$(waiting_ids)
-  printf '{}\n' > "$AGG/plain/main.json"
   sa_install_stub plain "$AGG"
+  printf '{}\n' > "$AGG/plain/main.json"
   t restart >/dev/null || fail "restart with the stub failed"
   sleep 2
   received=$(jq -r -s 'map(.id) | join(" ")' "$AGG/received.jsonl")

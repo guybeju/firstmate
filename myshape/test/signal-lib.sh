@@ -109,3 +109,37 @@ dry_log() {
   ! signal_dry_run || printf '%s\n' "$1" >> "$FM_TEST_SIGNAL_LOG"
 }
 
+# sig_leftovers: in a signal dry run, give processes the run left under
+# TMP_ROOT ten seconds to end by themselves, then log every one still there
+# with its ancestry: these are what the cleanup on exit would signal. Outside
+# a dry run it does nothing.
+sig_leftovers() {
+  local pids pid i=0
+  signal_dry_run || return 0
+  while [ "$i" -lt 100 ]; do
+    pids=$(ps -ww -eo pid=,args= | SIG_ROOT="$TMP_ROOT/" awk 'index($0, ENVIRON["SIG_ROOT"]) { print $1 }')
+    [ -n "$pids" ] || break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if [ -z "$pids" ]; then
+    dry_log "leftovers: none; the cleanup on exit has nothing to signal"
+    return 0
+  fi
+  for pid in $pids; do
+    "$SIGNAL_CHECK" "$$" "$FM_TEST_SIGNAL_LOG" "leftover the cleanup on exit would signal" "$pid" >/dev/null
+  done
+}
+
+# sig_product_target <home> <subcommand>: in a signal dry run, before a board
+# command that may stop the running board (open, stop, restart, and any
+# command that replaces a board on other code), log the board its pid file
+# names, which is the only process the board's own stop could signal.
+sig_product_target() {
+  local pid
+  signal_dry_run || return 0
+  pid=$(cat "$1/state/myshape/pid" 2>/dev/null || true)
+  [ -n "$pid" ] || return 0
+  "$SIGNAL_CHECK" "$$" "$FM_TEST_SIGNAL_LOG" "the board's own stop, before: myshape.sh $2" "$pid" >/dev/null
+}
+
