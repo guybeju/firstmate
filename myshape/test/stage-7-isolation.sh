@@ -204,9 +204,10 @@ test_remote_means_nothing_to_the_board() {
   printf 'sleep 3\n' > "$agg/control/h2"
   remote_post refresh '{}' >/dev/null
   sleep 2
-  a=$(remote_state '.homes[] | select(.id == "h1") | .error')
+  a=$(remote_state '.homes[] | select(.id == "h1") | .error' | sed 's/ h1 / <home> /')
   [ "$a" != null ] || fail "(b) the short timeout must cut the read"
-  assert_equals "$a" "$(remote_state '.homes[] | select(.id == "h2") | .error')" "(b) both homes must time out with the same error"
+  assert_equals "$a" "$(remote_state '.homes[] | select(.id == "h2") | .error' | sed 's/ h2 / <home> /')" \
+    "(b) both homes must time out with the same error, apart from their id"
   rm "$agg/control/h1" "$agg/control/h2"
   sleep 3
 

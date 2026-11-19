@@ -24,7 +24,7 @@
 指令（工作目錄是 checkout 的根目錄）：
 
 ```
-myshape/test/run.sh            # 第一到五段與第七段，十三個腳本
+myshape/test/run.sh            # 第一到五段與第七段，十四個腳本
 myshape/test/run.sh 1          # 只跑第一段；可以列多個數字（第六段搬到 fm-board/test）
 fm-board/test/run.sh               # first mate 這一側：feed、deliver、tag、setup、--in-home、帶 task 的 split、規則、安裝說明
 dispatch-plan/test/run.sh          # first mate 這一側：order
@@ -44,7 +44,7 @@ shellcheck -x bin/fm-board.sh bin/fm-board-lib.sh bin/fm-board-io-lib.sh bin/fm-
 - 測試用的環境變數由各腳本自己設：`MYSHAPE_TEST=1` 打開只給測試用的 socket 操作，`MYSHAPE_READ_MS` 等縮短輪詢與重試的間隔。不用事先設任何變數。
 - 會停掉或重啟看板的第七段腳本只經 `myshape/test/signal-lib.sh` 的 `kill_own_child` 送訊號，只送給腳本自己用 `&` 啟動、記下 `$!` 的子程序；`myshape/test/check-signals.sh` 檢查第七段、它的函式庫、替身 aggregator 與 `fm-board/test` 沒有別的送訊號的寫法。`FM_TEST_SIGNAL_DRY_RUN=1 FM_TEST_SIGNAL_LOG=<絕對路徑>` 讓這些腳本什麼都不送，只記下每一次會送給誰。
 - 暫存目錄：macOS 預設的暫存目錄很深，會讓 socket 路徑超過 103 位元組的上限。`helpers.sh` 在預設暫存目錄的路徑超過 40 個字元時改用 `/tmp`。
-- 範圍：這台 Linux 要十三個腳本與 `fm-board/test`、`dispatch-plan/test` 全過。遠端的 home 只跑 `bin/fm-topic-board-read.sh` 與 `bin/fm-board.sh`（`tag`、`setup`，與一次性的 `migrate-myshape`），不跑服務也不開頁面，所以在 Mac 上要過的是第一段與 `fm-board/test/stage-1-tag.sh`。頁面程式在使用者開看板的那台機器的瀏覽器裡執行。
+- 範圍：這台 Linux 要十四個腳本與 `fm-board/test`、`dispatch-plan/test` 全過。遠端的 home 只跑 `bin/fm-topic-board-read.sh` 與 `bin/fm-board.sh`（`tag`、`setup`，與一次性的 `migrate-myshape`），不跑服務也不開頁面，所以在 Mac 上要過的是第一段與 `fm-board/test/stage-1-tag.sh`。頁面程式在使用者開看板的那台機器的瀏覽器裡執行。
 - ShellCheck 會對 `tests/lib.sh` 的 source 報 SC1091，可以忽略；其他的要是零。
 
 ### 在暫時的 home 手動試

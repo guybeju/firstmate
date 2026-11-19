@@ -194,6 +194,9 @@ test_the_next_command_after_the_move_replaces_the_board() {
   RUNTIME=$MAIN/state/myshape
 
   sa "$MAIN" open >/dev/null || fail "the next command after the move failed"
+  # Until now the old service kept reading through the programs it was built to
+  # run, which are tripwires on the new side; only the new side is checked.
+  : > "$SA_TRIP_LOG"
   assert_equals 1 "$(tb_board_count "$MAIN")" "exactly one service must serve the home"
   assert_not_equals "$OLD_PID" "$(tb_board_pid "$MAIN")" "the next command must replace the old service"
   ps -p "$OLD_PID" >/dev/null 2>&1 && fail "the old service must be gone"
@@ -306,6 +309,10 @@ test_b2_the_b1_board_leaves_writes_settled_and_in_flight() {
   sa "$MAIN" create "Old A" --goal "a" --id old-a >/dev/null
   sa "$MAIN" create "Old B" --goal "b" --id old-b >/dev/null
   sa "$MAIN" move old-b normal --first >/dev/null
+  sa "$MAIN" create "Old C" --goal "c" --id old-c --queue later >/dev/null
+  sa "$MAIN" archive old-c >/dev/null
+  sa "$MAIN" merge old-b old-a --reason "same thing" >/dev/null
+  sa "$MAIN" create "Old B2" --goal "b" --id old-b2 >/dev/null
   api refresh '{}' >/dev/null
   sleep 1
   code=$(api holds/answer '{"home":"main","task":"call-1","answer":"合併","label":"合併"}' | jq -r '.confirm')
@@ -344,6 +351,7 @@ test_b2_the_next_command_replaces_the_board() {
   printf '{}\n' > "$B2_DIR/agg/plain/main.json"
   ps -p "$B2_OLD_PID" >/dev/null 2>&1 || fail "the B1 board must still be running when B2 lands"
   sa "$MAIN" open >/dev/null || fail "the next command after B2 landed failed"
+  : > "$SA_TRIP_LOG"
   assert_equals 1 "$(tb_board_count "$MAIN")" "exactly one service must serve the home"
   assert_not_equals "$B2_OLD_PID" "$(tb_board_pid "$MAIN")" "the next command must replace the B1 service"
   assert_contains "$(sa "$MAIN" status)" "程式版本：$ROOT_COMMIT" "status must name the new commit"
