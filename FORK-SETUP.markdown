@@ -247,6 +247,21 @@ second mate 本身怎麼佈建照上游：同機的見 [secondmate-provisioning 
 
 之後新增的遠端 second mate：在那台機器手動 clone code root 之後先做上面的第 1 點，再照上游的流程佈建 home；不把已經存在的 `origin` 改成指向 fork（rollout「之後怎麼更新」）。
 
+**會停掉 Mac 上 second mate、或讓它的伺服器離開登入 session 的 Herdr 操作**：遠端 second mate 跑在 Firstmate 在 Mac 上起的 Herdr 伺服器裡（主 code root 的是 `fm-remote` session，[remote-secondmates「How the Herdr launch agent starts its server」](docs/remote-secondmates.md#how-the-herdr-launch-agent-starts-its-server)）。
+伺服器一停，裡面每個 pane 都結束，second mate 也停了；伺服器換成不是在登入 session 起的程序時，裡面的 pane 讀不到登入鑰匙圈。
+要看 second mate 在做什麼，從主 home 用 `bin/fm-peek.sh`，不要直接接進那個 session。
+下表的「救回」都是同一套：沒有 second mate 正在啟動或復原時，跑 `bin/fm-on.sh <id> fm-remote-doctor.sh`，照它的 `action:` 做，需要時再跑 `bin/fm-on.sh <id> fm-remote-doctor.sh --fix`（[Repair with --fix](docs/remote-secondmates.md#repair-with---fix)），然後請 first mate 重新啟動那個 second mate（[Launch or recover](docs/remote-secondmates.md#launch-or-recover)）。
+那個 session 裡還有 pane 時，`--fix` 不會動伺服器，要先請 first mate 停下 second mate。
+
+| 操作 | 現在對 second mate 的影響 | 改做什麼、怎麼救回 |
+| --- | --- | --- |
+| `herdr machine add`，問要不要重啟時答 y | 現在的伺服器是 session leader，Herdr 應該不會再問（Mac 上真的伺服器量過是 session leader，對它跑 `machine add` 還沒驗過）；問了就表示那台的伺服器不是照現在的方式起的，這時答 y 會停掉它，換上一個從 SSH 起、讀不到登入鑰匙圈的伺服器 | 答 N（預設就是 N），告訴 first mate；doctor 不檢查伺服器是不是 session leader |
+| `herdr --remote`（Herdr 自己的 SSH 接入） | 伺服器沒在跑時從 SSH 起一個，裡面的 pane 讀不到登入鑰匙圈；對正在跑的伺服器會不會要求重啟，現在的起法下沒有驗過 | 不要對那個 session 用；被它起了伺服器就救回，`--fix` 會換回 launch agent 起的伺服器 |
+| live handoff（`--handoff`） | 換掉伺服器的程序；launch agent 跟著舊程序結束，Firstmate 證明不了新的程序是在登入 session 起的，doctor 把它當成外來的伺服器 | 不要用；用了就救回 |
+| `herdr update` | 可能停掉或換掉伺服器（這個 fork 沒有驗過） | second mate 在跑時不要做；做了就救回 |
+| `herdr server stop` | 停掉伺服器；launch agent 把正常結束當成做完，不會自己再起 | 不要用（[herdr-backend「Destructive lab safety」](docs/herdr-backend.md#destructive-lab-safety)）；用了就救回 |
+| `herdr session stop` | 同上：伺服器停掉，launch agent 停著不再起 | 不要用；用了就救回 |
+
 ## 這一頁怎麼保持正確
 
 看板每次修改（程式、指令、規則範本、需要的工具）都要在同一個修改裡對照這一頁、改掉不一致的地方，PR 說明裡寫出這一頁查過了、改了什麼。
