@@ -128,21 +128,40 @@ tb_board_count() {
   pgrep -f "board-server.js.*--state $1/state" | wc -l | tr -d ' '
 }
 
-# tb_stop_boards: kill every board started under TMP_ROOT. Registered on EXIT so
-# a failed assertion never leaves a service behind. In a signal dry run
-# (myshape/test/signal-lib.sh) it signals nothing: it logs each board the
-# pattern matches, with its ancestry, and stops it through its own socket.
+# tb_stop_boards: stop every board started under TMP_ROOT through its own
+# socket, which sends no signal. Registered on EXIT so a failed assertion never
+# leaves a service behind. It does nothing unless TMP_ROOT is an absolute path
+# below /, so a scratch root that failed to be made cannot widen the match to
+# another home's board. A board still running five seconds after its stop is
+# reported as a failure; fm_test_cleanup then runs and the script exits 1. In a
+# signal dry run (myshape/test/signal-lib.sh) each board found is also logged
+# with its ancestry.
 tb_stop_boards() {
-  local pid state
-  if [ -z "${FM_TEST_SIGNAL_DRY_RUN:-}" ]; then
-    pkill -KILL -f "board-server.js.*--state $TMP_ROOT/" 2>/dev/null || true
-    return 0
-  fi
-  for pid in $(pgrep -f "board-server.js.*--state $TMP_ROOT/" || true); do
-    [ -z "${SIGNAL_CHECK:-}" ] || "$SIGNAL_CHECK" "$$" "$FM_TEST_SIGNAL_LOG" tb_stop_boards "$pid" >/dev/null
+  local pid state pids i=0
+  case "${TMP_ROOT:-}" in /?*) ;; *) return 0 ;; esac
+  for pid in $(tb_boards_under "$TMP_ROOT"); do
+    [ -z "${SIGNAL_CHECK:-}" ] || [ -z "${FM_TEST_SIGNAL_LOG:-}" ] ||
+      "$SIGNAL_CHECK" "$$" "$FM_TEST_SIGNAL_LOG" tb_stop_boards "$pid" >/dev/null
     state=$(ps -ww -o args= -p "$pid" | sed -n 's/.*--state \([^ ]*\).*/\1/p')
     [ -z "$state" ] || tb_socket_stop "$state/myshape/board.sock"
   done
+  pids=$(tb_boards_under "$TMP_ROOT")
+  while [ -n "$pids" ] && [ "$i" -lt 50 ]; do
+    sleep 0.1
+    i=$((i + 1))
+    pids=$(tb_boards_under "$TMP_ROOT")
+  done
+  [ -z "$pids" ] && return 0
+  # shellcheck disable=SC2086 # one word per pid.
+  printf 'not ok - a board under %s did not stop through its socket: %s\n' "$TMP_ROOT" "$(printf '%s ' $pids)" >&2
+  fm_test_cleanup
+  exit 1
+}
+
+# tb_boards_under <root>: the pids of the board services whose state is under
+# <root>, found by command line; nothing is signalled.
+tb_boards_under() {
+  pgrep -f "board-server.js.*--state $1/" || true
 }
 
 # tb_socket_stop <socket>: ask the board on <socket> to stop, which it does by

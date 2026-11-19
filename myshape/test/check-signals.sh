@@ -10,6 +10,8 @@
 #   - no line may use the pattern-based signal commands (p-, -all);
 #   - the only signal command is the one line in signal-lib.sh's guarded
 #     helper, which signals only a pid its signal-check accepted.
+# It also runs helpers.sh's exit cleanup, tb_stop_boards, with an empty, a
+# relative and a bare "/" TMP_ROOT, and requires that it ran no command at all.
 # Comment lines are not checked. The other board stages still send signals of
 # their own and are not checked here.
 #
@@ -18,7 +20,7 @@ set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$TEST_DIR/../.." && pwd)"
-CHECKED=("$ROOT_DIR/fm-board/test" "$TEST_DIR/signal-lib.sh" "$TEST_DIR/standalone-lib.sh"
+CHECKED=("$ROOT_DIR/fm-board/test" "$TEST_DIR/signal-lib.sh" "$TEST_DIR/standalone-lib.sh" "$TEST_DIR/helpers.sh"
   "$TEST_DIR"/stage-7-*.sh "$TEST_DIR/stage-4-writes.sh" "$TEST_DIR/stub-aggregator")
 signal='kill'
 ancestor='PPID|ps -o ppid'
@@ -53,6 +55,26 @@ $others
 "
 [ "$allowed" -eq 1 ] || problems="${problems}the guarded helper's one signal line was found $allowed times in $helper_file, not once
 "
+# tb_stop_boards with no usable scratch root must run nothing: every command it
+# could reach is a stub that records being run.
+stubs=$(mktemp -d "${TMPDIR:-/tmp}/check-signals.XXXXXX")
+for name in pgrep pkill killall node ps sed sleep; do
+  printf '#!/bin/sh\nprintf "%%s %%s\\n" %s "$*" >> %s/ran\n' "$name" "$stubs" > "$stubs/$name"
+  chmod +x "$stubs/$name"
+done
+for scratch in "" "relative/root" "/"; do
+  # shellcheck source=myshape/test/helpers.sh
+  (PATH="$stubs:$PATH" ROOT=$ROOT_DIR TMP_ROOT=$scratch && . "$TEST_DIR/helpers.sh" && tb_stop_boards) ||
+    problems="${problems}tb_stop_boards failed with TMP_ROOT '$scratch'
+"
+done
+if [ -s "$stubs/ran" ]; then
+  problems="${problems}tb_stop_boards ran commands without an absolute scratch root:
+$(cat "$stubs/ran")
+"
+fi
+rm -r "$stubs"
+
 if [ -n "$problems" ]; then
   printf 'not ok - signal check:\n%s' "$problems" >&2
   exit 1

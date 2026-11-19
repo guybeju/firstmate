@@ -14,6 +14,7 @@ if [ "$#" -eq 0 ]; then
   set -- 1 2 3 4 5 7
 fi
 
+"${BASH:-bash}" "$TEST_DIR/check-signals.sh"
 ran=0
 for stage in "$@"; do
   case "$stage" in
