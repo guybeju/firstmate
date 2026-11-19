@@ -1,0 +1,145 @@
+name: Carry board tests
+
+# The board's own test suites on pull requests to the fork's carry branch.
+# Advisory: this check is not in carry's rule set, so it never blocks a merge,
+# and a pull request whose files all fall outside `paths:` reports nothing.
+#
+# The suites print `skip:` and still pass when a tool is missing. This job
+# installs every tool they use, so any skip fails the job and is listed as
+# NOT RUN in the job summary; it never passes having checked nothing.
+#
+# `paths:` holds every file the suites read or run for real. That includes
+# all of bin/, because the tests link the whole of bin/ into their scratch
+# code roots, trip a wire named after every bin/ script, and run the real
+# fm-session-start.sh and fm-fleet-snapshot.sh, whose sources reach most of it.
+#
+# The fork's Actions settings allow only actions pinned to a full commit SHA,
+# so every `uses:` here carries one, with its release tag in the comment.
+on:
+  pull_request:
+    branches: [carry]
+    paths:
+      - 'myshape/**'
+      - 'fm-board/**'
+      - 'dispatch-plan/**'
+      - 'bin/**'
+      - 'tests/lib.sh'
+      - 'FORK-SETUP.markdown'
+      - 'README.md'
+      - 'docs/**'
+      - '.agents/skills/**'
+      - 'ci-tools/board-tests/**'
+      - '.github/workflows/carry-lint.yml'
+      - '.github/workflows/carry-board-tests.yml'
+
+# Read the repository and nothing else.
+permissions:
+  contents: read
+
+# A new push to the same pull request cancels the older run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    # Explicit bash adds -o pipefail, so `stage | tee log` fails with the stage.
+    shell: bash
+
+jobs:
+  board-tests:
+    name: Board tests (advisory)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          persist-credentials: false
+          # stage-7-upgrade.sh and stage-8-migrate.sh read an older commit.
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install pnpm and tasks-axi from the CI lockfile
+        # ci-tools/board-tests locks both tools for this job only; myshape/
+        # declares no pnpm version. No package script runs.
+        run: |
+          npm ci --ignore-scripts --prefix ci-tools/board-tests
+          echo "$GITHUB_WORKSPACE/ci-tools/board-tests/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Show tools
+        run: |
+          {
+            echo '## Tools'
+            echo
+            echo '| Tool | Path | Version |'
+            echo '| --- | --- | --- |'
+          } >> "$GITHUB_STEP_SUMMARY"
+          for tool in bash git jq curl ps sha256sum ss pgrep node npm pnpm tasks-axi firefox; do
+            path=$(command -v "$tool" || echo 'missing')
+            case "$tool" in
+              ps|ss|pgrep) version=$("$tool" -V 2>&1 | head -n 1 || true) ;;
+              *) version=$("$tool" --version 2>&1 | head -n 1 || true) ;;
+            esac
+            echo "$tool: $path: $version"
+            echo "| $tool | $path | $version |" >> "$GITHUB_STEP_SUMMARY"
+          done
+      - name: pnpm install --frozen-lockfile
+        working-directory: myshape
+        run: pnpm install --frozen-lockfile
+      - name: Run the stages
+        # Every stage runs even after one fails, so one run shows them all. Each
+        # logs to $RUNNER_TEMP/stages/<n>.log; its result and duration go to the
+        # summary. Any `skip:` line in a log is a NOT RUN line and fails the job.
+        run: |
+          stages=(
+            'bash myshape/test/check-dist.sh'
+            'pnpm --dir myshape test'
+            'pnpm --dir myshape run typecheck'
+            'pnpm --dir myshape run lint'
+            'pnpm --dir myshape run format:check'
+            'dispatch-plan/test/run.sh'
+            'fm-board/test/run.sh'
+            'myshape/test/run.sh'
+          )
+          logs=$RUNNER_TEMP/stages
+          mkdir -p "$logs"
+          {
+            echo
+            echo '## Stages'
+            echo
+            echo '| Stage | Result | Seconds |'
+            echo '| --- | --- | --- |'
+          } >> "$GITHUB_STEP_SUMMARY"
+          failed=0
+          not_run=()
+          for i in "${!stages[@]}"; do
+            stage=${stages[$i]}
+            read -ra command <<< "$stage"
+            echo "::group::$stage"
+            start=$SECONDS
+            rc=0
+            "${command[@]}" 2>&1 | tee "$logs/$i.log" || rc=$?
+            echo "::endgroup::"
+            result=passed
+            if [ "$rc" -ne 0 ]; then
+              result="failed (exit $rc)"
+              failed=1
+              echo "::error::$stage failed with exit $rc"
+            fi
+            echo "| \`$stage\` | $result | $((SECONDS - start)) |" >> "$GITHUB_STEP_SUMMARY"
+            while IFS= read -r line; do
+              not_run+=("NOT RUN: $stage: $line")
+            done < <(grep -E '^(ok - )?skip:' "$logs/$i.log" || true)
+          done
+          echo >> "$GITHUB_STEP_SUMMARY"
+          if [ "${#not_run[@]}" -eq 0 ]; then
+            echo 'Every stage ran; no test skipped.' | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            failed=1
+            for line in "${not_run[@]}"; do
+              echo "::error::$line"
+              echo "- $line" >> "$GITHUB_STEP_SUMMARY"
+            done
+          fi
+          exit "$failed"
