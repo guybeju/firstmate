@@ -59,9 +59,13 @@
 ## 之後怎麼更新
 
 - **看板有新版**：合併進 `carry` 並推上 fork，然後在主 home 跑 `/updatefirstmate`。下一個議題指令會發現服務的程式版本不同，自動換掉舊服務。
-- **上游有新版**：由 fleet 把上游的 `main` 合併進 `carry`（2026-11-17 起；原本寫的是看板開發用的 clone）。一定是真的 merge，不 squash、不 rebase：`carry` 分歧的話主 home 的更新會被跳過。開發用的 clone 沒有上游的 remote，合併時用網址直接 fetch：`git fetch https://github.com/kunchenguid/firstmate.git main && git merge FETCH_HEAD`。合併後跑一次看板與 first mate 這一側的全部驗收（`myshape/test/run.sh`、`fm-board/test/run.sh`、`dispatch-plan/test/run.sh`；特別是 `bin/fm-doc-audience-check.sh` 與 `bin/fm-test-run.sh --check-coverage`，上游可能改了它們的範圍），再推上 fork、跑 `/updatefirstmate`。
+- **上游有新版**：由 fleet 把上游的 `main` 合併進 `carry`（2026-11-17 起；原本寫的是看板開發用的 clone）。
+  合併做在一個分支上：從 fork 的 `carry` 開分支，開發用的 clone 沒有上游的 remote，用網址直接 fetch 再合併（`git fetch https://github.com/kunchenguid/firstmate.git main && git merge FETCH_HEAD`），推這個分支，開一個 base 是 `carry` 的 PR，用「Create a merge commit」合併。
+  不 squash、不 rebase，也不直接推到 `carry`：`carry` 的規則集 `carry-required-lint` 要求 `Lint 1` 與 `Lint 2` 兩個檢查通過、不能強推、不能刪除，略過名單是空的，所以沒通過這兩個檢查的 commit 推不上 `carry`。
+  原因：fork 平常的 PR 是 squash 合併的；上游的那個 PR 要是也 squash，`carry` 就不再帶著上游的歷史，下一次合併上游又會在同樣的地方衝突，各 home 也沒辦法快轉。
+  合併前跑一次看板與 first mate 這一側的全部驗收（`myshape/test/run.sh`、`fm-board/test/run.sh`、`dispatch-plan/test/run.sh`；特別是 `bin/fm-doc-audience-check.sh` 與 `bin/fm-test-run.sh --check-coverage`，上游可能改了它們的範圍），合併後跑 `/updatefirstmate`。
 - **看板改名成 myshape 的那一次**（C57）：更新到改名的那一版之後，在同一次接著跑 `bin/fm-board.sh migrate-myshape`；退回改名前的程式之前先跑 `bin/fm-board.sh migrate-myshape --undo`。步驟與確認在 [FORK-SETUP](../../FORK-SETUP.markdown) 第 7 節。
-- **退回較舊的版本**：`data/topics.json` 的 `history`、`todos`，以及 `history` 每一筆裡的 `reason` 與 `by`，都是後來才加的欄位，舊版存檔時不會寫回。以 `history` 為例：沒有這個欄位的舊版程式讀得懂這個檔，但它下一次存檔時不會寫回 `history`，來歷紀錄就沒了（議題本身與 `merged` 表不受影響）。要退版又想留著紀錄，先備份這個檔。
+- **退回較舊的版本**：`data/topics.json` 的 `history`、`todos`，以及 `history` 每一筆裡的 `reason` 與 `by`，都是後來才加的欄位，舊版存檔時不會寫回。退回看板自己存要你動手的項目之前的版本時，看板上的項目不會顯示，只剩 backlog 裡還開著的舊 hold；`data/myshape/todos.json` 不受影響，回到新版時項目又會出現。以 `history` 為例：沒有這個欄位的舊版程式讀得懂這個檔，但它下一次存檔時不會寫回 `history`，來歷紀錄就沒了（議題本身與 `merged` 表不受影響）。要退版又想留著紀錄，先備份這個檔。
   退回 C52 之前的版本時，檔案照樣讀得懂（`status` 一律是 `confirmed`），議題都還在佇列裡；那一版又會有 `propose` 與提議中的狀態，規則也要跟著退回 v6。
 - **規則範本有變**：更新後 `bin/fm-board.sh rules` 會顯示「和範本不同」，由使用者再跑一次 `bin/fm-board.sh install-rules`。
 - **之後新增的 secondmate**：遠端的 code root 是使用者在那台機器上手動 clone 的。clone 完就做第 2 步，再照上游的流程佈建 home。不把 `origin` 改指向 fork。
@@ -69,6 +73,8 @@
 ## 已知限制
 
 - **退回上游沒有定**。home 一旦在 `carry` 上，就不是上游的祖先；拿掉 `self-update-source` 之後更新會中止，要手動處理。
-- 上游的 CI 只在 `main` 的 push 與 base 是 `main` 的 PR 上跑（`.github/workflows/ci.yml:3-10`、`no-mistakes-required.yml:4-8`）。`carry` 上沒有任何自動檢查，全靠各段驗收裡列的本機指令。
+- 上游的 CI 只在 `main` 的 push 與 base 是 `main` 的 PR 上跑（`.github/workflows/ci.yml:3-10`、`no-mistakes-required.yml:4-8`）。
+  `carry` 有 fork 自己的 lint 檢查 `.github/workflows/carry-lint.yml`（推到 `carry` 與 base 是 `carry` 的 PR 時跑 `bin/fm-lint.sh` 完整的兩個 partition），它的 `Lint 1`、`Lint 2` 是規則集要求的檢查，見上一節；改到看板的 PR 另有只供參考的看板測試，在 [FORK-SETUP](../../FORK-SETUP.markdown) 第 7 節。
+  上游的測試套件不在 `carry` 上自動跑，看板以外的部分仍靠各段驗收裡列的本機指令。
 - 轉交給 secondmate 之後才改順序、拖進待辦或封存：同機的 secondmate 下一次跑 `order` 就照新的排；遠端的要等主 home 把佇列副本送到，只有主 home 有 session 時才送，最多約 5 分鐘（[dispatch-plan](../../dispatch-plan/spec/dispatch-plan.markdown) 第 4、5 節）。
 - 議題進出待辦之後，要等 first mate 下一次跑 `order` 才會同步 hold；中間這段，新移進待辦的議題底下還沒 hold 的項目可能被派出去。

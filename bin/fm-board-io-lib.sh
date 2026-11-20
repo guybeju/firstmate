@@ -155,7 +155,7 @@ fmb_adopt() {
       args+=("$arg")
       continue
     fi
-    if "$TOPIC" todo add "${args[@]}" </dev/null >/dev/null; then
+    if "$SCRIPT_DIR/myshape.sh" todo add "${args[@]}" </dev/null >/dev/null; then
       added=$((added + 1))
     else
       printf '%s\n' "adopt：${args[0]} 沒有放上看板" >&2
@@ -165,7 +165,7 @@ fmb_adopt() {
   done < <(fmb_adopt_args "$items" <<< "$report")
   while IFS= read -r arg; do open+=("$arg"); done < <(jq -r '.legacy_todos[].id' <<< "$report")
   if [ "$pending" -gt 0 ]; then
-    "$TOPIC" todo adopt-done ${open[@]+"${open[@]}"} </dev/null >/dev/null ||
+    "$SCRIPT_DIR/myshape.sh" todo adopt-done ${open[@]+"${open[@]}"} </dev/null >/dev/null ||
       { printf '%s\n' "adopt：adopt-done 沒有完成" >&2; failed=1; }
   fi
   printf '%s\n' "ok adopt 放上 ${added} 個舊項目，還開著的舊 hold ${#open[@]} 個"

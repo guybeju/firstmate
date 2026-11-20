@@ -16,7 +16,9 @@
 | --- | --- | --- |
 | `bash`（3.2 以上）、`git`、`jq`、`curl` | 全部 | 少了 `jq` 的腳本印 `skip:` 後結束，算通過 |
 | `node` 22 以上 | 第二段起 | 那些腳本印 `skip:` 後結束 |
-| `pnpm` | 單元測試、型別、lint、格式、重編 `dist/` | 只影響這一列的指令 |
+| `pnpm` | 單元測試、型別、lint、格式、重編 `dist/`，以及 `check-dist.sh` 要的 TypeScript | 只影響這一列的指令；`check-dist.sh` 沒有它時印 `skip:`、什麼都沒比就算通過，所以先跑下面的 `pnpm install` |
+| `shellcheck` | 下面兩行 `shellcheck -x` | 改用 `bash bin/fm-lint.sh <檔>`：它要上游釘住的版本，缺了會說用 `bin/fm-install-shellcheck.sh <目錄>` 裝 |
+| `trash` | 手動試完丟掉暫時的 home（下一小節） | 確認那個路徑是 `mktemp` 給的暫時目錄之後，用檔案管理員或 `rm -r "$H"` 刪掉 |
 | `firefox`（在 `PATH` 上） | `stage-5-page.sh`，用真的瀏覽器走一遍頁面 | 印 `skip: firefox not found` 後結束 |
 | `curl`、`ps`、`sha256sum` | 第七段：看板從只有它自己的檔的副本跑，另一邊是 `myshape/test/stub-aggregator/` 的替身 aggregator | 少了 `jq`、`node`、`curl`、`git`（`stage-7-aggregator.sh` 另加 `sha256sum`）時印 `skip:` 後結束 |
 | `tasks-axi` | `stage-4-writes.sh` 裡對真的 hold 工具的那一個測試 | 那一個測試印 `ok - skip: tasks-axi not found` |
@@ -24,14 +26,14 @@
 指令（工作目錄是 checkout 的根目錄）：
 
 ```
+(cd myshape && pnpm install --frozen-lockfile)   # 只有第一次；check-dist.sh、單元測試與型別都要它
 myshape/test/run.sh            # 第一到五段與第七段，十四個腳本
 myshape/test/run.sh 1          # 只跑第一段；可以列多個數字（第六段搬到 fm-board/test）
-fm-board/test/run.sh               # first mate 這一側：feed、deliver、tag、setup、--in-home、帶 task 的 split、規則、安裝說明
+fm-board/test/run.sh               # first mate 這一側：feed、deliver、adopt、tag、setup、--in-home、帶 task 的 split、規則、安裝說明
 dispatch-plan/test/run.sh          # first mate 這一側：order
 bash myshape/test/stage-4-writes.sh   # 單跑一個腳本
 bash myshape/test/check-dist.sh       # dist/ 是不是 src/ 編出來的
 bin/fm-doc-audience-check.sh              # 上游的檢查；新增的檔不能違反
-(cd myshape && pnpm install --frozen-lockfile)   # 只有第一次
 (cd myshape && pnpm test)             # vitest 單元測試
 (cd myshape && pnpm run typecheck && pnpm run lint && pnpm run format:check)
 (cd myshape && pnpm run build)        # 改了 src/ 之後重編 dist/，結果要一起提交
@@ -49,6 +51,9 @@ shellcheck -x bin/fm-board.sh bin/fm-board-lib.sh bin/fm-board-io-lib.sh bin/fm-
 
 ### 在暫時的 home 手動試
 
+在 checkout 的根目錄跑（`$PWD` 要是 checkout）。
+埠要是現在沒人在聽的：`ss -ltn "sport = :47931"` 只印標題列（macOS 是 `lsof -nP -iTCP:47931 -sTCP:LISTEN` 什麼都不印）就是空著的。
+
 ```
 H=$(mktemp -d /tmp/tb-try.XXXXXX)
 mkdir -p "$H/state" "$H/data" "$H/config" "$H/projects"
@@ -57,7 +62,8 @@ echo 47931 > "$H/config/myshape-port"          # 任何空著的埠，不要用 
 t() { FM_HOME="$H" FM_ROOT_OVERRIDE="$PWD" bin/myshape.sh "$@"; }
 t open                                            # 第一次 open 才有看板；印出帶 token 的網址
 t create "試試看" --goal "一行目標" --id try         # 一建立就排在「一般」最後
-t stop                                            # 用完要停，再把 $H 丟進垃圾桶
+t stop                                            # 用完要停
+trash "$H"                                        # 再把暫時的 home 丟進垃圾桶
 ```
 
 `FM_ROOT_OVERRIDE` 指向 checkout，`FM_HOME` 指向暫時的 home。真的 home 不要拿來試。
@@ -167,10 +173,10 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
 
 - 頁面上只能用拖的改順序：沒有鍵盤可用的移法，原生拖放在 Chrome 上也還沒驗（第 3 節）；這兩種情況改用 `bin/myshape.sh move`（C55）。
 - 看板認一個 home 的依據是 `state/myshape/token`：全新的 home 要先 `open` 才能 `create`；`open` 在 secondmate 的 home 也不會被拒絕，那裡會開出另一個看板（沒有規則叫 second mate 跑它）。
-- 「要你動手」只支援主 home 的項目；按了「做完了」之後使用者不能自己收回；first mate 不能自己關掉項目，要使用者按「好，撤下」（C46）。
+- 「要你動手」的項目存在看板上（contracts 第 3.6 節），每一步都在議題的更新留一筆紀錄；按了「做完了」之後使用者不能自己收回；aggregator 不再需要的項目由它直接撤下，原因記在議題的更新裡，只有看板存項目之前搬上來的舊項目要使用者按「好，撤下」。
 - `find` 平常每個議題只印最近八筆來歷（`--all` 印全部）；移動與改目標記在來歷裡，但只有 `--all` 才印，所以不會把合併、拆分擠掉；來歷不記建立議題；`split` 不帶 task 會建一個空議題，新名稱可以和來源相同。
 - `install-rules` 會換掉結束標記之後同一行的文字（有備份）；別處有一行以標記開頭時拒絕安裝（C37）。
-- 程式退回沒有 `history` 或 `todos` 欄位的舊版時，下一次存檔會丟掉這兩個欄位（見 [rollout](rollout.markdown)）。
+- 程式退回沒有 `history` 或 `todos` 欄位的舊版時，下一次存檔會丟掉這兩個欄位（見 [rollout](rollout.markdown)）；退回看板自己存項目之前的版本時，看板上的項目不會顯示（`data/myshape/todos.json` 留著，回到新版又會出現）。
 - first mate 自己直接做、沒有派 worker 的項目，在關掉之前會被 `order` 列在「可派」。
 - 經 secondmate 轉達的訊息，看板在送到 secondmate 時就記成已送達。secondmate 之後回報轉不出去，頁面不會改，使用者只會從 first mate 在聊天裡的回報知道。
 - 排隊中的項目沒有議題標記時用內文的 `topic:` 那一行（C51）；內文沒有那一行的轉交項目，在 secondmate 派工之前仍顯示成沒標議題。

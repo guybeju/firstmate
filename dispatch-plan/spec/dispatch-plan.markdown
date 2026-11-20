@@ -31,7 +31,7 @@
 - 遠端的 second mate 照最後收到的副本排；副本的時間與年紀的意思在第 4 節。
 - 排隊中的項目沒有議題標記時，用它內文裡單獨一行的 `topic: <議題 id>`（first mate 轉交時寫的那一行），和看板認那一行的規則相同；有標記時標記優先。
 - 合併過的 id 跟著 `merged` 走到現在的議題，封存的議題列為該 hold，副本也帶著這兩樣。
-- second mate 的 home 不印「等你驗證」：那一段讀的是主 home 的 `todos`，它的 task id 只在主 home 裡有意義。
+- 「等你驗證」列的是看板 `data/myshape/todos.json` 裡使用者按了做完了的項目（contracts 第 3.6 節），每個附它的議題與佇列；second mate 的 home 不印這一段：那些項目是主 home 看板上的。
 
 壞掉時放行，都 exit 0：
 

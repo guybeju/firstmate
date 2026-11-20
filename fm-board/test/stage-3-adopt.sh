@@ -157,7 +157,7 @@ test_a_second_pass_calls_the_board_only_when_needed() {
 test_closing_an_item_closes_its_hold() {
   local holds
   holds=$(grep -c 'cmd=fm-captain-hold.sh' "$TB_LOG" || true)
-  t todo done old-restart >/dev/null || fail "todo done failed"
+  t todo 'done' old-restart >/dev/null || fail "todo done failed"
   wait_for "the hold to be closed" grep -qF "$(printf 'stdin=old-restart\t做完了\tfirst mate 已驗證\tdone')" "$TB_LOG"
   # An adoption pass before the hold is really closed must not put the item back.
   view >/dev/null

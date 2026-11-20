@@ -220,6 +220,8 @@ bin/fm-board.sh install-rules
 - **上游有新版**：只有在 fork 的維護者把上游的 `main` 合併進 `carry` 之後才會到你手上，之後就和「fork 有新版」一樣（[rollout「之後怎麼更新」](myshape/spec/rollout.markdown)）。
   這台機器不用自己合併上游。
 - `carry` 的推送與 base 是 `carry` 的 PR 會跑 fork 自己的 lint 檢查 [`carry-lint.yml`](.github/workflows/carry-lint.yml)，內容是 `bin/fm-lint.sh` 完整的兩個 partition；它只在 fork 的 Actions 開著時才會跑。
+  它是 `carry` 的必要檢查：規則集 `carry-required-lint` 要求 `Lint 1` 與 `Lint 2` 通過才能進 `carry`，略過名單是空的。
+  改這個 workflow 的 job 名稱或它的 matrix 會改掉這兩個檢查的名字，所以那個修改合併之前，要先由 repository 的擁有者改好規則集。
   上游的 CI 只在 `main` 上跑，在 fork 上是停用的，所以上游的測試套件不會在 `carry` 上自動跑。
   base 是 `carry`、又改到看板或它用到的檔（列在那個檔的 `paths:`）的 PR，另外會跑看板的測試 [`carry-board-tests.yml`](.github/workflows/carry-board-tests.yml)：`myshape/test`、`fm-board/test`、`dispatch-plan/test`、`check-dist.sh`，以及單元測試、型別、lint、格式的檢查，在 GitHub 的機器上跑，不在這台機器上。
   這個檢查只供參考，不是合併的必要條件；沒改到那些檔的 PR 不會出現這個檢查。
@@ -229,6 +231,7 @@ bin/fm-board.sh install-rules
   退版之前先備份 `data/topics.json`，舊版存檔時會丟掉後來才加的欄位（rollout「之後怎麼更新」）。
   要退回看板改名成 myshape 之前的程式，先在每個跑過 `migrate-myshape` 的 home 跑 `bin/fm-board.sh migrate-myshape --undo`，再退程式：舊的程式只認舊的名字。
   要退回看板經 `bin/fm-board.sh feed` 與 `deliver` 讀寫之前的程式，先跑 `bin/myshape.sh stop`，把 `state/myshape/audit.jsonl` 移到別處，再退程式：舊的程式讀不懂這一版寫的寫入紀錄，頁面上的寫入歷史會從空的開始。
+  退回看板自己存「要你動手」的項目之前的程式時，看板上的項目不會顯示，只剩 backlog 裡還開著的舊 hold；`data/myshape/todos.json` 留著，回到新版時項目又會出現。
 
 ## 8. 有 second mate 時
 

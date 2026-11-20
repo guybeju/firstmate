@@ -315,7 +315,7 @@ test_fm_hands_on() {
     "a failed check must put the item back with its reason"
   post "$FMH" todos/claim '{"task":"vpn-login"}' >/dev/null
   wait_for "the second claim" is 2 received_count "$AGG_FM"
-  f todo done vpn-login >/dev/null || fail "todo done failed"
+  f todo 'done' vpn-login >/dev/null || fail "todo done failed"
   assert_equals "" "$(todo_view "$FMH" vpn-login)" "todo done must take the item off"
   wait_for "the close notice" is 3 received_count "$AGG_FM"
   assert_equals "todo.closed|aggregator|做完了" "$(received "$AGG_FM" '.[2] | "\(.event)|\(.by)|\(.words)"')" "todo done must send todo.closed by the aggregator"
@@ -669,7 +669,7 @@ test_plain_hands_on() {
     tb_op "$PH" "$op" '{"task":"a-item"}' >/dev/null 2>&1 && fail "the socket must refuse $op"
   done
   assert_equals '"open"' "$(jq -c '.items["a-item"].state' "$PH/data/myshape/todos.json")" "a refused press must change nothing"
-  p todo done a-item >/dev/null
+  p todo 'done' a-item >/dev/null
   two_step "$PH" todos/drop '{"task":"b-item"}' >/dev/null
   p todo obsolete c-item --reason "用不到" >/dev/null
   p todo obsolete d-item --reason "舊的" >/dev/null
