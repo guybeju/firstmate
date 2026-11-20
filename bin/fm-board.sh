@@ -23,10 +23,17 @@
 #        The last line is the task's current topic. In the main home the topic
 #        must be on the board and not archived (merged ids are followed), and
 #        --in-home tag runs the same check in the main home before it writes
-#        in the secondmate's. A secondmate home cannot read the topic file, so
-#        its own tag (and one run through fm-on.sh) checks only the id format;
-#        the board lists a task tagged with an id it does not know as 標記的議題不存在.
-#        Without jq the check is skipped with a warning.
+#        in the secondmate's. A secondmate home's own tag (and one run through
+#        fm-on.sh) checks the id against the main home's topic list where
+#        fm-dispatch-plan.sh order reads it (bin/fm-queue-source-lib.sh): the
+#        main home's data/topics.json when the main home is on this machine,
+#        otherwise the queue copy the main home pushed. Merged ids are followed
+#        and archived ids refused there too; a refusal from a copy names the
+#        copy's time and says to rerun after the next copy. When that list
+#        cannot be read - no file or copy, an unreadable one, a copy 60 minutes
+#        old or more, or no jq - the tag is written as given with one line on
+#        stderr saying why it was not checked. --from is not checked anywhere.
+#        Without jq the main home's check is skipped with a warning too.
 # setup  Creates this home's config/fleet-ledger flag. Safe to repeat.
 #
 # split makes a new confirmed topic out of part of <topic-id> with
@@ -125,6 +132,53 @@ current_topic_of() {
   printf '%s\n' "${last%% *}"
 }
 
+# mate_topic_unchecked <topic-id> <why>: tag as given, saying why it was not checked.
+mate_topic_unchecked() {
+  printf '%s\n' "沒有檢查 $1 是不是看板上的議題：${2}；照樣寫入標記。" >&2
+  printf '%s\n' "$1"
+  exit 0
+}
+
+# mate_topic_for_tag <topic-id>: in a secondmate home, the topic id a tag
+# should record, checked against the main home's topic list wherever order
+# reads it (bin/fm-queue-source-lib.sh). Exits 1 after listing the topics when
+# the id names no open one; tags as given, with one line on stderr, when that
+# list cannot be read. Runs in a subshell, so its libraries stay inside tag.
+mate_topic_for_tag() {
+  (
+    local wanted=$1 file origin rerun='' age resolved
+    # shellcheck source=bin/fm-queue-source-lib.sh
+    . "$SCRIPT_DIR/fm-queue-source-lib.sh"
+    command -v jq >/dev/null 2>&1 || mate_topic_unchecked "$wanted" "找不到 jq（安裝：$(tb_jq_install_hint)）"
+    fmq_mate_source "$FM_HOME" "$STATE/dispatch-plan/queues.json"
+    file=$FMQ_PATH
+    if [ "$FMQ_SOURCE" = root ]; then
+      file="$FMQ_PATH/data/topics.json"
+      [ -f "$file" ] || mate_topic_unchecked "$wanted" "主 home 還沒有議題檔（${file}）"
+      fmq_usable_topic_file "$file" || mate_topic_unchecked "$wanted" "讀不懂主 home 的 ${file}"
+      origin="主 home 的議題檔（${file}）"
+    else
+      [ -f "$file" ] || mate_topic_unchecked "$wanted" "這裡沒有主 home 推來的佇列副本（${file}）"
+      age=$(fmq_copy_age "$file") || mate_topic_unchecked "$wanted" "讀不懂主 home 推來的佇列副本（${file}）"
+      [ "${age#*$'\t'}" -lt "$FMQ_COPY_STALE_MINUTES" ] ||
+        mate_topic_unchecked "$wanted" "主 home 推來的佇列副本是 ${age#*$'\t'} 分鐘前的（${age%%$'\t'*}），太舊"
+      origin="主 home 推來的佇列副本（${age%%$'\t'*}）"
+      rerun="議題如果是在這份副本之後才建的，等主 home 送來下一份副本再跑一次同一個指令。"
+    fi
+    resolved=$(tb_resolve_live_topic "$file" "$wanted") || mate_topic_unchecked "$wanted" "讀不懂 ${file}"
+    if [ -n "$resolved" ]; then
+      printf '%s\n' "$resolved"
+      exit 0
+    fi
+    {
+      printf '%s\n' "$wanted 不是看板上還開著的議題（照${origin}），沒有寫入標記。可用的議題："
+      jq -r '.topics | to_entries[] | "  \(.key)\t\(.value.name)"' "$file" || true
+      [ -z "$rerun" ] || printf '%s\n' "$rerun"
+    } >&2
+    exit 1
+  )
+}
+
 cmd_tag() {
   local task topic source
   case "$#" in
@@ -133,7 +187,9 @@ cmd_tag() {
       topic=$2
       tb_valid_id "$task" || usage_error "task id 格式不對：$task"
       tb_valid_id "$topic" || usage_error "議題 id 格式不對：$topic"
-      if ! in_secondmate_home; then
+      if in_secondmate_home; then
+        topic=$(mate_topic_for_tag "$topic") || exit 1
+      else
         topic=$(tb_topic_for_tag "$TOPICS_FILE" "$topic")
       fi
       ;;

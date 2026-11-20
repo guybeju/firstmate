@@ -23,11 +23,13 @@ push_setup() {
   local name=$1 id script
   shift
   MAIN=$(tb_make_home "$name-main")
+  tb_free_port > "$MAIN/config/myshape-port"
   tb_write_topics "$MAIN"
   CODE="$TMP_ROOT/$name-code"
   STUB="$TMP_ROOT/$name-stub"
   mkdir -p "$CODE/bin" "$STUB/far"
-  for script in fm-dispatch-plan.sh fm-primary-scope-lib.sh myshape-lib.sh fm-secondmate-registry-lib.sh; do
+  for script in fm-dispatch-plan.sh fm-primary-scope-lib.sh myshape-lib.sh fm-secondmate-registry-lib.sh \
+    fm-queue-source-lib.sh; do
     cp "$ROOT/bin/$script" "$CODE/bin/"
   done
   {
@@ -35,7 +37,8 @@ push_setup() {
     printf -- '- sm1 - Local helper (home: %s; scope: sample work; projects: alpha; added 2026-11-01)\n' "$TMP_ROOT/$name-sm1"
     for id in "$@"; do
       printf -- '- %s - Remote helper (host: farbox; root: /srv/fm; home: /srv/fm-home; scope: remote work; projects: beta; added 2026-11-01)\n' "$id"
-      mkdir -p "$STUB/far/$id/state" "$STUB/far/$id/data"
+      mkdir -p "$STUB/far/$id/state" "$STUB/far/$id/data" "$STUB/far/$id/config"
+      tb_free_port > "$STUB/far/$id/config/myshape-port"
       printf '%s\n' "$id" > "$STUB/far/$id/.fm-secondmate-home"
     done
   } > "$MAIN/data/secondmates.md"
@@ -45,7 +48,8 @@ push_setup() {
 # The stub stands in for bin/fm-on.sh. It records each call in $STUB/calls and
 # behaves as $STUB/<id>.mode says: ok (the default), sleep <s> (then ok), down
 # (exit 255), silent (exit 0, no output), old (exit 2, no such subcommand) or
-# missing (exit 64, no such command on the far side).
+# missing (exit 64, no such command on the far side). fm-remote-file.sh, the
+# backlog handoff's transfer, is logged and then fails like a lost connection.
 write_stub() {
   cat > "$CODE/bin/fm-on.sh" <<EOF
 #!/usr/bin/env bash
@@ -54,6 +58,7 @@ set -u
 mate=\$2
 shift 2
 printf '%s %s\n' "\$mate" "\$*" >> "$STUB/calls"
+if [ "\$1" = fm-remote-file.sh ]; then cat > /dev/null; echo "ssh: lost" >&2; exit 255; fi
 mode=\$(cat "$STUB/\$mate.mode" 2>/dev/null || echo ok)
 case "\$mode" in
   sleep*) sleep "\${mode#sleep }" ;;
@@ -265,7 +270,104 @@ test_runs_only_where_there_is_something_to_send() {
   pass "queues-push refuses outside the main home and sends nothing without a topic file"
 }
 
+# push_code <args>...: queues-push's exit code in the scratch main home.
+push_code() {
+  local rc=0
+  push "$@" >/dev/null || rc=$?
+  printf '%s\n' "$rc"
+}
+
+test_to_sends_one_mate_its_copy_now() {
+  local out
+  push_setup to far1 far2
+  out=$(push --to far2) || fail "queues-push --to failed: $out"
+  assert_equals "far2 " "$(calls)" "--to must send to the one mate named and no other"
+  assert_equals "far2：已送出（$(jq -r .at "$MAIN/state/dispatch-plan/pushed/far2")）" "$out" "--to must print that mate's line only"
+  assert_absent "$STUB/far/far1/state/dispatch-plan/queues.json" "--to far2 must not reach far1"
+  reset_calls
+  expect_code 0 "$(push_code --to far2)" "--to with an unchanged copy"
+  assert_equals "" "$(calls)" "--to must not resend a copy the mate already has"
+  move_topic
+  push --to far2 >/dev/null
+  assert_equals "far2 " "$(calls)" "--to must send a changed copy at once"
+  assert_equals "t2 billing" "$(jq -r '.queues.high | join(" ")' "$STUB/far/far2/state/dispatch-plan/queues.json")" \
+    "the mate must hold the changed queues"
+  reset_calls
+  mode far1 down
+  expect_code 1 "$(push_code --to far1)" "--to whose transfer fails"
+  assert_present "$MAIN/state/dispatch-plan/pushed/far1.failing" "--to must keep the failure where queues-push keeps it"
+  mode far1 ok
+  reset_calls
+  push >/dev/null
+  assert_equals "far1 " "$(calls)" "the next full push must retry the mate --to could not reach"
+  mode far2 old
+  move_topic
+  jq '.queues.later = []' "$MAIN/data/topics.json" > "$MAIN/data/topics.json.new"
+  mv "$MAIN/data/topics.json.new" "$MAIN/data/topics.json"
+  push --to far2 >/dev/null
+  reset_calls
+  out=$(push --to far2)
+  assert_equals "" "$(calls)" "--to must not retry a far side that refused the copy within the hour"
+  assert_contains "$out" "far2：那邊還不能收副本" "--to must say why it waits"
+  pass "queues-push --to sends one remote mate the current copy now, with the same records as queues-push"
+}
+
+test_to_refuses_anything_but_a_remote_mate() {
+  local out rc
+  push_setup to-refuse far1
+  rc=0
+  out=$(tb_run "$MAIN" "$CODE/bin/fm-dispatch-plan.sh" queues-push --to sm1 2>&1) || rc=$?
+  expect_code 1 "$rc" "--to a local secondmate"
+  assert_contains "$out" "sm1 不是 data/secondmates.md 裡另一台機器上的 second mate" "the refusal must name the mate"
+  expect_code 1 "$(tb_code "$MAIN" "$CODE/bin/fm-dispatch-plan.sh" queues-push --to nobody)" "--to an unregistered id"
+  expect_code 2 "$(tb_code "$MAIN" "$CODE/bin/fm-dispatch-plan.sh" queues-push --to 'bad id')" "--to a malformed id"
+  expect_code 2 "$(tb_code "$MAIN" "$CODE/bin/fm-dispatch-plan.sh" queues-push --to)" "--to without an id"
+  expect_code 2 "$(tb_code "$MAIN" "$CODE/bin/fm-dispatch-plan.sh" queues-push --check --to far1)" "--to with --check"
+  expect_code 1 "$(tb_code "$STUB/far/far1" "$CODE/bin/fm-dispatch-plan.sh" queues-push --to far1)" "--to in a secondmate home"
+  assert_equals "" "$(calls)" "a refused --to must send nothing"
+  rm "$MAIN/data/topics.json"
+  out=$(push --to far1) || fail "--to failed without a topic file"
+  assert_equals "主 home 沒有可用的議題檔，沒有東西可以送。" "$out" "--to without a topic file must say so"
+  assert_equals "" "$(calls)" "--to without a topic file must send nothing"
+  assert_absent "$MAIN/state/dispatch-plan" "--to without a topic file must write nothing"
+  pass "queues-push --to refuses anything but a remote mate and sends nothing without a topic file"
+}
+
+# A routed item's "topic:" line must be in the mate's copy when it tags the
+# item at intake, so the backlog handoff to a remote mate pushes first. The
+# handoff runs from the scratch code root against an outbox already staged;
+# its transfer fails right after it starts, so nothing is delivered.
+test_handoff_pushes_the_copy_first() {
+  local script out rc
+  push_setup handoff far1 far2
+  for script in "$ROOT"/bin/*; do
+    [ -e "$CODE/bin/${script##*/}" ] || ln -s "$script" "$CODE/bin/"
+  done
+  mkdir -p "$MAIN/data/handoff"
+  printf '## In flight\n\n## Queued\n- [ ] r1 - Routed (repo: sample) (kind: ship)\n  topic: billing\n\n## Done\n' \
+    > "$MAIN/data/handoff/far1.outbox.md"
+  rc=0
+  out=$(FM_HOME="$MAIN" FM_ROOT_OVERRIDE="$CODE" "$CODE/bin/fm-backlog-handoff.sh" --resume-pending 2>&1) || rc=$?
+  expect_code 1 "$rc" "a handoff whose transfer fails"
+  assert_contains "$out" "outbox preserved" "the failed transfer must keep the outbox"
+  assert_equals "far1 fm-dispatch-plan.sh queues-in -" "$(head -n 1 "$STUB/calls")" "the handoff must push the copy first"
+  assert_contains "$(sed -n 2p "$STUB/calls")" "far1 fm-remote-file.sh put state/handoff/far1.outbox.md" \
+    "the handoff's own transfer must follow the push"
+  assert_equals "far1 far1 " "$(calls)" "the handoff must push to the mate it hands off to, and no other"
+  assert_equals billing "$(jq -r '.queues.high[0]' "$STUB/far/far1/state/dispatch-plan/queues.json")" \
+    "the mate must hold the main home's copy"
+  reset_calls
+  mode far1 down
+  move_topic
+  rc=0
+  out=$(FM_HOME="$MAIN" FM_ROOT_OVERRIDE="$CODE" "$CODE/bin/fm-backlog-handoff.sh" --resume-pending 2>&1) || rc=$?
+  assert_equals "far1 far1 " "$(calls)" "a push that fails must not stop the handoff's transfer"
+  assert_contains "$(sed -n 2p "$STUB/calls")" "fm-remote-file.sh put" "the transfer must still run after a failed push"
+  pass "a backlog handoff to a remote mate pushes the copy first and goes on when the push fails"
+}
+
 fm_test_run test_pushes_once_per_mate_whose_copy_differs test_resends_an_unchanged_copy_after_30_minutes \
   test_retries_a_failed_transfer_at_the_next_run test_does_not_hammer_a_mate_without_queues_in \
   test_stops_starting_transfers_after_18_seconds test_prints_the_behind_line_once_per_episode \
-  test_runs_only_where_there_is_something_to_send
+  test_runs_only_where_there_is_something_to_send test_to_sends_one_mate_its_copy_now \
+  test_to_refuses_anything_but_a_remote_mate test_handoff_pushes_the_copy_first

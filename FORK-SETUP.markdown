@@ -42,7 +42,7 @@ fork 的首頁顯示的是 `main`，和上游一樣，但首頁右側 About 的�
 這一頁的第 2、3、5、6 步曾在 Linux 上一個暫時的 home 裡照本頁走過一遍，用 curl 代替瀏覽器開看板；第 4 步（開 session、補齊工具到能派工）與第 8 節沒有從零走過。
 
 macOS 上 `bin/myshape*.sh` 與 `bin/fm-board.sh` 用的是 `PATH` 上第一個 `bash`（腳本第一行是 `#!/usr/bin/env bash`），細節在 handover 第 1 節。
-遠端的 second mate 會跑 `bin/fm-dispatch-plan.sh` 的 `order` 與 `queues-in`（第 8 節第 6 點）；它們照 bash 3.2 與 BSD 工具寫，但 `dispatch-plan/test` 還沒在 Mac 上跑過。
+遠端的 second mate 會跑 `bin/fm-dispatch-plan.sh` 的 `order` 與 `queues-in`，以及 `bin/fm-board.sh tag` 對佇列副本的檢查（第 8 節第 6 點）；它們照 bash 3.2 與 BSD 工具寫，但 `dispatch-plan/test` 與 `fm-board/test/stage-1-tag.sh` 還沒在 Mac 上跑過。
 
 ## 1. 需要的東西
 
@@ -252,8 +252,9 @@ second mate 本身怎麼佈建照上游：同機的見 [secondmate-provisioning 
 5. **最後才裝規則**（第 6 步）：共用的那段規則會叫每個 second mate 跑 `fm-board.sh` 與 `fm-dispatch-plan.sh`，所以要等上一步全過。
    裝完重開主 first mate 的 session；second mate 在主 home 下一次啟動檢查把共用檔傳過去之後重啟。
 6. **有遠端的 second mate 時，讓主 home 把佇列送過去**。
-   second mate 派工前跑的 `fm-dispatch-plan.sh order` 照看板的高、一般、待辦排；同機的直接讀主 home 的議題檔，這一步不用做。
+   second mate 派工前跑的 `fm-dispatch-plan.sh order` 照看板的高、一般、待辦排，它的 `bin/fm-board.sh tag` 也照同一份清單檢查議題 id；同機的直接讀主 home 的議題檔，這一步不用做。
    遠端的那台讀不到主 home 的檔，由主 home 的 watcher 每 5 分鐘跑一次固定的檢查，把一份佇列副本送過去（[dispatch-plan 的說明](dispatch-plan/spec/dispatch-plan.markdown)）。
+   主 home 在看板上把那台的 task 拖到某個議題、或把 backlog 項目交給那台之前，也會先把副本單獨送給那一台，所以剛建的議題不用等下一輪。
    在主 home 跑：
    ```
    printf '#!/usr/bin/env bash\nexport FM_HOME=%q\nexec %q queues-push --check\n' "$PWD" "$PWD/bin/fm-dispatch-plan.sh" > state/dispatch-queues.check.sh
@@ -268,6 +269,7 @@ second mate 本身怎麼佈建照上游：同機的見 [secondmate-provisioning 
    - `<id>：送不出去（…）`：括號裡是原因，例如連不到那台；下一輪會再試。
    - `<id>：那邊還不能收副本（…）`：那台的 code root 還沒更新到有 `queues-in` 的版本，回第 1 與第 4 點；之後每小時再試一次。
    - 只有主 home 有 session 在跑時 watcher 才會送；沒有 session 的時候，遠端照最後一份副本排，`order` 的第一行寫出副本多舊，超過一小時會多一句提醒。
+     副本超過一小時時，遠端的 `tag` 不再拿它檢查，照給的 id 寫入並說沒有檢查。
      同一台超過一小時沒送到時，主 first mate 會收到一則通知，同一段時間只有一則。
    - 不要了就跑 `bin/fm-check-unregister.sh dispatch-queues`。
 

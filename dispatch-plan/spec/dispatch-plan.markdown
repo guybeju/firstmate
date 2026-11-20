@@ -11,7 +11,7 @@
 | --- | --- | --- |
 | `order` | 每個 home | 列出排隊中的項目該派、該 hold、該解除的順序 |
 | `queues-in -` | 遠端的 second mate | 收下主 home 送來的佇列副本 |
-| `queues-push [--check]` | 主 home | 把佇列副本送到每個遠端的 second mate |
+| `queues-push [--check \| --to <id>]` | 主 home | 把佇列副本送到每個遠端的 second mate，或只送給 `<id>` |
 
 規則範本叫主 first mate（`captain.block.md.tmpl`）與每個 second mate（`captain-shared.block.md.tmpl`）在重新評估排隊中的工作前跑 `order`，照「可派」的順序派。
 看板通知某個議題可以派了的時候，主 first mate 也請手上有那個議題項目的 second mate 跑 `order`。
@@ -26,6 +26,7 @@
 
 - 「這台機器最上層的 home」由上游的 `fm_firstmate_root_home`（`bin/fm-wake-lib.sh`）沿著同機的 `.fm-secondmate-parent` 往上找；遇到遠端的上層就停在自己。
   `order` 在 subshell 裡載入那個函式庫，所以它的變數不會影響 `order` 本身。
+- 選哪個來源、副本能不能用、幾分鐘算舊，寫在 `bin/fm-queue-source-lib.sh`；second mate 的 `fm-board.sh tag` 用同一份，所以 `tag` 檢查議題 id 的清單就是 `order` 排的那一份（[adapter](../../fm-board/spec/adapter.markdown) 第 3.4 節）。
 - 同機的 second mate 每次都現讀主 home 的檔，所以議題在轉交之後才換佇列、拖進待辦或封存，下一次 `order` 就照新的排，不需要服務在跑。
 - 遠端的 second mate 照最後收到的副本排；副本的時間與年紀的意思在第 4 節。
 - 排隊中的項目沒有議題標記時，用它內文裡單獨一行的 `topic: <議題 id>`（first mate 轉交時寫的那一行），和看板認那一行的規則相同；有標記時標記優先。
@@ -86,6 +87,14 @@ watcher 每 5 分鐘（`CHECK_INTERVAL`）跑一次，最多 30 秒，丟掉 exi
 - 主 home 沒有 session 時 watcher 不跑，就沒有人送；遠端照最後一份副本排，並照第 4 節提醒。
   要在沒有 session 時也送，得另外加作業系統的排程，不在這個版本裡。
 
+`queues-push --to <id>` 只對那一個遠端的 second mate 做同樣的事，馬上做：同一份副本、同樣的 9 秒、同樣的 `pushed/` 紀錄，副本沒變或那邊一小時內拒收過就不送。
+主 home 在交給遠端 second mate 一件會用到議題 id 的事之前先跑它，不管結果都接著交：
+
+- 看板上把那個 second mate 的 task 拖到一個議題（`fm-board.sh deliver` 的 `tag`，[adapter](../../fm-board/spec/adapter.markdown) 第 3.2 節）；
+- 把 backlog 項目交給那個 second mate（上游的 `bin/fm-backlog-handoff.sh`，傳送之前），因為項目的 `topic:` 那一行是它接手時要標的議題。
+
+所以看板知道的議題，在那一台被要求用它標記之前就已經在它的副本裡；送不出去時，那台照它手上的舊副本檢查。
+
 ## 6. 每個 home 各自排，不跨 home
 
 - 每個 home 的 `order` 只排自己 backlog 裡的項目；兩個 home 各自照看板的順序派，不會比較誰的項目比較急。
@@ -101,7 +110,7 @@ watcher 每 5 分鐘（`CHECK_INTERVAL`）跑一次，最多 30 秒，丟掉 exi
 | `stage-1-order.sh` | 主 home 的各段、`topic:` 那一行、壞掉時放行 |
 | `stage-2-sources.sh` | 同機與遠端的 second mate 的來源、第一行、一小時的提醒、等你驗證不出現 |
 | `stage-3-queues-in.sh` | 收下、略過較舊的、拒收壞的與太大的、只在 second mate 的 home 跑 |
-| `stage-4-queues-push.sh` | 每台只送一次、沒變不送、30 分鐘再送、失敗下一輪再試、拒收的每小時一次、18 秒、通知只一則 |
+| `stage-4-queues-push.sh` | 每台只送一次、沒變不送、30 分鐘再送、失敗下一輪再試、拒收的每小時一次、18 秒、通知只一則、`--to` 只送一台、交給遠端之前先送 |
 
 `stage-4` 從一個暫時的 code root 跑，那裡的 `bin/fm-on.sh` 是假的：它把副本交給暫時的「遠端」home 裡真的 `queues-in`，或照設定失敗，所以測試不會連到任何別的機器。
 

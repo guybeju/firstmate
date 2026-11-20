@@ -197,7 +197,7 @@ test_falls_open_when_the_snapshot_fails() {
   root="$TMP_ROOT/order-root"
   mkdir -p "$root/bin"
   cp "$ROOT"/bin/fm-dispatch-plan.sh "$ROOT"/bin/myshape-lib.sh "$ROOT"/bin/fm-primary-scope-lib.sh \
-    "$ROOT"/bin/fm-secondmate-registry-lib.sh "$root/bin/"
+    "$ROOT"/bin/fm-secondmate-registry-lib.sh "$ROOT"/bin/fm-queue-source-lib.sh "$root/bin/"
   printf '#!/usr/bin/env bash\nexit 1\n' > "$root/bin/fm-fleet-snapshot.sh"
   chmod +x "$root/bin/fm-fleet-snapshot.sh"
   out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-dispatch-plan.sh" order) ||

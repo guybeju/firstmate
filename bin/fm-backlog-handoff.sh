@@ -53,6 +53,9 @@
 # Remote routes use an outbox handoff: one atomic local tasks-axi mv removes the
 # selected set from the dispatchable backlog into data/handoff/<id>.outbox.md,
 # then an idempotent confined transfer and fm-backlog-receive.sh deliver it.
+# Before the transfer, fm-dispatch-plan.sh queues-push --to <id> sends that
+# mate the board's queue copy, so the items' topic ids are known there; its
+# result never stops the handoff.
 # A present outbox remains the remote retry trigger only until backlog receipt
 # is confirmed, then it is released independently of the best-effort receiver
 # wake. The wake remains separately tracked by one pending-reply correlation and
@@ -689,6 +692,10 @@ remote_deliver_outbox() { # <secondmate-id> <outbox-path>
       return 1
     }
   remote_rel="state/handoff/$id.outbox.md"
+  # A routed item's "topic:" line must be in the mate's queue copy when it tags
+  # the item at intake; a push that fails does not stop the handoff.
+  FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-dispatch-plan.sh" queues-push --to "$id" \
+    </dev/null >/dev/null 2>&1 || true
   if ! "$SCRIPT_DIR/fm-on.sh" --stdin "$id" fm-remote-file.sh put "$remote_rel" 1048576 \
     "$bytes" "$hash" "$generation" <"$snapshot"; then
     rm -f -- "$snapshot"

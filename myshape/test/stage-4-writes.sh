@@ -757,7 +757,7 @@ test_audit_log() {
     "every state change must be exactly one audit line"
   grep "\"write_id\":\"$id\"" "$audit" | head -n 1 | jq -e '.sending.text == "稽核" and .sending.action.kind == "message"' >/dev/null ||
     fail "the first audit line must carry the full text and the action"
-  grep -v '^cmd=\(fm-inbox.sh\|fm-send.sh\|fm-captain-hold.sh\|fm-on.sh.fm-captain-hold.sh\|fm-on.sh.fm-board.sh\)	' "$TB_LOG" |
+  grep -v '^cmd=\(fm-inbox.sh\|fm-send.sh\|fm-captain-hold.sh\|fm-on.sh.fm-captain-hold.sh\|fm-on.sh.fm-board.sh\|fm-on.sh.fm-dispatch-plan.sh\)	' "$TB_LOG" |
     grep -q '^cmd=' && fail "the board ran a stand-in outside the allow-list"
   t stop >/dev/null
   MYSHAPE_TEST=0 t open >/dev/null
