@@ -28,6 +28,7 @@
 #                    fm-on.sh --stdin <id> fm-captain-hold.sh answers --source myshape
 #                    (remote); then the note tb-<id>-note
 #   tag              fm-board.sh tag, --in-home <id> tag, or fm-on.sh <id> fm-board.sh tag
+#                    after fm-dispatch-plan.sh queues-push --to <id> (remote; its result is ignored)
 # A repeat of the same id is safe for every kind but direct: notes are keyed
 # by request id, an identical answer is answered "closed:" again, and a tag
 # already in place is rewritten to the same topic.
@@ -271,6 +272,8 @@ fmb_deliver_tag() {
     if [ "$remote" = 0 ]; then
       fmb_run "" "$SELF" --in-home "$home" tag "$task" "$topic"
     else
+      # The mate checks the topic against its queue copy, so send it the board's current one first.
+      "$SCRIPT_DIR/fm-dispatch-plan.sh" queues-push --to "$home" </dev/null >/dev/null 2>&1 || true
       fmb_run "" "$SCRIPT_DIR/fm-on.sh" "$home" fm-board.sh tag "$task" "$topic"
     fi
   fi

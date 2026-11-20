@@ -4,7 +4,7 @@
 # Usage:
 #   fm-dispatch-plan.sh order
 #   fm-dispatch-plan.sh queues-in -
-#   fm-dispatch-plan.sh queues-push [--check]
+#   fm-dispatch-plan.sh queues-push [--check | --to <secondmate-id>]
 #
 # order  Prints which queued backlog items to dispatch, hold, and release, in
 #        the board's queue order, and under 等你驗證 the hands-on items the
@@ -28,7 +28,8 @@
 #            read live;
 #          - any other secondmate home: the queue copy the main home pushed,
 #            state/dispatch-plan/queues.json in the top home on this machine.
-#        In a secondmate home the first line names the source: the file read,
+#        The choice is bin/fm-queue-source-lib.sh's, which fm-board.sh tag uses
+#        too. In a secondmate home the first line names the source: the file read,
 #        or the copy's time and age, with a warning when the copy is 60
 #        minutes old or more (it is still ranked by); or why there is none, and
 #        then the backlog is listed in its own order. 等你驗證 is never listed
@@ -64,6 +65,12 @@
 #        when it never had one; pushed/<id>.warned keeps that to once until the
 #        next delivery. It always exits 0, since the watcher drops exit codes
 #        and stderr.
+#        --to <secondmate-id> does the same for that one remote mate only,
+#        right away; the main home runs it before it delivers a page tag or a
+#        backlog handoff to that mate, so a topic the board knows is in the
+#        mate's copy before the mate is asked to tag with it. Those callers go
+#        on with the delivery whatever it returns.
+#        Without a usable data/topics.json it sends nothing and exits 0.
 #
 # Every subcommand needs jq. order also reads this home's data/<task-id>/topic
 # tag files and the backlog through fm-fleet-snapshot.sh.
@@ -87,8 +94,6 @@ OWN_HOLD_PREFIX='看板佇列：'
 # until bin/fm-board.sh migrate-myshape has rewritten it.
 OLD_HOLD_PREFIX='topic-board：'
 TODO_MARKER='動手：'
-# A copy this many minutes old or more is still ranked by, with a warning.
-COPY_STALE_MINUTES=60
 COPY_MAX_BYTES=262144
 # queues-push sends an unchanged copy again once its last delivery is this old,
 # so the age the far side prints means "when the main home last reached it".
@@ -108,6 +113,8 @@ PUSHED_DIR="$PLAN_STATE/pushed"
 . "$SCRIPT_DIR/myshape-lib.sh"
 # shellcheck source=bin/fm-secondmate-registry-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
+# shellcheck source=bin/fm-queue-source-lib.sh
+. "$SCRIPT_DIR/fm-queue-source-lib.sh"
 
 usage() {
   sed -n '2,/^set -euo pipefail$/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
@@ -150,44 +157,18 @@ order_tags() {
   done
 }
 
-# The jq definition of a usable queue copy, shared by order and queues-in.
-COPY_VALID='def valid_copy:
-  type == "object"
-  and .schema == "fm-dispatch-queues.v1"
-  and (.at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
-  and ((.at | try fromdateiso8601 catch null) != null)
-  and (.queues | type == "object")
-  and ([.queues.high, .queues.normal, .queues.later] | all(type == "array" and all(.[]; type == "string")))
-  and (.topics | type == "object" and all(.[]; type == "object" and (.name | type == "string")))
-  and (.merged | type == "object" and all(.[]; type == "string"))
-  and (.archived | type == "object" and all(.[]; type == "object" and (.name | type == "string")));'
-
-# usable_topic_file <file>: whether <file> is a topic file order can rank by.
-usable_topic_file() {
-  jq -e '(.queues | type == "object") and (.topics | type == "object")' "$1" >/dev/null 2>&1
-}
-
-# root_home: this machine's top home above FM_HOME, through upstream's own
-# walk, loaded in a subshell so none of its globals reach this script.
-root_home() {
-  (
-    # shellcheck source=bin/fm-wake-lib.sh
-    . "$SCRIPT_DIR/fm-wake-lib.sh" >/dev/null 2>&1 && fm_firstmate_root_home "$FM_HOME"
-  ) 2>/dev/null
-}
-
 # order_source: choose where the queues come from. Sets ORDER_TOPICS and
 # ORDER_ARCHIVE to the files to rank by (/dev/null for none), and ORDER_NOTE to
 # the line naming the source or why there is none.
 order_source() {
-  local own root copy age
+  local copy age
   ORDER_TOPICS=/dev/null
   ORDER_ARCHIVE=/dev/null
   ORDER_NOTE=''
   if ! in_secondmate_home; then
     if [ ! -f "$TOPICS_FILE" ]; then
       ORDER_NOTE='還沒有議題檔；照 backlog 原本的順序列出。'
-    elif ! usable_topic_file "$TOPICS_FILE"; then
+    elif ! fmq_usable_topic_file "$TOPICS_FILE"; then
       ORDER_NOTE="讀不懂 ${TOPICS_FILE}；照 backlog 原本的順序列出。"
     else
       ORDER_TOPICS=$TOPICS_FILE
@@ -197,23 +178,20 @@ order_source() {
     fi
     return 0
   fi
-  # shellcheck disable=SC2031 # only root_home's subshell reassigns FM_HOME, when it loads upstream's library.
-  own=$(cd "$FM_HOME" && pwd -P)
-  root=$(root_home) || root=$own
-  if [ "$root" != "$own" ] && ! fm_root_is_secondmate_home "$root"; then
-    order_source_root "$root"
+  fmq_mate_source "$FM_HOME" "$COPY_FILE"
+  if [ "$FMQ_SOURCE" = root ]; then
+    order_source_root "$FMQ_PATH"
     return 0
   fi
-  copy=$COPY_FILE
-  [ "$root" = "$own" ] || copy="$root/state/dispatch-plan/queues.json"
+  copy=$FMQ_PATH
   if [ ! -f "$copy" ]; then
     ORDER_NOTE='這裡沒有主 home 推來的佇列副本；照 backlog 原本的順序列出。'
-  elif ! age=$(jq -r "$COPY_VALID"' if valid_copy then "\(.at)\t\([((now - (.at | fromdateiso8601)) / 60 | floor), 0] | max)" else error("invalid") end' "$copy" 2>/dev/null); then
+  elif ! age=$(fmq_copy_age "$copy"); then
     ORDER_NOTE="讀不懂主 home 推來的佇列副本（${copy}）；照 backlog 原本的順序列出。"
   else
     ORDER_TOPICS=$copy
     ORDER_NOTE="照主 home 推來的佇列副本（${age%%$'\t'*}，${age#*$'\t'} 分鐘前）。"
-    if [ "${age#*$'\t'}" -ge "$COPY_STALE_MINUTES" ]; then
+    if [ "${age#*$'\t'}" -ge "$FMQ_COPY_STALE_MINUTES" ]; then
       ORDER_NOTE="${ORDER_NOTE}副本超過一小時沒更新：主 home 可能沒有 first mate 在跑，或連不到這台；仍照副本排。"
     fi
   fi
@@ -224,7 +202,7 @@ order_source_root() {
   local file="$1/data/topics.json" archive="$1/data/topics-archive.json"
   if [ ! -f "$file" ]; then
     ORDER_NOTE='還沒有議題檔；照 backlog 原本的順序列出。'
-  elif ! usable_topic_file "$file"; then
+  elif ! fmq_usable_topic_file "$file"; then
     ORDER_NOTE="讀不懂 ${file}；照 backlog 原本的順序列出。"
   else
     ORDER_TOPICS=$file
@@ -336,7 +314,7 @@ remote_mates() {
 # published topic files into <file>; returns 1 when there is no usable file.
 build_copy() {
   local archive=/dev/null
-  [ -f "$TOPICS_FILE" ] && usable_topic_file "$TOPICS_FILE" || return 1
+  [ -f "$TOPICS_FILE" ] && fmq_usable_topic_file "$TOPICS_FILE" || return 1
   if [ -f "$ARCHIVE_FILE" ] && jq -e '.topics | type == "object"' "$ARCHIVE_FILE" >/dev/null 2>&1; then
     archive=$ARCHIVE_FILE
   fi
@@ -469,7 +447,7 @@ warn_if_behind() {
     basis='照 backlog 原本的順序排'
   fi
   minutes=$(((PUSH_NOW - since) / 60))
-  [ "$minutes" -ge "$COPY_STALE_MINUTES" ] || return 0
+  [ "$minutes" -ge "$FMQ_COPY_STALE_MINUTES" ] || return 0
   [ "$PUSH_CHECK" = 1 ] && [ ! -e "$PUSHED_DIR/$mate.warned" ] || return 0
   rc=$(failing_field "$mate" 3) && reason=$(why "$rc") || reason='這一輪沒輪到'
   printf '%s\n' "看板佇列副本：${mate} 已經 ${minutes} 分鐘沒收到主 home 的副本（${reason}），它的 order ${basis}；跑 bin/fm-dispatch-plan.sh queues-push 看細節。"
@@ -516,35 +494,48 @@ mates_by_last_try() {
   done | sort -n -k1,1 | cut -d' ' -f2
 }
 
-# queues-push [--check]: send this home's queue copy to each remote mate.
+# queues-push [--check | --to <secondmate-id>]: send this home's queue copy to
+# each remote mate, or to the one named.
 cmd_queues_push() {
-  local mates mate start
-  case "$*" in
-    '') ;;
-    --check) PUSH_CHECK=1 ;;
-    *) usage_error "queues-push 只收 --check" ;;
+  local mates mate start target=''
+  case "$#:${1:-}" in
+    0:) ;;
+    1:--check) PUSH_CHECK=1 ;;
+    2:--to)
+      target=$2
+      tb_valid_id "$target" || usage_error "queues-push --to：secondmate id 格式不對：$target"
+      ;;
+    *) usage_error "queues-push 只收 --check 或 --to <secondmate-id>" ;;
   esac
   ! in_secondmate_home ||
     tb_die 1 "queues-push 只能在主 home 跑：secondmate home 收副本，不送。"
   require_jq queues-push
   mates=$(remote_mates)
-  if [ -z "$mates" ]; then
+  if [ -n "$target" ]; then
+    printf '%s\n' "$mates" | grep -qxF -- "$target" ||
+      tb_die 1 "queues-push --to：${target} 不是 data/secondmates.md 裡另一台機器上的 second mate；什麼都沒有送。"
+  elif [ -z "$mates" ]; then
     report '沒有遠端的 second mate；沒有要送的。'
+    return 0
+  fi
+  if [ ! -f "$TOPICS_FILE" ] || ! fmq_usable_topic_file "$TOPICS_FILE"; then
+    report '主 home 沒有可用的議題檔，沒有東西可以送。'
     return 0
   fi
   { mkdir -p "$PUSHED_DIR" && chmod 700 "$PLAN_STATE" "$PUSHED_DIR"; } ||
     tb_die 1 "queues-push：建不了 ${PUSHED_DIR}；什麼都沒有送。"
   PUSH_COPY=$(mktemp "$PUSHED_DIR/.copy.XXXXXX") || tb_die 1 "queues-push：在 ${PUSHED_DIR} 開不了暫存檔。"
   trap '[ -z "$PUSH_COPY" ] || rm -f "$PUSH_COPY"' EXIT
-  if ! build_copy "$PUSH_COPY"; then
-    report '主 home 沒有可用的議題檔，沒有東西可以送。'
-    return 0
-  fi
+  build_copy "$PUSH_COPY" || tb_die 1 "queues-push：做不出佇列副本；什麼都沒有送。"
   PUSH_NOW=$(date +%s)
   start=$SECONDS
-  for mate in $(mates_by_last_try); do
-    push_mate "$mate" "$start"
-  done
+  if [ -n "$target" ]; then
+    push_mate "$target" "$start"
+  else
+    for mate in $(mates_by_last_try); do
+      push_mate "$mate" "$start"
+    done
+  fi
   [ "$PUSH_CHECK" = 1 ] || [ "$PUSH_FAILED" = 0 ]
 }
 
@@ -568,10 +559,10 @@ cmd_queues_in() {
   size=$(wc -c < "$QUEUES_IN_TMP" | tr -d ' ')
   [ "$size" -le "$COPY_MAX_BYTES" ] ||
     tb_die 1 "queues-in：收到的副本超過 ${COPY_MAX_BYTES} 位元組；什麼都沒有寫。"
-  at=$(jq -rs "$COPY_VALID"' if length == 1 and (.[0] | valid_copy) then .[0].at else error("invalid") end' \
+  at=$(jq -rs "$FMQ_COPY_VALID"' if length == 1 and (.[0] | valid_copy) then .[0].at else error("invalid") end' \
     "$QUEUES_IN_TMP" 2>/dev/null) ||
     tb_die 1 "queues-in：收到的不是可用的佇列副本（fm-dispatch-queues.v1）；什麼都沒有寫。"
-  if kept_at=$(jq -r "$COPY_VALID"' if valid_copy then .at else error("invalid") end' "$COPY_FILE" 2>/dev/null) &&
+  if kept_at=$(jq -r "$FMQ_COPY_VALID"' if valid_copy then .at else error("invalid") end' "$COPY_FILE" 2>/dev/null) &&
     [[ "$at" < "$kept_at" ]]; then
     printf '%s\n' "ok queues 已有較新的副本（${kept_at}），這一份（${at}）略過"
     return 0

@@ -30,12 +30,20 @@ SM=$(tb_make_secondmate_home sm sm1)
 FAR=$(tb_make_secondmate_home remotes/far1 far1)
 tb_write_registry "$MAIN" "$SM"
 tb_write_topics "$MAIN"
+# sm1 is a local secondmate of MAIN, the way upstream seeds one, so its own tag
+# checks against MAIN's topic file. Every home gets its own free board port.
+printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' "$MAIN" > "$SM/.fm-secondmate-parent"
+for home in "$DECOY" "$MAIN" "$SM" "$FAR"; do
+  tb_free_port > "$home/config/myshape-port"
+done
 
 # fronts <code-root>: keep the exact stdin bytes of fm-inbox.sh,
 # fm-captain-hold.sh and fm-on.sh --stdin in $TB_RAW/<script> (fm-on.sh reads
 # no stdin without --stdin, as the real one does), log fm-on.sh's own argv,
 # and log every fm-board.sh run but feed and deliver, which then follows the
 # next "<exit code>\t<stderr>" step in $TB_PLAY/fm-board.sh or runs the real one.
+# fm-on.sh --stdin <id> fm-dispatch-plan.sh runs the real one in $TB_REMOTES/<id>,
+# or fails like a lost connection while $TB_PLAY/push-down exists.
 fronts() {
   local fake=$1
   cat > "$fake/bin/fm-inbox.sh" <<'SH'
@@ -61,6 +69,14 @@ SH
 set -u
 { printf 'cmd=fm-on.sh\targv='; printf '%s|' "$@"; printf '\thome=%s\n' "${FM_HOME:-}"; } >> "$TB_LOG"
 [ "${1:-}" = --stdin ] || exec "$(dirname "$0")/tb-fm-on.sh" "$@"
+if [ "${3:-}" = fm-dispatch-plan.sh ]; then
+  if [ -e "$TB_PLAY/push-down" ]; then
+    cat > /dev/null
+    echo "ssh: lost" >&2
+    exit 255
+  fi
+  exec env FM_HOME="$TB_REMOTES/$2" "$(dirname "$0")/fm-dispatch-plan.sh" "${@:4}"
+fi
 cat > "$TB_RAW/fm-on.sh"
 exec "$(dirname "$0")/tb-fm-on.sh" "$@" < "$TB_RAW/fm-on.sh"
 SH
@@ -334,7 +350,22 @@ test_answer_outcomes() {
   pass "answers results map to a note, handled_elsewhere, retry only for a remote 255, and failed"
 }
 
+# no_copies: forget every queue copy pushed to far1 and the main home's records of it.
+no_copies() {
+  rm -rf "$MAIN/state/dispatch-plan" "$FAR/state/dispatch-plan"
+}
+
+# far_copy <topic-id>...: give far1 a copy made a minute ago that knows only these topics.
+far_copy() {
+  mkdir -p "$FAR/state/dispatch-plan"
+  jq -nc --arg at "$(jq -nr '(now - 60) | strftime("%Y-%m-%dT%H:%M:%SZ")')" '$ARGS.positional as $ids | {
+    schema: "fm-dispatch-queues.v1", at: $at, queues: {high: [], normal: $ids, later: []},
+    topics: ($ids | map({key: ., value: {name: .}}) | from_entries), merged: {}, archived: {}}' \
+    --args "$@" > "$FAR/state/dispatch-plan/queues.json"
+}
+
 test_tag_runs_fm_board_tag() {
+  no_copies
   fresh
   assert_equals "$DELIVERED" "$(deliver "$(record tag)")" "a tag in main must be delivered"
   assert_equals "$(front_line fm-board.sh 'tag|ship-a|billing|' "$MAIN")" "$(cat "$TB_LOG")" \
@@ -347,9 +378,10 @@ test_tag_runs_fm_board_tag() {
   assert_equals billing "$(tail -n 1 "$SM/data/ship-a/topic" | cut -d' ' -f1)" "the tag must land in sm1's home"
   fresh
   assert_equals "$DELIVERED" "$(deliver "$(record tag '.home = "far1"')")" "a tag in far1 must be delivered"
-  assert_equals "$(front_line fm-on.sh 'far1|fm-board.sh|tag|ship-a|billing|' "$MAIN")"$'\n'"$(line fm-on.sh.fm-board.sh \
+  assert_equals "$(front_line fm-on.sh '--stdin|far1|fm-dispatch-plan.sh|queues-in|-|' "$MAIN")"$'\n'"$(front_line \
+    fm-on.sh 'far1|fm-board.sh|tag|ship-a|billing|' "$MAIN")"$'\n'"$(line fm-on.sh.fm-board.sh \
     'far1|tag|ship-a|billing|' "$MAIN")"$'\n'"$(front_line fm-board.sh 'tag|ship-a|billing|' "$FAR")" "$(cat "$TB_LOG")" \
-    "a tag in far1 must run fm-on.sh far1 fm-board.sh tag"
+    "a tag in far1 must send far1 the queue copy, then run fm-on.sh far1 fm-board.sh tag"
   assert_equals billing "$(tail -n 1 "$FAR/data/ship-a/topic" | cut -d' ' -f1)" "the tag must land in far1's home"
   pass "tag runs fm-board.sh tag in the right home"
 }
@@ -377,6 +409,41 @@ test_tag_outcomes() {
     "a tag in an unknown home must fail"
   assert_equals '' "$(cat "$TB_LOG")" "a refused tag must run nothing"
   pass "tag exit 0 is delivered, a remote 255 retry, anything else failed"
+}
+
+# The board made the drag, so the topic exists; a far side whose copy is behind
+# must still take it, because the main home sends the copy first.
+test_remote_tag_sends_the_copy_first() {
+  local out
+  no_copies
+  jq '.topics.fresh = {name: "剛建的", goal: "g", status: "confirmed"} | .queues.normal += ["fresh"]' \
+    "$MAIN/data/topics.json" > "$MAIN/data/topics.json.new"
+  mv "$MAIN/data/topics.json.new" "$MAIN/data/topics.json"
+  far_copy billing t2
+  fresh
+  assert_equals "$DELIVERED" "$(deliver "$(record tag '.home = "far1" | .task = "ship-f" | .topic = "fresh"')")" \
+    "a drag to a topic newer than far1's copy must be delivered"
+  assert_equals fresh "$(cut -d' ' -f1 "$FAR/data/ship-f/topic")" "the tag must land in far1's home"
+  assert_equals '"剛建的"' "$(jq -c '.topics.fresh.name' "$FAR/state/dispatch-plan/queues.json")" \
+    "far1 must now hold the main home's copy"
+  no_copies
+  far_copy billing t2
+  fresh
+  : > "$TB_PLAY/push-down"
+  assert_equals "$DELIVERED" "$(deliver "$(record tag '.home = "far1" | .task = "ship-g" | .topic = "billing"')")" \
+    "a tag must still be delivered when the copy cannot be sent"
+  assert_equals billing "$(cut -d' ' -f1 "$FAR/data/ship-g/topic")" "the tag must run against far1's older copy"
+  out=$(deliver "$(record tag '.home = "far1" | .task = "ship-h" | .topic = "fresh"')")
+  assert_contains "$out" '"outcome":"failed"' "with no copy sent, a topic newer than far1's copy is refused there"
+  assert_contains "$out" "等主 home 送來下一份副本再跑一次" "the refusal must say to rerun after the next copy"
+  assert_absent "$FAR/data/ship-h" "a refused tag must write nothing in far1"
+  no_copies
+  assert_equals "$DELIVERED" "$(deliver "$(record tag '.home = "far1" | .task = "ship-i" | .topic = "fresh"')")" \
+    "with no copy at all, far1 must tag as given"
+  rm -f "$TB_PLAY/push-down"
+  no_copies
+  tb_write_topics "$MAIN"
+  pass "a remote tag sends that mate the queue copy first, and goes on when it cannot"
 }
 
 test_malformed_records_fail() {
@@ -426,4 +493,4 @@ test_answer_with_the_real_hold_tool() {
 
 fm_test_run test_message_and_notice_become_notes test_note_outcomes test_direct_runs_fm_send \
   test_direct_outcomes test_answer_runs_the_hold_tool_then_a_note test_answer_outcomes \
-  test_tag_runs_fm_board_tag test_tag_outcomes test_malformed_records_fail test_answer_with_the_real_hold_tool
+  test_tag_runs_fm_board_tag test_tag_outcomes test_remote_tag_sends_the_copy_first test_malformed_records_fail test_answer_with_the_real_hold_tool
