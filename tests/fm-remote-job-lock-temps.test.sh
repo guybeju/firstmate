@@ -45,17 +45,17 @@ git -C "$FIXTURE_ROOT" commit -qm 'lock temporaries fixture'
 WORKER="$FIXTURE_ROOT/bin/fm-remote-job-worker.sh"
 
 # The fake ln acts only on the worker lock record named by FM_TEST_GATE_DEST,
-# whose publication runs in the worker's own shell, so its parent is the
-# worker. kill stops that worker hard inside the window, term delivers the
-# signal an update's restart sends, and hold keeps the worker alive inside the
-# window until the case releases it. The fake mv delivers term the same way
-# for start and command, which are published with mv.
-fm_fake_crash_injector "$FAKE_BIN"
+# whose publication runs in the worker's own shell. kill and term stop there at
+# crash point FM_TEST_GATE (see serve), where the case KILLs the worker inside
+# the window or sends it the TERM an update's restart sends; hold keeps the
+# worker alive inside the window until the case releases it. The fake mv stops
+# the same way for term on start and command, which are published with mv.
+fm_fake_crash_point "$FAKE_BIN"
 cat > "$FAKE_BIN/mv" <<'SH'
 #!/bin/bash
 last=${!#}
 if [ "$last" = "${FM_TEST_GATE_DEST:-}" ] && [ "$FM_TEST_GATE_MODE" = term ]; then
-  kill -TERM "$PPID"
+  fm-crash-point "${FM_TEST_GATE%/*}" "${FM_TEST_GATE##*/}"
   exit 1
 fi
 exec "$FM_TEST_REAL_MV" "$@"
@@ -66,12 +66,8 @@ cat > "$FAKE_BIN/ln" <<'SH'
 last=${!#}
 if [ "$last" = "${FM_TEST_GATE_DEST:-}" ]; then
   case "$FM_TEST_GATE_MODE" in
-    kill)
-      fm-crash-inject "$PPID"
-      exit 1
-      ;;
-    term)
-      kill -TERM "$PPID"
+    kill | term)
+      fm-crash-point "${FM_TEST_GATE%/*}" "${FM_TEST_GATE##*/}"
       exit 1
       ;;
     hold)
@@ -100,7 +96,8 @@ lock_temps_cleanup() {
 trap lock_temps_cleanup EXIT
 
 # Start one serving worker on <state>; with a gate mode the fakes are first on
-# PATH and act on publishing <record> (default pid). Sets SERVE_PID.
+# PATH and act on publishing <record> (default pid). Sets SERVE_PID. With kill
+# or term it returns once the worker has been sent that signal at the gate.
 serve() { # <state> <label> [kill|term|hold] [record]
   local state=$1 label=$2 mode=${3:-} record=${4:-pid}
   if [ -n "$mode" ]; then
@@ -116,6 +113,12 @@ serve() { # <state> <label> [kill|term|hold] [record]
   fi
   SERVE_PID=$!
   TRACKED_PIDS+=("$SERVE_PID")
+  case "$mode" in
+    kill | term)
+      fm_test_record_child "$SERVE_PID"
+      fm_test_crash_at "${state%/*}" "${state##*/}.gate" "$(printf '%s' "$mode" | tr '[:lower:]' '[:upper:]')" "$SERVE_PID"
+      ;;
+  esac
 }
 
 # 0 once <pid> owns the lock on <state> and has published readiness; 1 if it

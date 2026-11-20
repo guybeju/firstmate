@@ -265,25 +265,22 @@ SH
   chmod +x "$case_dir/fakebin/tasks-axi"
 }
 
+# The first `start` stops at crash point start, before or after the real start
+# runs, where the case sends TERM to the spawn it started (interrupted_spawn),
+# and then ends as a TERM would end it.
 interrupt_spawn_during_start() {  # <case-dir> <before|after>
   local case_dir=$1 timing=$2 real
   real=$(command -v tasks-axi)
+  fm_fake_crash_point "$case_dir/fakebin"
   cat > "$case_dir/fakebin/tasks-axi" <<SH
 #!/usr/bin/env bash
 if [ "\${1:-}" = start ] && [ ! -f "$case_dir/start-interrupted" ]; then
   : > "$case_dir/start-interrupted"
-  spawn_pid=\$(ps -o ppid= -p "\$PPID" | tr -d ' ')
-  case "\$spawn_pid" in ''|*[!0-9]*) exit 1 ;; esac
-  if [ "$timing" = before ]; then
-    kill -TERM "\$spawn_pid"
-    kill -TERM "\$\$"
-  fi
-  "$real" "\$@" || exit \$?
   if [ "$timing" = after ]; then
-    kill -TERM "\$spawn_pid"
-    kill -TERM "\$\$"
+    "$real" "\$@" || exit \$?
   fi
-  exit 0
+  fm-crash-point "$case_dir" start || exit 1
+  exit 143
 fi
 exec "$real" "\$@"
 SH
@@ -298,14 +295,13 @@ SH
 lie_start_then_interrupt() {  # <case-dir> <repair: works|fails>
   local case_dir=$1 repair=$2 real
   real=$(command -v tasks-axi)
+  fm_fake_crash_point "$case_dir/fakebin"
   cat > "$case_dir/fakebin/tasks-axi" <<SH
 #!/usr/bin/env bash
 if [ "\${1:-}" = start ]; then
   if [ ! -f "$case_dir/start-interrupted" ]; then
     : > "$case_dir/start-interrupted"
-    spawn_pid=\$(ps -o ppid= -p "\$PPID" | tr -d ' ')
-    case "\$spawn_pid" in ''|*[!0-9]*) exit 1 ;; esac
-    kill -TERM "\$spawn_pid"
+    fm-crash-point "$case_dir" start || exit 1
     exit 0
   fi
   if [ "$repair" = fails ]; then
@@ -326,14 +322,13 @@ SH
 hang_start_after_first() {  # <case-dir>
   local case_dir=$1 real
   real=$(command -v tasks-axi)
+  fm_fake_crash_point "$case_dir/fakebin"
   cat > "$case_dir/fakebin/tasks-axi" <<SH
 #!/usr/bin/env bash
 if [ "\${1:-}" = start ]; then
   if [ ! -f "$case_dir/start-interrupted" ]; then
     : > "$case_dir/start-interrupted"
-    spawn_pid=\$(ps -o ppid= -p "\$PPID" | tr -d ' ')
-    case "\$spawn_pid" in ''|*[!0-9]*) exit 1 ;; esac
-    kill -TERM "\$spawn_pid"
+    fm-crash-point "$case_dir" start || exit 1
     exit 0
   fi
   sleep 300
@@ -496,16 +491,17 @@ SH
   chmod +x "$case_dir/fakebin/tmux" "$case_dir/fakebin/treehouse"
 }
 
+# The first `treehouse return` stops at crash point treehouse-return, where the
+# case sends TERM to the teardown it started, and then ends as a TERM would.
 interrupt_teardown_during_treehouse_return() {  # <case-dir>
   local case_dir=$1
+  fm_fake_crash_point "$case_dir/fakebin"
   cat > "$case_dir/fakebin/treehouse" <<SH
 #!/usr/bin/env bash
 if [ "\${1:-}" = return ] && [ ! -f "$case_dir/teardown-interrupted" ]; then
   : > "$case_dir/teardown-interrupted"
-  teardown_pid=\$(ps -o ppid= -p "\$PPID" | tr -d ' ')
-  case "\$teardown_pid" in ''|*[!0-9]*) exit 1 ;; esac
-  kill -TERM "\$teardown_pid"
-  kill -TERM "\$\$"
+  fm-crash-point "$case_dir" treehouse-return || exit 1
+  exit 143
 fi
 exit 0
 SH
@@ -518,6 +514,7 @@ interrupt_kimi_readiness() {  # <case-dir>
   mkdir -p "$home/.kimi-code"
   printf '# test config\n' > "$home/.kimi-code/config.toml"
   fm_fake_exit0 "$case_dir/fakebin" kimi
+  fm_fake_crash_point "$case_dir/fakebin"
   cat > "$case_dir/fakebin/tmux" <<SH
 #!/usr/bin/env bash
 case "\$*" in
@@ -529,9 +526,7 @@ case "\${1:-}" in
   capture-pane)
     if [ ! -f "$case_dir/kimi-interrupted" ]; then
       : > "$case_dir/kimi-interrupted"
-      spawn_pid=\$(ps -o ppid= -p "\$PPID" | tr -d ' ')
-      case "\$spawn_pid" in ''|*[!0-9]*) exit 1 ;; esac
-      kill -TERM "\$spawn_pid"
+      fm-crash-point "$case_dir" capture-pane || exit 1
     fi
     printf 'shell starting\\n$ \\n'
     exit 0
@@ -619,18 +614,49 @@ write_task_meta() {  # <case-dir> <id> <kind> <mode> [extra-line...]
     "$@"
 }
 
-run_spawn() {  # <case-dir> <args...>
+# spawn_env <case-dir>: sets SPAWN_ENV to the environment a spawn runs under.
+spawn_env() {
   local case_dir=$1
-  shift
   # A claude spawn pre-registers workspace trust in the launching user's own
   # store (bin/fm-claude-trust.sh), so it runs against a throwaway HOME;
   # without it this suite would write the developer's real ~/.claude.json.
   mkdir -p "$case_dir/user-home"
-  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$(home_of "$case_dir")" HOME="$case_dir/user-home" \
-    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$case_dir/wt" TMUX="fake,1,0" \
-    CLAUDE_CONFIG_DIR='' \
-    PATH="$case_dir/fakebin:$PATH" \
-    "$SPAWN" "$@" 2>&1
+  SPAWN_ENV=(FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$(home_of "$case_dir")" HOME="$case_dir/user-home"
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$case_dir/wt" TMUX="fake,1,0"
+    CLAUDE_CONFIG_DIR=''
+    PATH="$case_dir/fakebin:$PATH")
+}
+
+run_spawn() {  # <case-dir> <args...>
+  local case_dir=$1
+  shift
+  spawn_env "$case_dir"
+  env "${SPAWN_ENV[@]}" "$SPAWN" "$@" 2>&1
+}
+
+# start_spawn <case-dir> <args...>: starts the spawn as this shell's own
+# recorded child, with its output in <case-dir>/spawn.out; sets SPAWN_PID.
+# Call it from the case's own shell, never inside $(...), so the case can
+# signal it.
+start_spawn() {
+  local case_dir=$1
+  shift
+  spawn_env "$case_dir"
+  env "${SPAWN_ENV[@]}" "$SPAWN" "$@" > "$case_dir/spawn.out" 2>&1 &
+  SPAWN_PID=$!
+  fm_test_record_child "$SPAWN_PID"
+}
+
+# interrupted_spawn <case-dir> <crash-point> <args...>: starts the spawn, sends
+# it TERM at <crash-point>, and waits for it; sets SPAWN_RC and SPAWN_OUT.
+interrupted_spawn() {
+  local case_dir=$1 point=$2
+  shift 2
+  start_spawn "$case_dir" "$@"
+  fm_test_crash_at "$case_dir" "$point" TERM "$SPAWN_PID"
+  SPAWN_RC=0
+  wait "$SPAWN_PID" || SPAWN_RC=$?
+  SPAWN_OUT=$(cat "$case_dir/spawn.out")
 }
 
 run_ship_spawn() {  # <case-dir> <id>
@@ -647,6 +673,23 @@ run_teardown() {  # <case-dir> <id> [args...]
   FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$(home_of "$case_dir")" \
     PATH="$case_dir/fakebin:$PATH" \
     "$TEARDOWN" "$@" 2>&1
+}
+
+# interrupted_teardown <case-dir> <crash-point> <id> [args...]: starts the
+# teardown as this shell's own recorded child, sends it TERM at <crash-point>,
+# and waits for it; sets TEARDOWN_RC and TEARDOWN_OUT.
+interrupted_teardown() {
+  local case_dir=$1 point=$2 pid
+  shift 2
+  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$(home_of "$case_dir")" \
+    PATH="$case_dir/fakebin:$PATH" \
+    "$TEARDOWN" "$@" > "$case_dir/teardown.out" 2>&1 &
+  pid=$!
+  fm_test_record_child "$pid"
+  fm_test_crash_at "$case_dir" "$point" TERM "$pid"
+  TEARDOWN_RC=0
+  wait "$pid" || TEARDOWN_RC=$?
+  TEARDOWN_OUT=$(cat "$case_dir/teardown.out")
 }
 
 run_bootstrap() {  # <case-dir>
@@ -1442,8 +1485,8 @@ test_dispatch_defers_interruption_across_backlog_commit() {
     add_item "$case_dir" "$id"
     interrupt_spawn_during_start "$case_dir" "$timing"
 
-    rc=0
-    out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
+    interrupted_spawn "$case_dir" start "$id" "$case_dir/project" --mode no-mistakes --yolo off
+    out=$SPAWN_OUT rc=$SPAWN_RC
     [ "$rc" -ne 0 ] || fail "a $timing-commit interruption was reported as success"
     assert_contains "$out" "verified preserved: its paired task record is present and its backlog item is In flight" \
       "a $timing-commit interruption did not report its verified atomic outcome"
@@ -1462,7 +1505,8 @@ test_deferred_signal_reads_back_preserved_state() {
   add_item "$case_dir" "$id"
   lie_start_then_interrupt "$case_dir" works
 
-  out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
+  interrupted_spawn "$case_dir" start "$id" "$case_dir/project" --mode no-mistakes --yolo off
+  out=$SPAWN_OUT rc=$SPAWN_RC
   [ "$rc" -ne 0 ] || fail "an interrupted spawn reported success"
   assert_contains "$out" "moved to In flight now and verified" \
     "a signal-deferred spawn did not read the row back and repair it"
@@ -1480,7 +1524,8 @@ test_deferred_signal_never_claims_unverified_preservation() {
   add_item "$case_dir" "$id"
   lie_start_then_interrupt "$case_dir" fails
 
-  out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
+  interrupted_spawn "$case_dir" start "$id" "$case_dir/project" --mode no-mistakes --yolo off
+  out=$SPAWN_OUT rc=$SPAWN_RC
   [ "$rc" -ne 0 ] || fail "an interrupted spawn reported success"
   assert_contains "$out" "preservation could not be verified" \
     "an unverifiable preservation was not reported as attempted, not verified"
@@ -1496,7 +1541,7 @@ test_deferred_signal_never_claims_unverified_preservation() {
 }
 
 test_deferred_signal_verification_outlives_an_unresponsive_tasks_axi() {
-  local case_dir id out rc=0
+  local case_dir id out rc=0 i
   id=atomic-dispatch-signal-hang-b5
   case_dir=$(make_home dispatch-signal-hang "$id")
   add_item "$case_dir" "$id"
@@ -1504,16 +1549,19 @@ test_deferred_signal_verification_outlives_an_unresponsive_tasks_axi() {
 
   # The read-back's own `start` never answers, so the spawn must bound it
   # (FM_TASKS_AXI_TIMEOUT=3), print the attempted wording naming the timeout,
-  # and exit - the outer 30s bound (fm_run_timed, portable to a host with no
-  # timeout binary) only turns a regression back into the lock-held-forever
-  # hang it exists to catch.
-  mkdir -p "$case_dir/user-home"
-  out=$(fm_run_timed 30 env FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$(home_of "$case_dir")" \
-    HOME="$case_dir/user-home" FM_SPAWN_NO_GUARD=1 \
-    FM_FAKE_PANE_PATH="$case_dir/wt" TMUX="fake,1,0" CLAUDE_CONFIG_DIR='' \
-    FM_TASKS_AXI_TIMEOUT=3 PATH="$case_dir/fakebin:$PATH" \
-    "$SPAWN" "$id" "$case_dir/project" \
-    --mode no-mistakes --yolo off 2>&1) || rc=$?
+  # and exit - the outer 30s bound only turns a regression back into the
+  # lock-held-forever hang it exists to catch, by KILLing the spawn (137).
+  FM_TASKS_AXI_TIMEOUT=3 start_spawn "$case_dir" "$id" "$case_dir/project" --mode no-mistakes --yolo off
+  fm_test_crash_at "$case_dir" start TERM "$SPAWN_PID"
+  i=0
+  while [ "$i" -lt 600 ]; do
+    case "$(fm_test_process_state "$SPAWN_PID")" in '' | Z*) break ;; esac
+    sleep 0.05
+    i=$((i + 1))
+  done
+  [ "$i" -lt 600 ] || fm_test_signal KILL "$SPAWN_PID"
+  wait "$SPAWN_PID" || rc=$?
+  out=$(cat "$case_dir/spawn.out")
   [ "$rc" -ne 0 ] || fail "an interrupted spawn reported success"
   case "$rc" in
     124|137) fail "the verification hung on the unresponsive start instead of timing out: $out" ;;
@@ -1537,9 +1585,10 @@ test_dispatch_interruption_during_kimi_readiness_fails_before_commit() {
   add_item "$case_dir" "$id"
   interrupt_kimi_readiness "$case_dir"
 
-  out=$(HOME="$home" FM_KIMI_READY_POLLS=2 FM_KIMI_POLL_INTERVAL=0 \
-    run_spawn "$case_dir" "$id" "$case_dir/project" --harness kimi \
-      --mode no-mistakes --yolo off) || rc=$?
+  HOME="$home" FM_KIMI_READY_POLLS=2 FM_KIMI_POLL_INTERVAL=0 \
+    interrupted_spawn "$case_dir" capture-pane "$id" "$case_dir/project" --harness kimi \
+      --mode no-mistakes --yolo off
+  out=$SPAWN_OUT rc=$SPAWN_RC
   [ "$rc" -ne 0 ] || fail "Kimi readiness interruption was reported as success"
   assert_absent "$home/state/$id.meta" \
     "Kimi readiness interruption retained an unconfirmed task record"
@@ -1872,7 +1921,8 @@ test_interrupted_destructive_cleanup_leaves_a_recoverable_close() {
   marker="$home/state/$id.backlog-close"
   interrupt_teardown_during_treehouse_return "$case_dir"
 
-  out=$(run_teardown "$case_dir" "$id") || rc=$?
+  interrupted_teardown "$case_dir" treehouse-return "$id"
+  out=$TEARDOWN_OUT rc=$TEARDOWN_RC
   [ "$rc" -ne 0 ] || fail "interrupted destructive cleanup reported success"
   assert_present "$marker" \
     "destructive cleanup began before recording its authoritative close"

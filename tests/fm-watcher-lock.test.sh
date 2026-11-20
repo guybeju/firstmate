@@ -307,15 +307,19 @@ run_legacy_identity_takeover() {  # <case> <successor-first>
   old_poll=1
   if [ "$successor_first" -eq 1 ]; then
     # Pause at the terminal poll sleep, after startup and state-lock mutations
-    # have completed. Sending STOP from the test then scanning locks races both
-    # signal delivery and an in-flight lock publication by the watcher's child.
-    # A distinctive poll interval keeps other sleeps and the successor untouched.
+    # have completed: the fake sleep stops at crash point old-sleep, where the
+    # case sends STOP to the old watcher it started, and only then records the
+    # pause. Sending STOP at an arbitrary moment and then scanning locks races
+    # both signal delivery and an in-flight lock publication by the watcher's
+    # child. A distinctive poll interval keeps other sleeps and the successor
+    # untouched.
     old_poll=17
     real_sleep=$(command -v sleep)
+    fm_fake_crash_point "$fakebin"
     cat > "$fakebin/sleep" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = 17 ]; then
-  kill -STOP "$PPID" || exit 1
+  fm-crash-point "${FM_TEST_WATCH_PAUSED%/*}" old-sleep || exit 1
   : > "$FM_TEST_WATCH_PAUSED"
   exit 0
 fi
@@ -340,6 +344,8 @@ SH
   [ -n "$legacy" ] && [ "$legacy" != "$current" ] \
     || fail "the legacy local-time identity does not differ from the UTC identity, so this case would pass vacuously ('$legacy')"
   if [ "$successor_first" -eq 1 ]; then
+    fm_test_record_child "$old"
+    fm_test_crash_at "$dir" old-sleep STOP "$old"
     i=0
     while [ "$i" -lt 100 ] && [ ! -e "$dir/old.paused" ] && is_live_non_zombie "$old"; do
       sleep 0.1

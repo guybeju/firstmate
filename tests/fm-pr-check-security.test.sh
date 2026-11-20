@@ -409,15 +409,22 @@ write_poll_meta() {
 }
 
 
+# check_entry_env <dir>: sets CHECK_ENTRY_ENV to the environment a check entry
+# runs under, so a case can also start one as its own background child.
+check_entry_env() {
+  local dir=$1
+  CHECK_ENTRY_ENV=(FM_ROOT_OVERRIDE="$dir/root" FM_HOME="$dir/home" FM_CONFIG_OVERRIDE="$dir/home/config"
+    FM_TEST_GUARD_LOG="$dir/guard.log" FM_TEST_GH_LOG="$dir/gh.log"
+    FM_TEST_GH_AXI_LOG="$dir/gh-axi.log" FM_TEST_GLAB_LOG="$dir/glab.log"
+    FM_TEST_GERRIT_AXI_LOG="$dir/gerrit-axi.log" FM_TEST_JQ="$REAL_JQ"
+    PATH="$dir/fakebin:$BASE_PATH")
+}
+
 run_check_entry() {
   local dir=$1
   shift
-  FM_ROOT_OVERRIDE="$dir/root" FM_HOME="$dir/home" FM_CONFIG_OVERRIDE="$dir/home/config" \
-    FM_TEST_GUARD_LOG="$dir/guard.log" FM_TEST_GH_LOG="$dir/gh.log" \
-    FM_TEST_GH_AXI_LOG="$dir/gh-axi.log" FM_TEST_GLAB_LOG="$dir/glab.log" \
-    FM_TEST_GERRIT_AXI_LOG="$dir/gerrit-axi.log" FM_TEST_JQ="$REAL_JQ" \
-    PATH="$dir/fakebin:$BASE_PATH" \
-    "$PR_CHECK" "$@"
+  check_entry_env "$dir"
+  env "${CHECK_ENTRY_ENV[@]}" "$PR_CHECK" "$@"
 }
 
 run_merge_entry() {
@@ -2595,20 +2602,29 @@ SH
   pass "TERM during PR registration restores the old poll and its registered identities"
 }
 
+# The fake cp publishes, then stops at crash point cp, where the case sends
+# TERM to the check entry it started itself.
 test_atomic_interruption_leaves_no_partial_artifact() {
-  local dir rc
+  local dir pid rc
   dir=$(make_case interrupted-write)
   write_task_meta "$dir"
+  fm_fake_crash_point "$dir/fakebin"
   cat > "$dir/fakebin/cp" <<SH
 #!/usr/bin/env bash
 '$REAL_CP' "\$@" || exit 1
-kill -TERM "\$PPID"
+fm-crash-point '$dir' cp || exit 1
 exit 0
 SH
   chmod +x "$dir/fakebin/cp"
 
+  check_entry_env "$dir"
+  env "${CHECK_ENTRY_ENV[@]}" "$PR_CHECK" task-a https://github.com/o/r/pull/1 \
+    > "$dir/stdout" 2> "$dir/stderr" &
+  pid=$!
+  fm_test_record_child "$pid"
+  fm_test_crash_at "$dir" cp TERM "$pid"
   set +e
-  run_check_entry "$dir" task-a https://github.com/o/r/pull/1 > "$dir/stdout" 2> "$dir/stderr"
+  wait "$pid"
   rc=$?
   set -e
   [ "$rc" -ne 0 ] || fail "interrupted publication unexpectedly succeeded"

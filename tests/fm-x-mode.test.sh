@@ -684,7 +684,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 printf '%s\n' "$auth_file" > "$FAKE_AUTH_FILE_LOG"
-kill -TERM "$PPID"
+# A curl killed mid-post: the status a TERM gives, with nothing printed.
 exit 143
 SH
   chmod +x "$fakebin/curl"

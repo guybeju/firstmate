@@ -4360,10 +4360,14 @@ test_procevent_launch_failed_episodes_are_each_delivered() {
   pass "every launch-failure episode is delivered under the failed-to-start headline"
 }
 
+# kill-before and kill-after stop the watcher's marker commit at crash point
+# marker-mv in the case dir (the watcher's FM_HOME), where the case KILLs the
+# watcher it started.
 install_marker_mv_fault() {  # <dir>
   local dir=$1
   REAL_MV=$(command -v mv)
   export REAL_MV
+  fm_fake_crash_point "$dir/fakebin"
   cat > "$dir/fakebin/mv" <<'SH'
 #!/usr/bin/env bash
 dest=${!#}
@@ -4374,8 +4378,8 @@ case "$dest" in
         printf '1\n' > "$FM_MARKER_MV_READY"
         while [ ! -e "$FM_MARKER_MV_RELEASE" ]; do sleep 0.02; done
         ;;
-      kill-before) kill -KILL "$PPID"; exit 1 ;;
-      kill-after) "$REAL_MV" "$@" || exit; kill -KILL "$PPID"; exit 1 ;;
+      kill-before) fm-crash-point "$FM_HOME" marker-mv; exit 1 ;;
+      kill-after) "$REAL_MV" "$@" || exit; fm-crash-point "$FM_HOME" marker-mv; exit 1 ;;
       fail) exit 1 ;;
     esac
     ;;
@@ -4432,6 +4436,8 @@ test_procevent_surface_crash_boundaries() {
   append_wake "$state" check "procevent:before-marker:1" "check: procevent fixture before-marker 1"
   install_marker_mv_fault "$dir"
   FM_MARKER_MV_MODE=kill-before procevent_watch_bg "$dir" "$out"; pid=$!
+  fm_test_record_child "$pid"
+  fm_test_crash_at "$dir" marker-mv KILL "$pid"
   wait_for_exit "$pid" 100
   exit_status=$?
   [ "$exit_status" -ne 124 ] || fail "the watcher survived the injected pre-marker crash"
@@ -4445,6 +4451,8 @@ test_procevent_surface_crash_boundaries() {
   append_wake "$state" check "procevent:after-marker:1" "check: procevent fixture after-marker 1"
   install_marker_mv_fault "$dir"
   FM_MARKER_MV_MODE=kill-after procevent_watch_bg "$dir" "$out"; pid=$!
+  fm_test_record_child "$pid"
+  fm_test_crash_at "$dir" marker-mv KILL "$pid"
   wait_for_exit "$pid" 100
   exit_status=$?
   [ "$exit_status" -ne 124 ] || fail "the watcher survived the injected post-marker crash"
