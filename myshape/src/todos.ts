@@ -38,10 +38,33 @@ export interface TodoStore {
 
 export type CloseWords = "不做了" | "撤下";
 
+export type RecordKind =
+  | "todo.opened"
+  | "todo.rewritten"
+  | "todo.adopted"
+  | "todo.claimed"
+  | "todo.rejected"
+  | "todo.obsolete"
+  | "todo.done"
+  | "todo.dropped"
+  | "todo.taken_down";
+
+/** How an item left the page, on a closing record. */
+export type Outcome = "done" | "dropped" | "taken_down" | "elsewhere";
+
+/**
+ * One system record about an item: every step writes one, under the item's
+ * topic (none for an item without one), saying who made it. `text` is the
+ * line the page shows, with its actor suffix.
+ */
 export interface TodoEvent {
-  kind: "todo.done" | "todo.dropped" | "todo.taken_down" | "todo.closed_elsewhere";
+  kind: RecordKind;
   topic: string | null;
-  task: string;
+  item: string;
+  by: "captain" | "aggregator";
+  label: string;
+  outcome?: Outcome;
+  reason?: string;
   text: string;
 }
 
@@ -80,6 +103,14 @@ export interface TodoInput {
   captainCloses: boolean;
   /** An item that existed before the board kept items: a waiting mark becomes its state. */
   adopt: boolean;
+  /** For an adopted item: when it was first opened, as the aggregator recorded it. */
+  since?: string;
+}
+
+/** Who made a change: the captain on the page, or the aggregator, by its label, through a command. */
+export interface Actor {
+  by: "captain" | "aggregator";
+  label: string;
 }
 
 const ID_MAX = 128;
@@ -128,6 +159,38 @@ function notOpen(id: string): TodoResult {
   return refused(`${id} 不是看板上還開著的「要你動手」項目，沒有改任何東西。`);
 }
 
+/** The record of one step: `what` follows the item's name, the actor's suffix ends it. */
+function record(
+  kind: RecordKind,
+  item: TodoItem,
+  id: string,
+  actor: Actor,
+  what: string,
+  extra: { outcome?: Outcome; reason?: string } = {},
+): TodoEvent {
+  const suffix = actor.by === "captain" ? "（你在頁面上）" : `（${actor.label} 用指令）`;
+  return {
+    kind,
+    topic: item.topic,
+    item: id,
+    by: actor.by,
+    label: actor.label,
+    ...extra,
+    text: `要你動手「${item.title}」${what}${suffix}`,
+  };
+}
+
+function pad(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+/** MM-DD HH:mm in this machine's time, the way the page prints times. */
+function shortTime(iso: string): string | null {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 /**
  * The topic an item goes under. A new item needs a live topic. An adopted
  * one keeps where today's page shows it: a merged id is followed, an archived
@@ -152,6 +215,7 @@ function inputProblem(input: TodoInput): string | null {
     return "--cmd 後面要有內容。";
   if (input.ref.length > REF_MAX || /[\n\r]/.test(input.ref))
     return "--ref 要是一行，最多 128 個字。";
+  if (input.since !== undefined && shortTime(input.since) === null) return "--since 要是一個時間。";
   return null;
 }
 
@@ -169,6 +233,23 @@ function addedLine(id: string, topic: string | null): string {
   return `ok ${id} 已放上看板的「要你動手」（${topic === null ? "沒有議題" : `議題 ${topic}`}）`;
 }
 
+/** What the record of an add says: a new item, a rewrite, or an item adopted from before. */
+function addRecord(
+  next: TodoItem,
+  id: string,
+  input: TodoInput,
+  actor: Actor,
+  rewrite: boolean,
+): TodoEvent {
+  if (input.adopt) {
+    const since = input.since === undefined ? null : shortTime(input.since);
+    const when = since === null ? "" : `（原本 ${since} 開）`;
+    return record("todo.adopted", next, id, actor, `從 backlog 搬上看板${when}`);
+  }
+  if (rewrite) return record("todo.rewritten", next, id, actor, "內容已改寫，回到還沒做");
+  return record("todo.opened", next, id, actor, `已開：${next.action}`);
+}
+
 /**
  * Puts an item on the board, or rewrites it. A rewrite of different text
  * starts over at "open": what was said about the old text no longer holds.
@@ -180,7 +261,7 @@ export function addItem(
   topics: TopicState,
   input: TodoInput,
   now: string,
-  by: string,
+  agent: { name: string; label: string },
 ): TodoResult {
   const problem = inputProblem(input);
   if (problem !== null) return usage(problem);
@@ -194,7 +275,7 @@ export function addItem(
   const mark =
     input.adopt && Object.hasOwn(store.marks, input.id) ? store.marks[input.id] : undefined;
   delete next.marks[input.id];
-  next.items[input.id] = {
+  const item: TodoItem = {
     title: input.title.trim(),
     topic: placed.topic,
     action: input.action.trim(),
@@ -203,12 +284,14 @@ export function addItem(
     state: mark?.state ?? "open",
     reason: mark?.reason ?? null,
     at: mark?.at ?? now,
-    by,
+    by: agent.name,
     ref: input.ref !== "" ? input.ref : (current?.ref ?? ""),
     captain_closes: input.captainCloses || (current?.captain_closes ?? false),
-    created_at: current?.created_at ?? now,
+    created_at: current?.created_at ?? input.since ?? now,
   };
-  return changed(next, line);
+  next.items[input.id] = item;
+  const actor: Actor = { by: "aggregator", label: agent.label };
+  return changed(next, line, [addRecord(item, input.id, input, actor, current !== undefined)]);
 }
 
 function withState(
@@ -264,25 +347,37 @@ export function claimItem(store: TodoStore, id: string, now: string, label: stri
     topic: item.topic,
     text,
   };
+  const event = record("todo.claimed", item, id, { by: "captain", label }, "：你按了做完了");
   return changed(
     withState(store, id, "claimed", now, null),
     `ok ${id} 已記下做完了，等驗證`,
-    [],
+    [event],
     [notice],
   );
 }
 
 /** The aggregator checked and it was not done: back in front of the captain with the reason. */
-export function rejectItem(store: TodoStore, id: string, reason: string, now: string): TodoResult {
+export function rejectItem(
+  store: TodoStore,
+  id: string,
+  reason: string,
+  now: string,
+  label: string,
+): TodoResult {
   const item = itemOf(store, id);
   if (item === undefined) return notOpen(id);
   const line = oneLine(reason, GOAL_MAX);
   if (line === null) return refused(`原因要是一行，最多 ${GOAL_MAX} 個字。`);
   if (item.state === "rejected" && item.reason === line)
     return unchanged(store, `ok ${id} 本來就已標成驗證沒過，回到要使用者動手`);
+  const actor: Actor = { by: "aggregator", label };
+  const event = record("todo.rejected", item, id, actor, `：${label} 驗證沒過：${line}`, {
+    reason: line,
+  });
   return changed(
     withState(store, id, "rejected", now, line),
     `ok ${id} 已標成驗證沒過，回到要使用者動手`,
+    [event],
   );
 }
 
@@ -302,20 +397,23 @@ export function obsoleteItem(
   if (item === undefined) return notOpen(id);
   const line = oneLine(reason, GOAL_MAX);
   if (line === null) return refused(`原因要是一行，最多 ${GOAL_MAX} 個字。`);
+  const actor: Actor = { by: "aggregator", label };
   if (item.captain_closes) {
     if (item.state === "obsolete" && item.reason === line)
       return unchanged(store, `ok ${id} 本來就已標成不再需要，等使用者撤下`);
+    const event = record("todo.obsolete", item, id, actor, `：${label} 標成不再需要：${line}`, {
+      reason: line,
+    });
     return changed(
       withState(store, id, "obsolete", now, line),
       `ok ${id} 已標成不再需要，等使用者撤下`,
+      [event],
     );
   }
-  const event: TodoEvent = {
-    kind: "todo.taken_down",
-    topic: item.topic,
-    task: id,
-    text: `「${item.title}」不再需要，${label} 撤下：${line}（${label} 用指令）`,
-  };
+  const event = record("todo.taken_down", item, id, actor, `已撤下：不再需要，${line}`, {
+    outcome: "taken_down",
+    reason: line,
+  });
   const notice = closing(
     item,
     id,
@@ -331,12 +429,10 @@ export function doneItem(store: TodoStore, id: string, label: string): TodoResul
   const item = itemOf(store, id);
   if (item === undefined)
     return refused(`${id} 不是開著的「要你動手」項目，沒有關任何東西（已經關過的話不用再跑）。`);
-  const event: TodoEvent = {
-    kind: "todo.done",
-    topic: item.topic,
-    task: id,
-    text: `「${item.title}」做完了，${label} 已驗證（${label} 用指令）`,
-  };
+  const actor: Actor = { by: "aggregator", label };
+  const event = record("todo.done", item, id, actor, `已關：做完了，${label} 已驗證`, {
+    outcome: "done",
+  });
   const notice = closing(
     item,
     id,
@@ -363,16 +459,11 @@ export function closeByCaptain(
     return refused(`${id} 沒有被標成不再需要，不能撤下。`);
   if (words === "不做了" && (item.state === "obsolete" || item.state === "claimed"))
     return refused(`${id} 現在不能按不做了。`);
-  const text =
+  const actor: Actor = { by: "captain", label };
+  const event =
     words === "撤下"
-      ? `「${item.title}」不再需要（${label}：${item.reason ?? ""}），使用者按了好，撤下（在頁面上）`
-      : `「${item.title}」使用者按了不做了（在頁面上）`;
-  const event: TodoEvent = {
-    kind: words === "撤下" ? "todo.taken_down" : "todo.dropped",
-    topic: item.topic,
-    task: id,
-    text,
-  };
+      ? record("todo.taken_down", item, id, actor, "已撤下", { outcome: "taken_down" })
+      : record("todo.dropped", item, id, actor, "已關：你選了不做了", { outcome: "dropped" });
   const notice = closing(
     item,
     id,
@@ -398,14 +489,12 @@ export function adoptDone(store: TodoStore, open: string[], label: string): Todo
   if (marks.length === 0 && gone.length === 0) return unchanged(store, "ok adopt-done 沒有要清的");
   const next = structuredClone(store);
   for (const id of marks) delete next.marks[id];
+  const actor: Actor = { by: "aggregator", label };
   const events: TodoEvent[] = gone.map(([id, item]) => {
     delete next.items[id];
-    return {
-      kind: "todo.closed_elsewhere",
-      topic: item.topic,
-      task: id,
-      text: `「${item.title}」的 hold 已在別處關掉，從看板拿掉（${label} 用指令）`,
-    };
+    return record("todo.taken_down", item, id, actor, "已關：hold 已在別處關掉", {
+      outcome: "elsewhere",
+    });
   });
   return changed(
     next,

@@ -17,7 +17,7 @@
 #   myshape.sh which [--home <secondmate-id>] <task-id>
 #   myshape.sh find [--all] <keyword>
 #   myshape.sh todo add <task-id> <title> --topic <topic-id> --do <one line> [--note <text>] [--cmd <command>]... [--ref <text>] [--captain-closes]
-#   myshape.sh todo add <task-id> <title> [--topic <topic-id>] --do <one line> ... --adopt
+#   myshape.sh todo add <task-id> <title> [--topic <topic-id>] --do <one line> ... --adopt [--since <time>]
 #   myshape.sh todo done <task-id>
 #   myshape.sh todo failed <task-id> --reason <one line>
 #   myshape.sh todo obsolete <task-id> --reason <one line>
@@ -77,12 +77,16 @@
 # (which closes it) or failed (which puts it back in front of the captain with
 # the reason). obsolete takes an item the aggregator no longer needs off the
 # page at once, with the reason in its topic's updates; an item added with
-# --captain-closes waits instead for the captain's 好，撤下. Every way an item
-# leaves the page writes a record on its topic.
+# --captain-closes waits instead for the captain's 好，撤下.
 #
 # --adopt is for items that existed before the board kept them (Firstmate's
 # hands-on holds): it accepts an archived topic or none, keeps the mark such an
-# item already had, and changes nothing for an item already on the board.
+# item already had, and changes nothing for an item already on the board;
+# --since is when the item was first opened, an ISO 8601 time.
+#
+# Every step of an item (put on, rewritten, adopted, claimed, failed, marked no
+# longer needed, closed) writes a record on its topic's updates saying who made
+# it: the captain on the page, or the aggregator by its label.
 # adopt-done ends such a pass: given every item that is still an open hold, it
 # drops the marks of the others and takes adopted items (--ref hold) whose hold
 # is gone off the page, with a record and no notice.
@@ -212,11 +216,11 @@ TODO_ADD_USAGE='todo add 的用法是 <task-id> <標題> --topic <議題 id> --d
 # [--cmd <command>]... [--ref <text>] [--captain-closes] [--adopt]: put a
 # hands-on item for the captain on the board. The board checks the topic.
 todo_add() {
-  local topic="" action="" note="" ref="" captain_closes=false adopt=false item
+  local topic="" action="" note="" ref="" since="" captain_closes=false adopt=false item
   local -a words=() commands=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --topic | --do | --note | --cmd | --ref)
+      --topic | --do | --note | --cmd | --ref | --since)
         [ "$#" -ge 2 ] || usage_error "$1 後面要有值。$TODO_ADD_USAGE"
         case "$1" in
           --topic) topic=$2 ;;
@@ -230,6 +234,7 @@ todo_add() {
             ;;
           --cmd) commands+=("$(todo_part --cmd "$2")") ;;
           --ref) ref=$2 ;;
+          --since) since=$2 ;;
         esac
         shift 2
         ;;
@@ -251,12 +256,14 @@ todo_add() {
   esac
   tb_valid_id "${words[0]}" || usage_error "task id 格式不對：${words[0]}"
   [ -z "$topic" ] || tb_valid_id "$topic" || usage_error "議題 id 格式不對：$topic"
+  [ -z "$since" ] || [ "$adopt" = true ] || usage_error "--since 只給 --adopt 用。$TODO_ADD_USAGE"
   item=$(jq -cn --arg id "${words[0]}" --arg title "${words[1]}" --arg topic "$topic" \
-    --arg action "$action" --arg guidance "$note" --arg ref "$ref" \
+    --arg action "$action" --arg guidance "$note" --arg ref "$ref" --arg since "$since" \
     --argjson captain_closes "$captain_closes" --argjson adopt "$adopt" \
     '{id: $id, title: $title, topic: (if $topic == "" then null else $topic end), action: $action,
       guidance: $guidance, commands: $ARGS.positional, ref: $ref,
-      captain_closes: $captain_closes, adopt: $adopt}' \
+      captain_closes: $captain_closes, adopt: $adopt}
+     + (if $since == "" then {} else {since: $since} end)' \
     --args ${commands[@]+"${commands[@]}"}) || tb_die 1 "組不出項目的內容，沒有放上任何東西。"
   printf '%s' "$item" | cmd_service todo-add -
 }

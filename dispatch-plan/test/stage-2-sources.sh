@@ -164,15 +164,18 @@ test_remote_mate_falls_open_without_a_usable_copy() {
   pass "a remote secondmate falls open only when it has no usable copy"
 }
 
-# A main home's todos are keyed by its own task ids; a secondmate's ids are its
-# own, so a mark there must never be read as one of the secondmate's items.
+# The main home's hands-on items live on its board; a secondmate's own ids are
+# its own, so an item there must never be read as one of the secondmate's.
 test_never_lists_hands_on_items_in_a_secondmate_home() {
   local main mate out
   main=$(tb_make_home todo-main)
   tb_write_topics "$main"
-  jq '.todos = {td1: {state: "claimed", at: "t"}}' "$main/data/topics.json" > "$main/data/topics.json.new"
-  mv "$main/data/topics.json.new" "$main/data/topics.json"
+  mkdir -p "$main/data/myshape"
+  printf '%s' '{"v":1,"marks":{},"items":{"td1":{"title":"T","topic":"billing","action":"x","guidance":"","commands":[],"state":"claimed","reason":null,"at":"t","by":"firstmate","ref":"","captain_closes":false,"created_at":"t"}}}' \
+    > "$main/data/myshape/todos.json"
   mate=$(dp_make_local_mate todo-mate sm1 "$main")
+  mkdir -p "$mate/data/myshape"
+  cp "$main/data/myshape/todos.json" "$mate/data/myshape/todos.json"
   printf '## In flight\n\n## Queued\n- [ ] td1 - Restart x (repo: sample) (kind: captain) (hold: 動手：重啟 x) (hold-kind: captain)\n\n## Done\n' \
     > "$mate/data/backlog.md"
   out=$(tb_run "$mate" "$PLAN" order)

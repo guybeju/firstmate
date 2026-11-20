@@ -290,6 +290,7 @@ function todoInput(args: Record<string, unknown>): todos.TodoInput | string {
     ref: typeof args["ref"] === "string" ? args["ref"] : "",
     captainCloses: args["captain_closes"] === true,
     adopt: args["adopt"] === true,
+    ...(typeof args["since"] === "string" ? { since: args["since"] } : {}),
   };
 }
 
@@ -317,8 +318,8 @@ const TODO_HANDLERS: Record<string, TodoHandler> = {
   "todo-add": (service, args) => {
     const input = todoInput(args);
     if (typeof input === "string") return todoUsage(input);
-    const by = service.aggregator?.name ?? DEFAULT_LABEL;
-    return todos.addItem(service.todos, service.state, input, now(), by);
+    const agent = { name: service.aggregator?.name ?? DEFAULT_LABEL, label: labelOf(service) };
+    return todos.addItem(service.todos, service.state, input, now(), agent);
   },
   "todo-done": (service, args) => {
     const task = stringField(args, "task");
@@ -328,9 +329,8 @@ const TODO_HANDLERS: Record<string, TodoHandler> = {
   },
   "todo-failed": (service, args) => {
     const verdict = verdictArgs(args);
-    return "task" in verdict
-      ? todos.rejectItem(service.todos, verdict.task, verdict.reason, now())
-      : verdict;
+    if (!("task" in verdict)) return verdict;
+    return todos.rejectItem(service.todos, verdict.task, verdict.reason, now(), labelOf(service));
   },
   "todo-obsolete": (service, args) => {
     const verdict = verdictArgs(args);
@@ -385,15 +385,15 @@ function commitTodos(service: Service, result: TodoResult): BoardResponse {
   next.doc.todos = todos.projectMarks(result.store);
   saveTopicState(service.paths, service.state, next);
   service.state = next;
-  for (const event of result.events) {
-    const topic = event.topic === null ? null : topics.resolveTopicId(next.doc, event.topic);
+  // A hands-on record names its item, not a task, so the page prints no home/task in front of it.
+  for (const { topic, ...event } of result.events) {
+    const placed = topic === null ? null : topics.resolveTopicId(next.doc, topic);
     service.journal.appendBoard({
       ts: epochSeconds(),
       home: null,
-      task: event.task,
-      kind: event.kind,
-      topic,
-      text: event.text,
+      task: null,
+      topic: placed,
+      ...event,
     });
   }
   service.version += 1;

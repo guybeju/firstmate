@@ -5,6 +5,7 @@ import { appendLine, isRecord, readCompleteLines, readJsonFile, stringField, tex
 import path from "node:path";
 const FILE_MODE = 0o644;
 export const MAIN_HOME = "main";
+const OPTIONAL_BOARD_FIELDS = ["item", "by", "label", "outcome", "reason"];
 function parseLedgerLine(home, raw) {
     let line;
     try {
@@ -42,6 +43,10 @@ function parseStoredBoard(stored) {
         home: stringField(stored, "home"),
         task: stringField(stored, "task"),
         text: textField(stored, "text"),
+        ...Object.fromEntries(OPTIONAL_BOARD_FIELDS.flatMap((name) => {
+            const value = stringField(stored, name);
+            return value === null ? [] : [[name, value]];
+        })),
     };
 }
 function parseStored(text) {

@@ -23,7 +23,8 @@
 # The board keeps hands-on items itself, so the main home's captain holds
 # whose reason starts with 動手： (the items from before it did) are left out of
 # holds and queued; fm-board.sh adopts them onto the board. --legacy-todos
-# lists them instead under legacy_todos, as {id, title, question, origin}, for
+# lists them instead under legacy_todos, as {id, title, question, origin,
+# since} (since: the hold's "Captain hold set:" time, or ""), for
 # that adoption; the board never sees that key. A secondmate home's holds of
 # that shape are ordinary decisions and stay.
 #
@@ -257,7 +258,8 @@ main() {
     | if $legacy then
         . + {legacy_todos: [ $legacy_holds[]
                | {id, title: (.title // ""), question: .hold_reason,
-                  origin: ([ (.body_lines // [])[] | capture("^Captain hold origin: (?<origin>.*)$") | .origin ][0] // "")} ]}
+                  origin: ([ (.body_lines // [])[] | capture("^Captain hold origin: (?<origin>.*)$") | .origin ][0] // ""),
+                  since: ([ (.body_lines // [])[] | capture("^Captain hold set: (?<at>.*)$") | .at ][0] // "")} ]}
       else . end
   ' > "$WORK/output" || tb_die 1 "fm-topic-board-read.sh: could not assemble the output"
   cat "$WORK/output"

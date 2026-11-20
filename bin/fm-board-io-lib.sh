@@ -25,7 +25,8 @@
 # reason's first line, and its labelled lines (說明：, 指令：, 續：) give the
 # guidance and the commands; an older record without labels has everything
 # after its first line as one command. Its topic is the hold's tag, else its
-# origin's; none when it has neither. Only holds not on the board yet are
+# origin's; none when it has neither; --since is the hold's set time when it
+# has one. Only holds not on the board yet are
 # added. When the board keeps waiting marks or adopted items, the pass ends
 # with "myshape.sh todo adopt-done <every such hold still open>". It reads the
 # board's data/myshape/todos.json first and calls the board only when there is
@@ -119,6 +120,7 @@ fmb_adopt_args() {
       + (if ($text.guidance | trimmed) == "" then [] else ["--note", $text.guidance] end)
       + ($text.commands | map(select(trimmed != "")) | map("--cmd", .))
       + ["--ref", "hold", "--adopt", "--captain-closes"]
+      + (if (.since // "") == "" then [] else ["--since", .since] end)
     | (.[] | ., "\u0000"), "\u0000"'
 }
 
