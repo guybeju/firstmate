@@ -491,6 +491,48 @@ test_answer_with_the_real_hold_tool() {
   pass "an answer is delivered against the real fm-captain-hold.sh"
 }
 
+# A hands-on item closed on the board: an adopted item (ref "hold") still has
+# its captain hold, which the deliverer closes with the line todo done or the
+# page's press wrote before the board kept items; the captain's press is also
+# a note, the aggregator's own close is not.
+test_closed_item_closes_its_hold() {
+  local closed answer note
+  closed=$(record notice-todo-closed)
+  fresh
+  assert_equals "$DELIVERED" "$(deliver "$closed")" "the captain's 不做了 on an adopted item must be delivered"
+  answer=$(line fm-captain-hold.sh 'answers|--source|myshape|' "$MAIN" $'vpn-login\t不做了\t不做了\tdone')
+  note=$(line fm-inbox.sh 'note|--request-id|tb-w-mfz3k9-a1b2c3|-|' "$MAIN" '使用者在看板上：「登入 VPN」不做了（vpn-login）')
+  assert_equals "$answer"$'\n'"$note" "$(cat "$TB_LOG")" "the hold must close with the captain's words, then the note"
+  raw_is fm-captain-hold.sh $'vpn-login\t不做了\t不做了\tdone\n' "the answer line must be the one the page sent before"
+  fresh
+  deliver "$(record notice-todo-closed '.words = "撤下" | .text = "使用者在看板上：「登入 VPN」撤下（vpn-login）"')" >/dev/null
+  raw_is fm-captain-hold.sh $'vpn-login\t撤下\t撤下\tdone\n' "好，撤下 must close the hold with 撤下"
+  fresh
+  assert_equals "$DELIVERED" "$(deliver "$(record notice-todo-closed '.by = "aggregator" | .words = "做完了"')")" \
+    "todo done on an adopted item must be delivered"
+  assert_equals "$(line fm-captain-hold.sh 'answers|--source|myshape|' "$MAIN" $'vpn-login\t做完了\tfirst mate 已驗證\tdone')" \
+    "$(cat "$TB_LOG")" "todo done must close the hold with today's line and send no note"
+  fresh
+  assert_equals "$DELIVERED" "$(deliver "$(record notice-todo-closed '.item.ref = ""')")" "the captain's close of a new item"
+  assert_equals "$note" "$(cat "$TB_LOG")" "an item with no hold is only a note"
+  fresh
+  assert_equals "$DELIVERED" "$(deliver "$(record notice-todo-closed '.item.ref = "" | .by = "aggregator"')")" \
+    "the aggregator's close of a new item"
+  assert_equals "" "$(cat "$TB_LOG")" "the aggregator's own close of a new item runs nothing"
+  fresh
+  play fm-captain-hold.sh $'1\tskipped: vpn-login (already closed)'
+  assert_equals "$ELSEWHERE" "$(deliver "$closed")" "a hold already closed elsewhere is handled elsewhere"
+  assert_not_contains "$(cat "$TB_LOG")" "fm-inbox.sh" "no note follows a hold closed elsewhere"
+  fresh
+  assert_equals "$(failed '不認得的關閉方式：好')" "$(deliver "$(record notice-todo-closed '.words = "好"')")" \
+    "only 不做了 and 撤下 close a hold for the captain"
+  assert_equals "$(failed '項目 id 格式不對：bad id')" "$(deliver "$(record notice-todo-closed '.item.id = "bad id"')")" \
+    "a malformed item id fails"
+  assert_equals "" "$(cat "$TB_LOG")" "a refused close runs nothing"
+  pass "a closed hands-on item closes the hold an adopted item still has, with today's lines"
+}
+
 fm_test_run test_message_and_notice_become_notes test_note_outcomes test_direct_runs_fm_send \
   test_direct_outcomes test_answer_runs_the_hold_tool_then_a_note test_answer_outcomes \
-  test_tag_runs_fm_board_tag test_tag_outcomes test_remote_tag_sends_the_copy_first test_malformed_records_fail test_answer_with_the_real_hold_tool
+  test_tag_runs_fm_board_tag test_tag_outcomes test_remote_tag_sends_the_copy_first test_malformed_records_fail \
+  test_answer_with_the_real_hold_tool test_closed_item_closes_its_hold

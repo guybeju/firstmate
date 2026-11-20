@@ -131,6 +131,8 @@ fmb_adopt_args() {
 fmb_adopt() {
   local report=$1 file="$DATA/myshape/todos.json" items='{}' pending=0 failed=0 added=0 arg
   local -a args=() open=()
+  jq -e '.legacy_todos | arrays' <<< "$report" >/dev/null 2>&1 ||
+    { printf '%s\n' "adopt：讀不到這個 home 的 backlog，沒有動看板" >&2; return 1; }
   if [ -f "$file" ]; then
     items=$(jq -c '.items // {} | objects' "$file" 2>/dev/null) || items=''
     [ -n "$items" ] || { printf '%s\n' "adopt：讀不懂 ${file}，沒有動看板" >&2; return 1; }

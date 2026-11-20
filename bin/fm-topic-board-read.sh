@@ -25,7 +25,9 @@
 # holds and queued; fm-board.sh adopts them onto the board. --legacy-todos
 # lists them instead under legacy_todos, as {id, title, question, origin,
 # since} (since: the hold's "Captain hold set:" time, or ""), for
-# that adoption; the board never sees that key. A secondmate home's holds of
+# that adoption, and leaves the key out when the snapshot found no backlog
+# file, so an adoption never reads a missing backlog as "no hold is open";
+# the board never sees that key. A secondmate home's holds of
 # that shape are ordinary decisions and stay.
 #
 # ledger.status is "delta" (lines follow), "absent" (no ledger file), or
@@ -255,7 +257,7 @@ main() {
         ledger: $ledger[0]
       }
     | if $is_secondmate then . else . + {secondmates: $secondmates[0]} end
-    | if $legacy then
+    | if $legacy and $snap.backlog.present == true then
         . + {legacy_todos: [ $legacy_holds[]
                | {id, title: (.title // ""), question: .hold_reason,
                   origin: ([ (.body_lines // [])[] | capture("^Captain hold origin: (?<origin>.*)$") | .origin ][0] // ""),
