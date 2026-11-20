@@ -5,7 +5,7 @@ import { emptyState } from "./topics.js";
 import type { TopicState } from "./topics.js";
 import { emptyTodos } from "./todos.js";
 import type { TodoItem, TodoStore } from "./todos.js";
-import { buildView, parseOptions, parseTags, placeTask } from "./view.js";
+import { LEDGER_PER_TOPIC, buildView, parseOptions, parseTags, placeTask } from "./view.js";
 import type { HomeSnapshot, ViewInput } from "./view.js";
 
 const NOW = Date.parse("2026-07-10T00:00:00Z");
@@ -83,6 +83,7 @@ function input(extra: Partial<ViewInput> = {}): ViewInput {
     summaries: [],
     nowMs: NOW,
     staleMs: 180_000,
+    label: "first mate",
     ...extra,
   };
 }
@@ -823,7 +824,8 @@ describe("updates and summaries", () => {
         text: "answered",
       },
     ];
-    const view = buildView(input({ homes, events }));
+    const built = buildView(input({ homes, events }));
+    const view = { ...built, updates: built.updates.filter((update) => update.source !== "tag") };
     expect(view.updates.map((update) => `${update.event}@${update.topic}`)).toEqual([
       "hold.answered@null",
       "topic.merged@n1",
@@ -868,17 +870,73 @@ describe("updates and summaries", () => {
     const view = buildView(
       input({ homes: outOfOrder, events: [ledger("z", "task.status", day(3))] }),
     );
-    expect(view.updates[0]?.topic).toBe("hi");
+    expect(view.updates.find((update) => update.source === "ledger")?.topic).toBe("hi");
   });
 
-  it("keeps only the newest 2000 updates", () => {
-    const events = Array.from({ length: 2005 }, (_unused, index) =>
-      ledger("t", "task.status", T0 + index),
+  it("keeps every board record, and the newest ledger lines of each topic", () => {
+    const busy = Array.from({ length: LEDGER_PER_TOPIC + 5 }, (_unused, index) =>
+      ledger("t", "task.status", day(5) + index),
     );
-    const view = buildView(input({ homes, events }));
-    expect(view.updates).toHaveLength(2000);
-    expect(view.updates[0]?.ts).toBe(T0 + 2004);
-    expect(view.updates.at(-1)?.ts).toBe(T0 + 5);
+    const quiet: JournalEvent[] = [
+      ledger("u", "task.status", day(1)),
+      {
+        src: "board",
+        ts: day(1) - 10,
+        kind: "topic.created",
+        topic: "old",
+        home: null,
+        task: null,
+        text: "created long ago",
+      },
+    ];
+    const view = buildView(input({ homes, events: [...quiet, ...busy] }));
+    const ledgerOf = (topic: string) =>
+      view.updates.filter((update) => update.source === "ledger" && update.topic === topic);
+    expect(ledgerOf("n2")).toHaveLength(LEDGER_PER_TOPIC);
+    expect(ledgerOf("n2")[0]?.ts).toBe(day(5) + LEDGER_PER_TOPIC + 4);
+    expect(ledgerOf("n2").at(-1)?.ts).toBe(day(5) + 5);
+    expect(ledgerOf("n1")).toHaveLength(1);
+    expect(view.updates.at(-1)).toMatchObject({ source: "board", text: "created long ago" });
+  });
+
+  it("shows a tag made by command, and a page tag once, through its record", () => {
+    const tagged = [
+      home("main", {
+        report: report({
+          topics: {
+            page: tag("hi", "02"),
+            cmd: `${tag("hi", "02")}\n${tag("n2", "03")}`,
+            bad: "hi",
+          },
+        }),
+      }),
+    ];
+    const record: JournalEvent = {
+      src: "board",
+      ts: day(2) + 30,
+      kind: "agent.tagged",
+      topic: "hi",
+      home: "main",
+      task: "page",
+      text: "main/page 歸到「Hi」",
+    };
+    const view = buildView(input({ homes: tagged, events: [record] }));
+    const lines = view.updates.map((update) => `${update.source} ${update.task} ${update.text}`);
+    expect(lines.toSorted()).toEqual([
+      "board page main/page 歸到「Hi」",
+      "tag cmd 歸到「High」（first mate 用指令）",
+      "tag cmd 歸到「Normal two」（first mate 用指令）",
+    ]);
+    expect(view.updates.find((update) => update.text.includes("Normal two"))).toEqual({
+      ts: day(3),
+      source: "tag",
+      home: "main",
+      task: "cmd",
+      event: "agent.tagged",
+      text: "歸到「Normal two」（first mate 用指令）",
+      pr: null,
+      topic: "n2",
+    });
   });
 
   it("links a ready or landed summary to the task's latest PR at that time", () => {
@@ -968,5 +1026,47 @@ describe("topics", () => {
     const view = buildView(input({ topics: state }));
     view.queues.high.push("x");
     expect(state.doc.queues.high).toEqual(["hi"]);
+  });
+});
+
+describe("closed hands-on items", () => {
+  const rec = (item: string, kind: string, ts: number, topic = "hi", extra = {}): JournalEvent => ({
+    src: "board",
+    rid: `r-${ts}`,
+    ts,
+    kind,
+    topic,
+    home: null,
+    task: null,
+    item,
+    by: "aggregator",
+    label: "first mate",
+    text: `${item} ${kind}`,
+    ...extra,
+  });
+
+  it("lists each life that closed, newest first, with its records, and leaves out a live one", () => {
+    const events = [
+      rec("vpn", "todo.opened", T0 + 1),
+      rec("vpn", "todo.claimed", T0 + 2),
+      rec("vpn", "todo.rejected", T0 + 3),
+      rec("other", "todo.opened", T0 + 4, "old"),
+      rec("vpn", "todo.done", T0 + 5, "hi", { outcome: "done" }),
+      rec("other", "todo.dropped", T0 + 6, "old", { outcome: "dropped" }),
+      rec("vpn", "todo.opened", T0 + 7),
+    ];
+    const view = buildView(input({ events }));
+    expect(view.closed_todos.map((entry) => [entry.item, entry.topic, entry.outcome])).toEqual([
+      ["other", "n1", "dropped"],
+      ["vpn", "hi", "done"],
+    ]);
+    expect(view.closed_todos[1]).toMatchObject({ ts: T0 + 5, text: "vpn todo.done" });
+    expect(view.closed_todos[1]?.records.map((update) => update.event)).toEqual([
+      "todo.done",
+      "todo.rejected",
+      "todo.claimed",
+      "todo.opened",
+    ]);
+    expect(buildView(input()).closed_todos).toEqual([]);
   });
 });

@@ -4,33 +4,35 @@
 // code that stamps and saves them.
 
 /** Every kind of system record the board writes. */
-export type RecordKind =
-  | "topic.created"
-  | "topic.confirmed"
-  | "topic.merged"
-  | "topic.split"
-  | "topic.close_proposed"
-  | "topic.kept"
-  | "topic.archived"
-  | "topic.reopened"
-  | "topic.moved"
-  | "topic.renamed"
-  | "topic.goal_changed"
-  | "todo.opened"
-  | "todo.rewritten"
-  | "todo.adopted"
-  | "todo.claimed"
-  | "todo.rejected"
-  | "todo.obsolete"
-  | "todo.done"
-  | "todo.dropped"
-  | "todo.taken_down"
-  | "todo.forgotten"
-  | "todo.settled"
-  | "todo.marks_carried"
-  | "hold.answered"
-  | "hold.closed"
-  | "agent.tagged";
+export const RECORD_KINDS = [
+  "topic.created",
+  "topic.confirmed",
+  "topic.merged",
+  "topic.split",
+  "topic.close_proposed",
+  "topic.kept",
+  "topic.archived",
+  "topic.reopened",
+  "topic.moved",
+  "topic.renamed",
+  "topic.goal_changed",
+  "todo.opened",
+  "todo.rewritten",
+  "todo.adopted",
+  "todo.claimed",
+  "todo.rejected",
+  "todo.obsolete",
+  "todo.done",
+  "todo.dropped",
+  "todo.taken_down",
+  "todo.forgotten",
+  "todo.settled",
+  "todo.marks_carried",
+  "hold.answered",
+  "hold.closed",
+  "agent.tagged",
+] as const;
+export type RecordKind = (typeof RECORD_KINDS)[number];
 
 /**
  * A record before it is saved. `text` is the line the page shows, with its

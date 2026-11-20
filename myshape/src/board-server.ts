@@ -394,6 +394,7 @@ function boardView(service: Service): Record<string, unknown> {
       summaries: service.summaries.all,
       nowMs: Date.now(),
       staleMs: service.timings.staleMs,
+      label: labelOf(service),
     }),
   };
 }

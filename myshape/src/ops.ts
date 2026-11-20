@@ -370,7 +370,7 @@ function serialize(value: unknown): string {
 }
 
 /** A result that says it changed nothing must hand back the state it was given. */
-function assertUnchanged(op: string, before: unknown, after: unknown): void {
+export function assertUnchanged(op: string, before: unknown, after: unknown): void {
   if (serialize(before) !== serialize(after))
     throw new Error(`${op} 說沒有改任何東西，卻回了不同的狀態`);
 }

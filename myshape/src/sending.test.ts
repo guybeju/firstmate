@@ -16,7 +16,14 @@ import type { HomeReport, ReportHold } from "./report.js";
 import { emptyState } from "./topics.js";
 import type { TopicState } from "./topics.js";
 import type { HomeSnapshot } from "./view.js";
-import { WriteEngine, isDedupable, parseOutcome } from "./writes.js";
+import {
+  ON_DELIVERED,
+  ON_HANDLED_ELSEWHERE,
+  WriteEngine,
+  deliveryRecord,
+  isDedupable,
+  parseOutcome,
+} from "./writes.js";
 import type { Action, WriteRecord, WriteTimings } from "./writes.js";
 
 const exit = (code: number | null, stdout = "", stderr = ""): CommandResult => ({
@@ -503,6 +510,67 @@ describe("tagAgent", () => {
     const again = sent(actions.tagAgent(h.context, "main", "again", "billing", "browser"));
     await settled(again, "delivered");
     expect(h.calls.slice(-2).map((call) => call["task"])).toEqual(["again", "again"]);
+  });
+});
+
+// Guard 3.3: a page write that changes another home leaves its record when it
+// ends; communication leaves none.
+describe("the record a finished write leaves", () => {
+  const answer = { home: "main", task: "call-1", answer: "合併", label: "A" };
+  const writes: Record<Action["kind"], (h: Harness) => WriteRecord> = {
+    answer: (h) => sent(actions.answer(h.context, answer, "browser")),
+    tag: (h) => sent(actions.tagAgent(h.context, "main", "fresh", "login", "browser")),
+    message: (h) => sent(actions.message(h.context, "billing", "hi", "browser")),
+    direct: (h) => sent(actions.direct(h.context, "main", "worker-1", "hi", "browser")),
+    notice: (h) =>
+      h.engine.submit({
+        channel: "auto",
+        home: "main",
+        task: null,
+        topic: null,
+        text: "n",
+        action: { kind: "notice", event: "topic.kept", text: "n" },
+      }),
+  };
+
+  for (const kind of Object.keys(writes) as Action["kind"][]) {
+    it(`${kind}: delivered leaves ${ON_DELIVERED[kind] ?? "none"}, handled elsewhere ${ON_HANDLED_ELSEWHERE[kind] ?? "none"}`, async () => {
+      for (const [ending, kinds] of [
+        ["delivered", ON_DELIVERED],
+        ["handled_elsewhere", ON_HANDLED_ELSEWHERE],
+      ] as const) {
+        const h = harness();
+        h.next(outcome(ending));
+        const write = writes[kind](h);
+        await settled(write, ending);
+        expect(h.finished).toEqual([write]);
+        expect(deliveryRecord(write)?.kind ?? null).toBe(kinds[kind]);
+      }
+    });
+  }
+
+  it("says what the answer did, or that its decision had already ended", async () => {
+    const h = harness();
+    h.next(DELIVERED, outcome("handled_elsewhere"));
+    const delivered = sent(actions.answer(h.context, answer, "browser"));
+    await settled(delivered, "delivered");
+    expect(deliveryRecord(delivered)).toEqual({
+      kind: "hold.answered",
+      topic: delivered.topic,
+      home: "main",
+      task: "call-1",
+      outcome: "A",
+      text: "在看板回答 main/call-1：合併",
+    });
+    const elsewhere = sent(actions.answer(h.context, answer, "browser"));
+    await settled(elsewhere, "handled_elsewhere");
+    expect(deliveryRecord(elsewhere)).toMatchObject({
+      kind: "hold.closed",
+      outcome: "elsewhere",
+      text: "待決事項 main/call-1 已在別處結束，看板上的回答「合併」沒有送出",
+    });
+    for (const state of ["failed", "undelivered", "sending"] as const)
+      expect(deliveryRecord({ ...delivered, state })).toBeNull();
   });
 });
 

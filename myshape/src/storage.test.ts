@@ -9,8 +9,8 @@ import type { BoardPaths } from "./layout.js";
 import type { StoredRecord } from "./records.js";
 import { commitChange, loadBoard, readBoard } from "./store.js";
 import type { CommitTarget, StoredBoard } from "./store.js";
-import { emptyTodos } from "./todos.js";
-import { archive, create, emptyState } from "./topics.js";
+import { addItem, claimItem, emptyTodos, withProjection } from "./todos.js";
+import { archive, create, emptyState, reopen } from "./topics.js";
 import type { TopicResult, TopicState } from "./topics.js";
 
 let dir: string;
@@ -723,5 +723,245 @@ describe("journal", () => {
     expect(new Offsets(paths).get("ok")).toEqual({ offset: 0, sha: "-" });
     fs.writeFileSync(file, "[]");
     expect(new Offsets(paths).get("ok")).toEqual({ offset: 0, sha: "-" });
+  });
+});
+
+// Guard 3.2: the crash matrix of the commit path (design 2.3), one test per
+// row. A crash is a failing append or write passed in; a restart is a fresh
+// Journal and loadBoard on the same files. No process is started or signalled.
+describe("a change and its record survive a crash between them", () => {
+  const ACTOR = { by: "aggregator" as const, label: "plain" };
+  let failing: boolean;
+  let journal: Journal;
+
+  beforeEach(() => {
+    failing = false;
+    journal = new Journal(paths.events);
+    target = { ...target, sink: sinkOf(() => journal) };
+  });
+
+  function sinkOf(current: () => Journal): CommitTarget["sink"] {
+    return {
+      has: (rid) => current().hasRecord(rid),
+      append: (record) => {
+        if (failing) throw new Error("disk full");
+        current().appendRecord(record);
+      },
+    };
+  }
+
+  function restart(): StoredBoard {
+    journal = new Journal(paths.events);
+    return loadBoard(target, "plain").board;
+  }
+
+  function boardLines(): StoredRecord[] {
+    return new Journal(paths.events).events.filter(
+      (event): event is StoredRecord => event.src === "board",
+    );
+  }
+
+  function commitTopic(board: StoredBoard, result: TopicResult) {
+    if (!result.ok || !result.changed) throw new Error("expected a change");
+    return commitChange(
+      target,
+      board,
+      { file: "topics", next: result.state, records: result.records },
+      ACTOR,
+    );
+  }
+
+  function liveBoard(): StoredBoard {
+    const state = done(create(emptyState(), { name: "A", goal: "g", id: "a" }, "T"));
+    const commit = commitTopic(
+      boardOf(emptyState()),
+      create(emptyState(), { name: "A", goal: "g", id: "a" }, "T"),
+    );
+    if (!commit.ok) throw new Error(commit.line);
+    expect(commit.board.topics).toEqual(state);
+    return commit.board;
+  }
+
+  it("nothing renamed: no change and no new record", () => {
+    const board = liveBoard();
+    fs.rmSync(paths.topics);
+    fs.mkdirSync(paths.topics);
+    expect(() => commitTopic(board, archive(board.topics, "a", "T2"))).toThrow();
+    fs.rmSync(paths.topics, { recursive: true });
+    expect(fs.existsSync(paths.archive)).toBe(true);
+    const after = restart();
+    expect(after.topics.doc.topics).toEqual({});
+    expect(boardLines().map((line) => line.kind)).toEqual(["topic.created"]);
+  });
+
+  it("an archive with only the archive file renamed: the topic stays live, no record", () => {
+    const board = liveBoard();
+    const archived = done(archive(board.topics as TopicState, "a", "T2"));
+    fs.writeFileSync(paths.archive, `${JSON.stringify(archived.archive, null, 2)}\n`);
+    const after = restart();
+    expect(Object.keys(after.topics.doc.topics)).toEqual(["a"]);
+    expect(after.topics.archive.topics).toEqual({});
+    expect(boardLines().map((line) => line.kind)).toEqual(["topic.created"]);
+  });
+
+  it("an archive with topics.json renamed and the append lost: replayed once at the start", () => {
+    const board = liveBoard();
+    failing = true;
+    const commit = commitTopic(board, archive(board.topics, "a", "T2"));
+    expect(commit).toMatchObject({ ok: true, appendError: "disk full" });
+    failing = false;
+    expect(boardLines().map((line) => line.kind)).toEqual(["topic.created"]);
+    const after = restart();
+    expect(Object.keys(after.topics.archive.topics)).toEqual(["a"]);
+    expect(boardLines().map((line) => line.kind)).toEqual(["topic.created", "topic.archived"]);
+    restart();
+    expect(boardLines()).toHaveLength(2);
+  });
+
+  it("a reopen with topics.json renamed and the archive not: live wins, the record is replayed", () => {
+    let board = liveBoard();
+    const commit = commitTopic(board, archive(board.topics, "a", "T2"));
+    if (!commit.ok) throw new Error(commit.line);
+    board = commit.board;
+    fs.rmSync(paths.archive);
+    fs.mkdirSync(paths.archive);
+    fs.writeFileSync(path.join(paths.archive, "in-the-way"), "");
+    expect(() => commitTopic(board, reopen(board.topics, "a", undefined, "T3"))).toThrow();
+    fs.rmSync(paths.archive, { recursive: true });
+    fs.writeFileSync(paths.archive, `${JSON.stringify(board.topics.archive, null, 2)}\n`);
+    const after = restart();
+    expect(Object.keys(after.topics.doc.topics)).toEqual(["a"]);
+    expect(after.topics.archive.topics).toEqual({});
+    expect(boardLines().map((line) => line.kind)).toEqual([
+      "topic.created",
+      "topic.archived",
+      "topic.reopened",
+    ]);
+  });
+
+  function itemChange(board: StoredBoard, adopt = false) {
+    const input = {
+      id: "vpn",
+      title: "登入 VPN",
+      topic: "a",
+      action: "登入",
+      guidance: "",
+      commands: [],
+      ref: "",
+      captainCloses: false,
+      adopt,
+    };
+    const added = addItem(board.todos, board.topics, input, "T", { name: "fm", label: "plain" });
+    if (!added.ok || !added.changed) throw new Error("expected a change");
+    const claimed = claimItem(added.store, "vpn", "T", "plain");
+    if (!claimed.ok || !claimed.changed) throw new Error("expected a change");
+    return { added, claimed };
+  }
+
+  it("an item change with only the projection renamed: rebuilt from todos.json, no record", () => {
+    const board = liveBoard();
+    const { added, claimed } = itemChange(board);
+    const commit = commitChange(
+      target,
+      board,
+      { file: "todos", next: added.store, records: added.records },
+      ACTOR,
+    );
+    if (!commit.ok) throw new Error(commit.line);
+    const projected = withProjection(commit.board.topics, claimed.store);
+    fs.writeFileSync(
+      paths.topics,
+      `${JSON.stringify({ ...projected.doc, outbox: [] }, null, 2)}\n`,
+    );
+    const after = restart();
+    expect(after.todos.items["vpn"]?.state).toBe("open");
+    expect(after.topics.doc.todos).toEqual({});
+    expect(boardLines().map((line) => line.kind)).toEqual(["topic.created", "todo.opened"]);
+  });
+
+  it("an item change with todos.json renamed and the append lost: replayed, projection rebuilt", () => {
+    const board = liveBoard();
+    const { added, claimed } = itemChange(board);
+    let commit = commitChange(
+      target,
+      board,
+      { file: "todos", next: added.store, records: added.records },
+      ACTOR,
+    );
+    if (!commit.ok) throw new Error(commit.line);
+    failing = true;
+    const captain = { by: "captain" as const, label: "plain" };
+    commit = commitChange(
+      target,
+      commit.board,
+      { file: "todos", next: claimed.store, records: claimed.records },
+      captain,
+    );
+    expect(commit).toMatchObject({ ok: true, appendError: "disk full" });
+    failing = false;
+    // A crash before topics.json's projection would have caught up.
+    const raw = JSON.parse(fs.readFileSync(paths.topics, "utf8")) as Record<string, unknown>;
+    fs.writeFileSync(paths.topics, `${JSON.stringify({ ...raw, todos: {} }, null, 2)}\n`);
+    const after = restart();
+    expect(after.topics.doc.todos).toEqual({ vpn: { state: "claimed", at: "T" } });
+    expect(boardLines().map((line) => [line.kind, line.by])).toEqual([
+      ["topic.created", "aggregator"],
+      ["todo.opened", "aggregator"],
+      ["todo.claimed", "captain"],
+    ]);
+  });
+
+  it("a journal line cut off mid-write: truncated, then the record is replayed once", () => {
+    const board = liveBoard();
+    failing = true;
+    commitTopic(board, archive(board.topics, "a", "T2"));
+    failing = false;
+    fs.appendFileSync(paths.events, '{"src":"board","rid":"r-test-2","ts":100,"ki');
+    restart();
+    expect(boardLines().map((line) => line.kind)).toEqual(["topic.created", "topic.archived"]);
+    expect(fs.readFileSync(paths.events, "utf8").endsWith("\n")).toBe(true);
+  });
+
+  it("a failed append with no crash: the next change saves it first, or is refused", () => {
+    let board = liveBoard();
+    failing = true;
+    const commit = commitTopic(board, archive(board.topics, "a", "T2"));
+    if (!commit.ok) throw new Error(commit.line);
+    board = commit.board;
+    const before = fs.readFileSync(paths.topics, "utf8");
+    const refused = commitTopic(board, reopen(board.topics, "a", undefined, "T3"));
+    expect(refused).toEqual({ ok: false, line: "看板寫不進紀錄（disk full），這次的修改沒有做" });
+    expect(fs.readFileSync(paths.topics, "utf8")).toBe(before);
+    failing = false;
+    // A hands-on change next: topics.json's waiting record still reaches the journal first.
+    const { added } = itemChange(board, true);
+    const next = commitChange(
+      target,
+      board,
+      { file: "todos", next: added.store, records: added.records },
+      ACTOR,
+    );
+    expect(next).toMatchObject({ ok: true, appendError: null });
+    expect(boardLines().map((line) => line.kind)).toEqual([
+      "topic.created",
+      "topic.archived",
+      "todo.adopted",
+    ]);
+  });
+
+  it("an append that was done: a restart dedupes by record id and adds nothing", () => {
+    const board = liveBoard();
+    commitTopic(board, archive(board.topics, "a", "T2"));
+    const lines = fs.readFileSync(paths.events, "utf8");
+    restart();
+    restart();
+    expect(fs.readFileSync(paths.events, "utf8")).toBe(lines);
+  });
+
+  it("refuses to start when a waiting record cannot be commit", () => {
+    const board = liveBoard();
+    failing = true;
+    commitTopic(board, archive(board.topics, "a", "T2"));
+    expect(() => restart()).toThrow("看板寫不進紀錄（disk full）");
   });
 });
