@@ -124,7 +124,7 @@ test_a_read_of_the_main_home_adopts_the_old_items() {
   view >/dev/null
   assert_equals null "$(item nas-2fa)" "the first read, before the board knows this side's name, must adopt nothing"
   view >/dev/null
-  assert_equals '{"title":"Turn on 2FA","topic":"billing","action":"開 NAS 的兩步驟驗證","guidance":"只在你人在電腦前時做。","commands":["sudo nas-2fa --on\n  --now","echo done"],"state":"open","reason":null,"by":"firstmate","ref":"hold","captain_closes":true,"created_at":"2026-07-24T09:30:00Z"}' \
+  assert_equals '{"title":"Turn on 2FA","topic":"billing","action":"開 NAS 的兩步驟驗證","guidance":"只在你人在電腦前時做。","commands":["sudo nas-2fa --on\n  --now","echo done"],"state":"open","reason":null,"by":"firstmate","ref":"hold","captain_closes":true,"adopted":true,"created_at":"2026-07-24T09:30:00Z"}' \
     "$(item nas-2fa | jq -c 'del(.at)')" "a labelled hold must become an item with its action, guidance and each command, under its tag's topic"
   assert_equals "$(jq -cn --arg cmd "$(printf 'sudo x --now "a b"\n\tps | grep x')" \
     '{title: "Restart x", topic: null, action: "重啟 x", guidance: "", commands: [$cmd], state: "claimed", ref: "hold"}')" \
@@ -226,6 +226,46 @@ test_a_secondmate_home_keeps_its_holds_as_decisions() {
   pass "a secondmate home keeps its 動手： holds as decisions and does not adopt"
 }
 
+new_code() {  # <message>: a new commit of the private code root, as an update lands
+  git -C "$FAKE" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m "$1"
+}
+
+# A board still running older code when an update lands: the adoption's own
+# todo add replaces it, from inside that board's read of the main home, or
+# from the session-start hook.
+test_an_adoption_replaces_a_board_on_older_code() {
+  local pid
+  t open >/dev/null
+  pid=$(tb_board_pid "$MAIN")
+  new_code "an update during a read"
+  backlog old-upgrade
+  sig_product_target "$MAIN" "a read whose adoption replaces the board"
+  tb_op "$MAIN" dump '{"refresh":true}' >/dev/null 2>&1 || true
+  wait_for "the item adopted by the new board" is_on_board old-upgrade
+  wait_for "one board" one_board
+  assert_not_equals "$pid" "$(tb_board_pid "$MAIN")" "the adoption must have replaced the board on older code"
+  assert_contains "$(t status)" "程式版本：$(git -C "$FAKE" rev-parse HEAD)" "the board must now run the new commit"
+
+  pid=$(tb_board_pid "$MAIN")
+  new_code "an update before a session start"
+  backlog old-upgrade old-hook2
+  sig_product_target "$MAIN" "the hook's adoption on older code"
+  assert_equals "看板服務：在跑" "$(FM_HOME="$MAIN" FM_ROOT_OVERRIDE="$FAKE" "$FAKE/bin/fm-topic-session-start.sh")" \
+    "the hook must print its one line"
+  is_on_board old-hook2 || fail "the hook's adoption must put the item on the board"
+  wait_for "one board" one_board
+  assert_not_equals "$pid" "$(tb_board_pid "$MAIN")" "the hook's adoption must have replaced the board on older code"
+  pass "an adoption replaces a board still on older code, from its own read or from the hook, and leaves one board"
+}
+
+is_on_board() {  # <id>
+  [ "$(item "$1")" != null ]
+}
+
+one_board() {
+  [ "$(tb_board_count "$MAIN")" = 1 ]
+}
+
 test_nothing_is_left() {
   t stop >/dev/null
   tb_stop_boards
@@ -234,4 +274,5 @@ test_nothing_is_left() {
 
 fm_test_run test_a_read_of_the_main_home_adopts_the_old_items test_a_second_pass_calls_the_board_only_when_needed \
   test_closing_an_item_closes_its_hold test_a_hold_closed_elsewhere_takes_its_item_off \
-  test_the_session_start_hook_adopts_with_no_page_open test_a_secondmate_home_keeps_its_holds_as_decisions test_nothing_is_left
+  test_the_session_start_hook_adopts_with_no_page_open test_a_secondmate_home_keeps_its_holds_as_decisions \
+  test_an_adoption_replaces_a_board_on_older_code test_nothing_is_left

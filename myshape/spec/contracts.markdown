@@ -166,7 +166,8 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
       "title": "登入 VPN", "topic": "solo", "action": "用公司帳號登入 VPN",
       "guidance": "只在公司網路外", "commands": ["sudo openconnect vpn.example.com"],
       "state": "open", "reason": null, "at": "2026-11-20T02:00:00Z",
-      "by": "firstmate", "ref": "", "captain_closes": false, "created_at": "2026-11-20T02:00:00Z"
+      "by": "firstmate", "ref": "", "captain_closes": false, "adopted": false,
+      "created_at": "2026-11-20T02:00:00Z"
     }
   },
   "marks": { "old-id": { "state": "claimed", "at": "2026-11-17T03:00:00Z" } },
@@ -174,10 +175,11 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
 }
 ```
 
-- `items` 是還在看板上的項目，鍵是項目 id（議題 id 的文法，最長 128 字元，由放上看板的一方選）。`title`、`action`、`commands` 一定有；`guidance` 可以是空字串，`commands` 可以是空陣列，每個指令原樣保存。`topic` 是放上看板時的議題 id（合併後顯示時跟到新的 id），只有搬上來、原本沒有議題的項目是 `null`。`state` 是 `open`、`claimed`、`rejected`、`obsolete`；`reason` 是 `rejected` 與 `obsolete` 的一行原因。`by` 是放上看板時 aggregator 的名字。`ref` 是 aggregator 自己選的不透明文字，最長 128 字元，看板只在通知裡原樣交回。`captain_closes` 是 `true` 的項目不再需要時要等使用者按「好，撤下」，不會直接撤下。
+- `items` 是還在看板上的項目，鍵是項目 id（議題 id 的文法，最長 128 字元，由放上看板的一方選）。`title`、`action`、`commands` 一定有；`guidance` 可以是空字串，`commands` 可以是空陣列，每個指令原樣保存。`topic` 是放上看板時的議題 id（合併後顯示時跟到新的 id），只有搬上來、原本沒有議題的項目是 `null`。`state` 是 `open`、`claimed`、`rejected`、`obsolete`；`reason` 是 `rejected` 與 `obsolete` 的一行原因。`by` 是放上看板時 aggregator 的名字。`ref` 是 aggregator 自己選的不透明文字，最長 128 字元，看板只在通知裡原樣交回。`captain_closes` 是 `true` 的項目不再需要時要等使用者按「好，撤下」，不會直接撤下。`adopted` 是 `true` 的項目是用 `--adopt` 放上來的，也就是 aggregator 在看板存項目之前就有的。
 - 項目關掉就從 `items` 拿掉；它的每一步都在 `events.jsonl` 有紀錄（第 3.3 節）。
 - `marks` 是看板第一次以這個格式啟動時，從 `topics.json` 的 `todos` 帶過來、還沒有項目的狀態；同一個 id 的項目用 `--adopt` 搬上看板時接手那個狀態。
-- `closed` 是 `ref` 為 `hold` 的項目在看板上關掉、而 aggregator 那邊的 hold 還開著的時間；在那之前同一個 id 的 `--adopt` 不會把它放回看板。
+- `todo adopt-done <id>…` 結束一輪搬移，給的是 aggregator 那邊還開著的舊項目：不在其中的等著的狀態清掉，不在其中的搬上來的項目離開看板，留一筆 `outcome` 是 `elsewhere` 的紀錄、不發通知。
+- `closed` 是搬上來的項目（`adopted`）在看板上關掉、而 aggregator 那邊還報它開著的時間；在那之前同一個 id 的 `--adopt` 不會把它放回看板，`todo adopt-done` 不再列它時就忘掉。
 - `v` 是 1 的期間，上面列的欄位意思不變；讀的一方略過不認得的欄位。沒有這個檔的看板第一次啟動時，`topics.json` 有狀態就立刻建立它；沒有的話第一次改項目時才建立，和看板其他的檔一樣，只是啟動不會在 home 裡多出檔。
 
 ## 4. 讀取契約（feed）

@@ -146,6 +146,7 @@ export function addItem(store, topics, input, now, agent) {
         by: agent.name,
         ref: input.ref !== "" ? input.ref : (current?.ref ?? ""),
         captain_closes: input.captainCloses || (current?.captain_closes ?? false),
+        adopted: input.adopt || (current?.adopted ?? false),
         created_at: current?.created_at ?? input.since ?? now,
     };
     next.items[input.id] = item;
@@ -160,7 +161,7 @@ function withState(store, id, state, now, reason) {
 /** The store without the item; an adopted one is remembered as closed until its hold is. */
 function without(store, id, now) {
     const next = structuredClone(store);
-    if (next.items[id]?.ref === "hold")
+    if (next.items[id]?.adopted === true)
         next.closed[id] = now;
     delete next.items[id];
     return next;
@@ -275,16 +276,16 @@ export function closeByCaptain(store, id, words, label, now) {
     return changed(without(store, id, now), `ok ${id} 已拿掉（${words}）`, [event], [notice]);
 }
 /**
- * Ends an adoption pass. `open` is every item that is still an open hold on
- * the aggregator's side: a waiting mark of anything else is dropped, and an
- * adopted item (ref "hold") whose hold is gone leaves the page with a record
- * and no notice, since the hold was already closed elsewhere.
+ * Ends an adoption pass. `open` is every item the aggregator still reports
+ * open on its side: a waiting mark of anything else is dropped, and an adopted
+ * item that is no longer open there leaves the page with a record and no
+ * notice, since it was already closed elsewhere.
  */
 export function adoptDone(store, open, label) {
     const still = new Set(open);
     const marks = Object.keys(store.marks).filter((id) => !still.has(id));
     const settled = Object.keys(store.closed).filter((id) => !still.has(id));
-    const gone = Object.entries(store.items).filter(([id, item]) => item.ref === "hold" && !still.has(id));
+    const gone = Object.entries(store.items).filter(([id, item]) => item.adopted && !still.has(id));
     if (marks.length === 0 && settled.length === 0 && gone.length === 0)
         return unchanged(store, "ok adopt-done 沒有要清的");
     const next = structuredClone(store);

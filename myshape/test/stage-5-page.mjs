@@ -94,7 +94,8 @@ export default async function run(page) {
   const todoButtons = todo(`[...card.querySelectorAll("button")].map((button) => button.textContent).join("|")`);
   const cardOf = (name) =>
     `[...document.querySelectorAll(".topic")].find((card) => card.innerText.includes(${JSON.stringify(name)})).innerText`;
-  await page.waitFor("the hands-on section", has("要你動手"));
+  // The items reach the page once firstmate's side has adopted them, at the board's second read.
+  await page.waitFor("the hands-on card", `document.querySelector('[data-todo="todo-1"]') !== null`, 15000);
   const blocks = await page.evaluate(todo(`JSON.stringify([...card.querySelectorAll("pre.cmd")].map((pre) => pre.textContent))`));
   if (blocks !== JSON.stringify([COMMAND, SECOND])) throw new Error(`each command must be its own block, exactly as written, got ${blocks}`);
   if ((await page.evaluate(todo(`card.querySelectorAll(".cmd-row button").length`))) !== 2)

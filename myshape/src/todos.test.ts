@@ -91,6 +91,7 @@ describe("adding an item", () => {
       by: "plain",
       ref: "r1",
       captain_closes: false,
+      adopted: false,
       created_at: NOW,
     });
     expect(result.events).toEqual([
@@ -167,6 +168,7 @@ describe("adopting an item from before the board kept items", () => {
       at: "T",
       ref: "hold",
       captain_closes: true,
+      adopted: true,
       created_at: since,
     });
     expect(result.store.marks).toEqual({});
@@ -342,7 +344,7 @@ describe("ending an adoption pass", () => {
     };
     store = added({ id: "adopted", ref: "hold", adopt: true }, store);
     store = added({ id: "still", ref: "hold", adopt: true }, store);
-    store = added({ id: "fresh" }, store);
+    store = added({ id: "fresh", ref: "hold" }, store);
     const result = ok(todos.adoptDone(store, ["kept", "still"], "plain"));
     expect(Object.keys(result.store.marks)).toEqual(["kept"]);
     expect(Object.keys(result.store.items).toSorted()).toEqual(["fresh", "still"]);
@@ -364,7 +366,7 @@ describe("ending an adoption pass", () => {
 
 describe("an adopted item closed on the board", () => {
   it("is not adopted again while its hold is still open, and is forgotten once the hold closes", () => {
-    const adopted = added({ adopt: true, ref: "hold", captainCloses: true });
+    const adopted = added({ adopt: true, ref: "other", captainCloses: true });
     const closed = ok(todos.doneItem(adopted, "vpn-login", "plain", NOW)).store;
     expect(closed.closed).toEqual({ "vpn-login": NOW });
     const again = ok(todos.addItem(closed, board(), input({ adopt: true }), LATER, AGENT));
@@ -374,7 +376,9 @@ describe("an adopted item closed on the board", () => {
     const settled = ok(todos.adoptDone(closed, [], "plain"));
     expect(settled.store.closed).toEqual({});
     expect(settled.events).toEqual([]);
-    expect(ok(todos.doneItem(added(), "vpn-login", "plain", NOW)).store.closed).toEqual({});
+    expect(
+      ok(todos.doneItem(added({ ref: "hold" }), "vpn-login", "plain", NOW)).store.closed,
+    ).toEqual({});
   });
 });
 

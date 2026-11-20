@@ -147,7 +147,7 @@ fmb_adopt() {
     [ -n "$items" ] || { printf '%s\n' "adopt：讀不懂 ${file}，沒有動看板" >&2; return 1; }
     pending=$(jq --argjson open "$(jq -c '[.legacy_todos[].id]' <<< "$report")" \
       '((.marks // {}) | length)
-       + ([(.items // {}) | to_entries[] | select(.value.ref == "hold" and ((.key as $id | $open | index($id)) == null))] | length)
+       + ([(.items // {}) | to_entries[] | select(.value.adopted == true and ((.key as $id | $open | index($id)) == null))] | length)
        + ([(.closed // {}) | keys[] | select(. as $id | $open | index($id) == null)] | length)' "$file" 2>/dev/null) || pending=0
   fi
   while IFS= read -r -d '' arg; do

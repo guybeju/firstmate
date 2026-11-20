@@ -102,7 +102,7 @@ stderr 第一行指出新的指令，第二行說使用者還要做什麼：這�
 
 ### 3.3 `adopt`：看板存項目之前的要你動手
 
-看板自己存項目（contracts 第 3.6 節）之前，first mate 的要你動手是主 home 原因以 `動手：` 開頭的 captain hold。`fm-board.sh adopt` 把還開著的這種 hold 搬上看板；`feed main` 每次讀主 home 之前跑一次，開 session 的 `fm-topic-session-start.sh` 也跑一次（最多 30 秒，輸出丟掉），所以沒開頁面也會搬。
+看板自己存項目（contracts 第 3.6 節）之前，first mate 的要你動手是主 home 原因以 `動手：` 開頭的 captain hold。`fm-board.sh adopt` 把還開著的這種 hold 搬上看板；`feed main` 每次讀主 home 之前跑一次，開 session 的 `fm-topic-session-start.sh` 也跑一次（印出它那一行之後，最多 15 秒，輸出丟掉），所以沒開頁面也會搬。
 
 - 每個還不在看板上的 hold：`myshape.sh todo add <id> <標題> [--topic <議題>] --do <第一行> [--note <說明>] [--cmd <指令>]… --ref hold --adopt --captain-closes [--since <Captain hold set 的時間>]`。說明與指令取自 C54 的標籤（`說明：`、`指令：`、`續：`）；有任何一行沒有標籤的舊紀錄，第一行之後全部當成一個指令。議題是那個 hold 自己的標記，沒有就用來源 task 的；都沒有就不給，看板把它放在沒有議題的項目裡。
 - 看板留著的舊狀態（`marks`）、已經搬上來而 hold 不在了的項目、在看板上關掉而 hold 也關了的項目（`closed`），有任何一種時，最後跑 `myshape.sh todo adopt-done <還開著的這種 hold>`：hold 不在了的項目離開看板並留一筆「hold 已在別處關掉」的紀錄，不發通知。

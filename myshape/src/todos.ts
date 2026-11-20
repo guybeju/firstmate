@@ -26,6 +26,8 @@ export interface TodoItem {
   ref: string;
   /** Only the captain's own press takes it down when it is no longer needed. */
   captain_closes: boolean;
+  /** Put on the board with --adopt: an item the aggregator kept before the board did. */
+  adopted: boolean;
   created_at: string;
 }
 
@@ -35,9 +37,9 @@ export interface TodoStore {
   /** Marks carried over from topics.json's `todos`, waiting for their item to be adopted. */
   marks: Record<string, TodoMark>;
   /**
-   * Adopted items (ref "hold") closed on the board whose hold the aggregator
-   * has not closed yet, with when: an adoption pass in that gap must not put
-   * them back. The next pass that no longer finds the hold open drops them.
+   * Adopted items closed on the board that the aggregator still reports open,
+   * with when: an adoption pass in that gap must not put them back. The next
+   * pass that no longer finds them open drops them.
    */
   closed: Record<string, string>;
 }
@@ -295,6 +297,7 @@ export function addItem(
     by: agent.name,
     ref: input.ref !== "" ? input.ref : (current?.ref ?? ""),
     captain_closes: input.captainCloses || (current?.captain_closes ?? false),
+    adopted: input.adopt || (current?.adopted ?? false),
     created_at: current?.created_at ?? input.since ?? now,
   };
   next.items[input.id] = item;
@@ -317,7 +320,7 @@ function withState(
 /** The store without the item; an adopted one is remembered as closed until its hold is. */
 function without(store: TodoStore, id: string, now: string): TodoStore {
   const next = structuredClone(store);
-  if (next.items[id]?.ref === "hold") next.closed[id] = now;
+  if (next.items[id]?.adopted === true) next.closed[id] = now;
   delete next.items[id];
   return next;
 }
@@ -491,18 +494,16 @@ export function closeByCaptain(
 }
 
 /**
- * Ends an adoption pass. `open` is every item that is still an open hold on
- * the aggregator's side: a waiting mark of anything else is dropped, and an
- * adopted item (ref "hold") whose hold is gone leaves the page with a record
- * and no notice, since the hold was already closed elsewhere.
+ * Ends an adoption pass. `open` is every item the aggregator still reports
+ * open on its side: a waiting mark of anything else is dropped, and an adopted
+ * item that is no longer open there leaves the page with a record and no
+ * notice, since it was already closed elsewhere.
  */
 export function adoptDone(store: TodoStore, open: string[], label: string): TodoResult {
   const still = new Set(open);
   const marks = Object.keys(store.marks).filter((id) => !still.has(id));
   const settled = Object.keys(store.closed).filter((id) => !still.has(id));
-  const gone = Object.entries(store.items).filter(
-    ([id, item]) => item.ref === "hold" && !still.has(id),
-  );
+  const gone = Object.entries(store.items).filter(([id, item]) => item.adopted && !still.has(id));
   if (marks.length === 0 && settled.length === 0 && gone.length === 0)
     return unchanged(store, "ok adopt-done 沒有要清的");
   const next = structuredClone(store);

@@ -303,6 +303,7 @@ function parseItem(raw: unknown): TodoItem | null {
     by: textField(raw, "by"),
     ref: textField(raw, "ref"),
     captain_closes: raw["captain_closes"] === true,
+    adopted: raw["adopted"] === true,
     created_at: textField(raw, "created_at"),
   };
 }

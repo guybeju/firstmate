@@ -82,10 +82,10 @@
 # --adopt is for items an aggregator kept before the board kept them: it
 # accepts an archived topic, an unknown one or none, keeps the mark such an
 # item already had, and changes nothing for an item already on the board or
-# one closed on the board whose hold is still open; --since is when the item
+# one closed on the board that the aggregator still reports open; --since is when the item
 # was first opened, an ISO 8601 time. adopt-done ends such a pass: given every
 # such item still open on the aggregator's side, it drops the marks of the
-# others and takes adopted items (--ref hold) that are no longer open off the
+# others and takes adopted items that are no longer open there off the
 # page, with a record and no notice.
 #
 # Every step of an item (put on, rewritten, adopted, claimed, failed, marked no

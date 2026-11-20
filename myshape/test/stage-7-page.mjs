@@ -50,7 +50,7 @@ async function handsOn(page) {
   topic("todo", "add", "k3", "舊的", "--topic", "solo", "--do", "x", "--captain-closes");
   const card = (id, expression) =>
     `(() => { const card = document.querySelector('[data-todo="${id}"]'); return ${expression}; })()`;
-  await page.waitFor("the hands-on cards", `document.querySelectorAll("[data-todo]").length === 3`);
+  await page.waitFor("the hands-on cards", `document.querySelectorAll("[data-todo]").length === 3`, 15000);
   const shape = await page.evaluate(card("k1",
     `JSON.stringify([[...card.querySelectorAll("pre.cmd")].map((pre) => pre.textContent), card.querySelectorAll(".cmd-row button").length, card.querySelector(".guide")?.textContent ?? null])`));
   if (shape !== JSON.stringify([commands, 2, "只在公司網路外"]))
@@ -66,27 +66,27 @@ async function handsOn(page) {
   }
   await noFirstmate(page, "a hands-on card still to do");
   await page.click('[data-todo="k1"] button', "做完了");
-  await page.waitFor("the claim shown", card("k1", `card.innerText.includes("你已按做完了，等 plain 驗證")`));
+  await page.waitFor("the claim shown", card("k1", `card.innerText.includes("你已按做完了，等 plain 驗證")`), 15000);
   await noFirstmate(page, "a claimed card");
   topic("todo", "failed", "k1", "--reason", "連不上");
-  await page.waitFor("the failed check", card("k1", `card.innerText.includes("plain 驗證沒過：連不上")`));
+  await page.waitFor("the failed check", card("k1", `card.innerText.includes("plain 驗證沒過：連不上")`), 15000);
   topic("todo", "obsolete", "k3", "--reason", "不用了");
-  await page.waitFor("the item no longer needed", card("k3", `card.innerText.includes("plain：不再需要了。不用了")`));
+  await page.waitFor("the item no longer needed", card("k3", `card.innerText.includes("plain：不再需要了。不用了")`), 15000);
   await noFirstmate(page, "a rejected card and a card no longer needed");
   await page.click('[data-todo="k3"] button', "好，撤下");
   await page.waitFor("the takedown's confirm step", card("k3", `card.querySelector(".confirm") !== null`));
   await noFirstmate(page, "the takedown's confirm step");
   await page.click('[data-todo="k3"] .confirm button', "確定");
-  await page.waitFor("k3 gone", `document.querySelector('[data-todo="k3"]') === null`);
+  await page.waitFor("k3 gone", `document.querySelector('[data-todo="k3"]') === null`, 15000);
   await page.click('[data-todo="k2"] button', "不做了");
   await page.waitFor("不做了's confirm step", card("k2", `card.querySelector(".confirm") !== null`));
   await page.click('[data-todo="k2"] .confirm button', "確定");
-  await page.waitFor("k2 gone", `document.querySelector('[data-todo="k2"]') === null`);
+  await page.waitFor("k2 gone", `document.querySelector('[data-todo="k2"]') === null`, 15000);
   for (let tries = 0; tries < 60 && received().filter((entry) => entry.event === "todo.closed").length < 2; tries += 1) await sleep(150);
   const closes = received().filter((entry) => entry.event === "todo.closed").map((entry) => `${entry.item.id}:${entry.by}:${entry.words}`);
   if (closes.join(" ") !== "k3:captain:撤下 k2:captain:不做了") throw new Error(`each press must reach the stub: ${closes.join(" ")}`);
   topic("todo", "done", "k1");
-  await page.waitFor("k1 gone", `document.querySelector('[data-todo="k1"]') === null`);
+  await page.waitFor("k1 gone", `document.querySelector('[data-todo="k1"]') === null`, 15000);
   await noFirstmate(page, "the home page after the items closed");
 }
 
