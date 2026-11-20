@@ -28,7 +28,8 @@
 # origin's; none when it has neither; --since is the hold's set time when it
 # has one. Only holds not on the board yet are
 # added. When the board keeps waiting marks or adopted items, the pass ends
-# with "myshape.sh todo adopt-done <every such hold still open>". It reads the
+# with "myshape.sh todo adopt-done <every such hold still open>"; so does an
+# adopted item the board closed whose hold is now closed too. It reads the
 # board's data/myshape/todos.json first and calls the board only when there is
 # something to do.
 #
@@ -137,7 +138,9 @@ fmb_adopt() {
     items=$(jq -c '.items // {} | objects' "$file" 2>/dev/null) || items=''
     [ -n "$items" ] || { printf '%s\n' "adopt：讀不懂 ${file}，沒有動看板" >&2; return 1; }
     pending=$(jq --argjson open "$(jq -c '[.legacy_todos[].id]' <<< "$report")" \
-      '((.marks // {}) | length) + ([(.items // {}) | to_entries[] | select(.value.ref == "hold" and ((.key as $id | $open | index($id)) == null))] | length)' "$file" 2>/dev/null) || pending=0
+      '((.marks // {}) | length)
+       + ([(.items // {}) | to_entries[] | select(.value.ref == "hold" and ((.key as $id | $open | index($id)) == null))] | length)
+       + ([(.closed // {}) | keys[] | select(. as $id | $open | index($id) == null)] | length)' "$file" 2>/dev/null) || pending=0
   fi
   while IFS= read -r -d '' arg; do
     if [ -n "$arg" ]; then

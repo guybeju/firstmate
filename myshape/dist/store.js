@@ -265,6 +265,7 @@ function parseTodoStore(raw) {
             store.items[id] = item;
     }
     store.marks = parseTodos(raw["marks"]);
+    store.closed = isRecord(raw["closed"]) ? stringRecord(raw["closed"]) : {};
     return store;
 }
 /**

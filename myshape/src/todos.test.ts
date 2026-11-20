@@ -234,7 +234,7 @@ describe("the life of an item", () => {
   });
 
   it("closes on done, with a record on its topic and a notice by the aggregator", () => {
-    const done = ok(todos.doneItem(added(), "vpn-login", "plain"));
+    const done = ok(todos.doneItem(added(), "vpn-login", "plain", NOW));
     expect(done.line).toBe("ok vpn-login 已關（做完了，plain 已驗證）");
     expect(done.store.items).toEqual({});
     expect(done.events).toEqual([
@@ -245,7 +245,7 @@ describe("the life of an item", () => {
     expect(done.notices).toMatchObject([
       { event: "todo.closed", by: "aggregator", words: "做完了", id: "vpn-login" },
     ]);
-    expect(refusal(todos.doneItem(done.store, "vpn-login", "plain"))).toBe(
+    expect(refusal(todos.doneItem(done.store, "vpn-login", "plain", NOW))).toBe(
       "vpn-login 不是開著的「要你動手」項目，沒有關任何東西（已經關過的話不用再跑）。",
     );
   });
@@ -281,7 +281,7 @@ describe("the life of an item", () => {
   });
 
   it("closes on the captain's 不做了 and 好，撤下, with the captain's words", () => {
-    const dropped = ok(todos.closeByCaptain(added(), "vpn-login", "不做了", "plain"));
+    const dropped = ok(todos.closeByCaptain(added(), "vpn-login", "不做了", "plain", NOW));
     expect(dropped.events).toEqual([
       rec("todo.dropped", "要你動手「登入 VPN」已關：你選了不做了（你在頁面上）", {
         by: "captain",
@@ -296,7 +296,7 @@ describe("the life of an item", () => {
         text: "使用者在看板上：「登入 VPN」不做了（vpn-login）",
       },
     ]);
-    expect(refusal(todos.closeByCaptain(added(), "vpn-login", "撤下", "plain"))).toBe(
+    expect(refusal(todos.closeByCaptain(added(), "vpn-login", "撤下", "plain", NOW))).toBe(
       "vpn-login 沒有被標成不再需要，不能撤下。",
     );
     const held = ok(
@@ -308,10 +308,10 @@ describe("the life of an item", () => {
         "plain",
       ),
     ).store;
-    expect(refusal(todos.closeByCaptain(held, "vpn-login", "不做了", "plain"))).toBe(
+    expect(refusal(todos.closeByCaptain(held, "vpn-login", "不做了", "plain", NOW))).toBe(
       "vpn-login 現在不能按不做了。",
     );
-    const takenDown = ok(todos.closeByCaptain(held, "vpn-login", "撤下", "plain"));
+    const takenDown = ok(todos.closeByCaptain(held, "vpn-login", "撤下", "plain", NOW));
     expect(takenDown.events).toEqual([
       rec("todo.taken_down", "要你動手「登入 VPN」已撤下（你在頁面上）", {
         by: "captain",
@@ -320,12 +320,12 @@ describe("the life of an item", () => {
     ]);
     expect(takenDown.notices).toMatchObject([{ by: "captain", words: "撤下", ref: "hold" }]);
     const claimed = ok(todos.claimItem(added(), "vpn-login", NOW, "p")).store;
-    expect(todos.closeByCaptain(claimed, "vpn-login", "不做了", "plain").ok).toBe(false);
+    expect(todos.closeByCaptain(claimed, "vpn-login", "不做了", "plain", NOW).ok).toBe(false);
   });
 
   it("gives an item with no topic its records too", () => {
     const none = added({ adopt: true, topic: null });
-    expect(ok(todos.doneItem(none, "vpn-login", "plain")).events).toEqual([
+    expect(ok(todos.doneItem(none, "vpn-login", "plain", NOW)).events).toEqual([
       rec("todo.done", "要你動手「登入 VPN」已關：做完了，plain 已驗證（plain 用指令）", {
         topic: null,
         outcome: "done",
@@ -362,6 +362,22 @@ describe("ending an adoption pass", () => {
   });
 });
 
+describe("an adopted item closed on the board", () => {
+  it("is not adopted again while its hold is still open, and is forgotten once the hold closes", () => {
+    const adopted = added({ adopt: true, ref: "hold", captainCloses: true });
+    const closed = ok(todos.doneItem(adopted, "vpn-login", "plain", NOW)).store;
+    expect(closed.closed).toEqual({ "vpn-login": NOW });
+    const again = ok(todos.addItem(closed, board(), input({ adopt: true }), LATER, AGENT));
+    expect(again.changed).toBe(false);
+    expect(again.line).toBe("ok vpn-login 已在看板上關掉，等它的 hold 關掉");
+    expect(ok(todos.adoptDone(closed, ["vpn-login"], "plain")).changed).toBe(false);
+    const settled = ok(todos.adoptDone(closed, [], "plain"));
+    expect(settled.store.closed).toEqual({});
+    expect(settled.events).toEqual([]);
+    expect(ok(todos.doneItem(added(), "vpn-login", "plain", NOW)).store.closed).toEqual({});
+  });
+});
+
 describe("what topics.json keeps publishing", () => {
   it("is the mark of every item that is not open, plus every waiting mark", () => {
     let store: TodoStore = {
@@ -390,7 +406,7 @@ describe("the file", () => {
     const doc = emptyState().doc;
     doc.todos = { old: { state: "rejected", at: "T", reason: "沒起來" } };
     const first = loadTodos(paths, doc);
-    expect(first).toEqual({ v: 1, items: {}, marks: doc.todos });
+    expect(first).toEqual({ v: 1, items: {}, marks: doc.todos, closed: {} });
     expect(fs.statSync(paths.todos).mode & 0o777).toBe(0o644);
     const store = added({ adopt: true, ref: "hold" }, first);
     saveTodos(paths, store);

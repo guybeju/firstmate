@@ -252,7 +252,7 @@ function closeByCaptain(service, args, words) {
     const task = stringField(args, "task");
     if (task === null)
         return todoUsage("需要 task id。");
-    return todos.closeByCaptain(service.todos, task, words, labelOf(service));
+    return todos.closeByCaptain(service.todos, task, words, labelOf(service), now());
 }
 /** The hands-on operations: the aggregator's over the socket, the captain's on the page. */
 const TODO_HANDLERS = {
@@ -267,7 +267,7 @@ const TODO_HANDLERS = {
         const task = stringField(args, "task");
         return task === null
             ? todoUsage("需要 task id。")
-            : todos.doneItem(service.todos, task, labelOf(service));
+            : todos.doneItem(service.todos, task, labelOf(service), now());
     },
     "todo-failed": (service, args) => {
         const verdict = verdictArgs(args);

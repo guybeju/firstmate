@@ -34,6 +34,12 @@ export interface TodoStore {
   items: Record<string, TodoItem>;
   /** Marks carried over from topics.json's `todos`, waiting for their item to be adopted. */
   marks: Record<string, TodoMark>;
+  /**
+   * Adopted items (ref "hold") closed on the board whose hold the aggregator
+   * has not closed yet, with when: an adoption pass in that gap must not put
+   * them back. The next pass that no longer finds the hold open drops them.
+   */
+  closed: Record<string, string>;
 }
 
 export type CloseWords = "不做了" | "撤下";
@@ -120,7 +126,7 @@ const TEXT_MAX = 20_000;
 const COMMANDS_MAX = 50;
 
 export function emptyTodos(): TodoStore {
-  return { v: 1, items: {}, marks: {} };
+  return { v: 1, items: {}, marks: {}, closed: {} };
 }
 
 /** The id grammar topic ids and task ids share, at most 128 characters. */
@@ -269,6 +275,8 @@ export function addItem(
   if (typeof placed === "string") return input.topic === null ? usage(placed) : refused(placed);
   const current = itemOf(store, input.id);
   const line = addedLine(input.id, placed.topic);
+  if (input.adopt && current === undefined && Object.hasOwn(store.closed, input.id))
+    return unchanged(store, `ok ${input.id} 已在看板上關掉，等它的 hold 關掉`);
   if (current !== undefined && (input.adopt || sameText(current, input, placed.topic)))
     return unchanged(store, line);
   const next = structuredClone(store);
@@ -306,8 +314,10 @@ function withState(
   return next;
 }
 
-function without(store: TodoStore, id: string): TodoStore {
+/** The store without the item; an adopted one is remembered as closed until its hold is. */
+function without(store: TodoStore, id: string, now: string): TodoStore {
   const next = structuredClone(store);
+  if (next.items[id]?.ref === "hold") next.closed[id] = now;
   delete next.items[id];
   return next;
 }
@@ -421,11 +431,11 @@ export function obsoleteItem(
     "aggregator",
     "撤下",
   );
-  return changed(without(store, id), `ok ${id} 已撤下（不再需要）`, [event], [notice]);
+  return changed(without(store, id, now), `ok ${id} 已撤下（不再需要）`, [event], [notice]);
 }
 
 /** The aggregator checked that the captain did it: the item is closed. */
-export function doneItem(store: TodoStore, id: string, label: string): TodoResult {
+export function doneItem(store: TodoStore, id: string, label: string, now: string): TodoResult {
   const item = itemOf(store, id);
   if (item === undefined)
     return refused(`${id} 不是開著的「要你動手」項目，沒有關任何東西（已經關過的話不用再跑）。`);
@@ -440,7 +450,12 @@ export function doneItem(store: TodoStore, id: string, label: string): TodoResul
     "aggregator",
     "做完了",
   );
-  return changed(without(store, id), `ok ${id} 已關（做完了，${label} 已驗證）`, [event], [notice]);
+  return changed(
+    without(store, id, now),
+    `ok ${id} 已關（做完了，${label} 已驗證）`,
+    [event],
+    [notice],
+  );
 }
 
 /**
@@ -452,6 +467,7 @@ export function closeByCaptain(
   id: string,
   words: CloseWords,
   label: string,
+  now: string,
 ): TodoResult {
   const item = itemOf(store, id);
   if (item === undefined) return notOpen(id);
@@ -471,7 +487,7 @@ export function closeByCaptain(
     "captain",
     words,
   );
-  return changed(without(store, id), `ok ${id} 已拿掉（${words}）`, [event], [notice]);
+  return changed(without(store, id, now), `ok ${id} 已拿掉（${words}）`, [event], [notice]);
 }
 
 /**
@@ -483,12 +499,15 @@ export function closeByCaptain(
 export function adoptDone(store: TodoStore, open: string[], label: string): TodoResult {
   const still = new Set(open);
   const marks = Object.keys(store.marks).filter((id) => !still.has(id));
+  const settled = Object.keys(store.closed).filter((id) => !still.has(id));
   const gone = Object.entries(store.items).filter(
     ([id, item]) => item.ref === "hold" && !still.has(id),
   );
-  if (marks.length === 0 && gone.length === 0) return unchanged(store, "ok adopt-done 沒有要清的");
+  if (marks.length === 0 && settled.length === 0 && gone.length === 0)
+    return unchanged(store, "ok adopt-done 沒有要清的");
   const next = structuredClone(store);
   for (const id of marks) delete next.marks[id];
+  for (const id of settled) delete next.closed[id];
   const actor: Actor = { by: "aggregator", label };
   const events: TodoEvent[] = gone.map(([id, item]) => {
     delete next.items[id];
