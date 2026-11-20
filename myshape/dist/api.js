@@ -96,7 +96,8 @@ const resend = (host, body) => {
     const act = () => fromProblem(host.writes.resend(id, unknown));
     return unknown ? twoStep(host, body, bindingOf("resend", id), act) : act();
 };
-const ROUTES = {
+/** Every browser API route, as "<method> <path>". */
+export const ROUTES = {
     "GET state": state,
     "POST refresh": refresh,
     "POST topics/move": move,

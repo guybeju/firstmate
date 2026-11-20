@@ -1,7 +1,3 @@
-// Looks up where a topic or task is now and how it got there, from the
-// history kept in the topic file. Pure, and bounded: the answer is meant to be
-// read by firstmate without filling its context. Asked for everything, it
-// drops the bounds and prints exact times, for working out what went wrong.
 import { QUEUES, resolveTopicId } from "./topics.js";
 const MAX_TOPICS = 5;
 const MAX_HISTORY = 8;

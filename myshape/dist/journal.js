@@ -1,11 +1,11 @@
 // The board's own append-only files: the event journal (every home's ledger
 // events plus the board's system records), the milestone summaries, and the
 // per-home ledger offsets.
-import { appendLine, isRecord, readCompleteLines, readJsonFile, stringField, textField, writeFileAtomic, } from "./files.js";
+import { appendLine, appendLineDurable, isRecord, readCompleteLines, readJsonFile, stringField, textField, writeFileAtomic, } from "./files.js";
 import path from "node:path";
 const FILE_MODE = 0o644;
 export const MAIN_HOME = "main";
-const OPTIONAL_BOARD_FIELDS = ["item", "by", "label", "outcome", "reason"];
+const OPTIONAL_BOARD_FIELDS = ["rid", "item", "by", "label", "outcome", "reason"];
 function parseLedgerLine(home, raw) {
     let line;
     try {
@@ -68,15 +68,22 @@ export class Journal {
     file;
     events = [];
     seen = new Set();
+    rids = new Set();
     constructor(file) {
         this.file = file;
         for (const line of readCompleteLines(file)) {
             const { event, key } = parseStored(line);
             if (key !== null)
                 this.seen.add(key);
+            if (event?.src === "board" && event.rid !== undefined)
+                this.rids.add(event.rid);
             if (event !== null)
                 this.events.push(event);
         }
+    }
+    /** True when the record with this id is already saved. */
+    hasRecord(rid) {
+        return this.rids.has(rid);
     }
     /** Stores the ledger lines not seen before for `home`; returns how many were new. */
     appendLedger(home, rawLines) {
@@ -94,10 +101,11 @@ export class Journal {
         }
         return added;
     }
-    appendBoard(event) {
-        const stored = { src: "board", ...event };
-        appendLine(this.file, JSON.stringify(stored), FILE_MODE);
-        this.events.push(stored);
+    /** Saves one system record, on disk before it returns; only store.ts commitChange calls it. */
+    appendRecord(record) {
+        appendLineDurable(this.file, JSON.stringify(record), FILE_MODE);
+        this.rids.add(record.rid);
+        this.events.push(record);
     }
 }
 export const SUMMARY_KINDS = ["ready", "report", "failed", "landed"];

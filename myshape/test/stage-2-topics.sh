@@ -219,7 +219,7 @@ JSON
   assert_equals "turned-down" "$(jq -r '.topics | keys | join(" ")' "$home/data/topics-archive.json")" \
     "an archived proposal must stay archived"
   assert_equals "first" "$(jq -r '.merged["old-first"]' "$home/data/topics.json")" "merged ids must be kept"
-  assert_equals 3 "$(grep -c '"kind":"topic.confirmed"' "$home/data/myshape/events.jsonl")" \
+  assert_equals 4 "$(grep -c '"kind":"topic.confirmed"' "$home/data/myshape/events.jsonl")" \
     "each confirmed proposal must write one system record"
   grep -q '看板不再等確認.*Second.*（id：second）' "$home/state/myshape/audit.jsonl" ||
     fail "firstmate, which may still be waiting to hear, must be told what was confirmed"
@@ -228,7 +228,7 @@ JSON
   tb_run "$home" "$BOARD" tag task-10 urgent >/dev/null || fail "a confirmed proposal must take tags"
   tb_run "$home" "$TOPIC" restart >/dev/null
   tb_run "$home" "$TOPIC" find First >/dev/null
-  assert_equals 3 "$(grep -c '"kind":"topic.confirmed"' "$home/data/myshape/events.jsonl")" \
+  assert_equals 4 "$(grep -c '"kind":"topic.confirmed"' "$home/data/myshape/events.jsonl")" \
     "a later start must confirm nothing more"
   tb_run "$home" "$TOPIC" stop >/dev/null
   pass "a board that starts with leftover proposals confirms them at the end of their queues"

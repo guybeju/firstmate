@@ -4,7 +4,8 @@
 # on its first failed assertion. The scripts run under the bash that runs this
 # file, so `/bin/bash run.sh` checks them against that bash. Stage 6, the rules
 # and the setup guide, moved with the rules to fm-board/test/run.sh; stage 7
-# runs the board alone, from a copy holding only its own files.
+# runs the board alone, from a copy holding only its own files. The two static
+# checks (signals, state writers) run first, whatever stages are named.
 #
 # Usage: myshape/test/run.sh [stage-number...]
 set -euo pipefail
@@ -15,6 +16,7 @@ if [ "$#" -eq 0 ]; then
 fi
 
 "${BASH:-bash}" "$TEST_DIR/check-signals.sh"
+"${BASH:-bash}" "$TEST_DIR/check-state-writers.sh"
 ran=0
 for stage in "$@"; do
   case "$stage" in
