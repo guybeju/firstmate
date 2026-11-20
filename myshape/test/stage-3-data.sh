@@ -198,8 +198,11 @@ test_event_follows_the_tag_in_effect() {
   ledger "$MAIN" '{"v":1,"ts":1782960000,"event":"task.status","task":"ship-a","state":"done","key":null,"text":" finished"}'
   assert_equals "login" "$(view '.agents[] | select(.task == "ship-a") | .topic')" "the agent must follow its newest tag"
   assert_equals "login:1 billing:3" \
-    "$(view '[.updates[] | select(.task == "ship-a")] | group_by(.topic) | map("\(.[0].topic):\(length)") | reverse | join(" ")')" \
+    "$(view '[.updates[] | select(.task == "ship-a" and .source == "ledger")] | group_by(.topic) | map("\(.[0].topic):\(length)") | reverse | join(" ")')" \
     "events before a re-tag stay with the old topic; later events go to the new one"
+  assert_equals "login:1 billing:1" \
+    "$(view '[.updates[] | select(.task == "ship-a" and .source == "tag")] | group_by(.topic) | map("\(.[0].topic):\(length)") | reverse | join(" ")')" \
+    "each tag made by command must show once, under the topic it filed the task in"
   pass "each ledger event belongs to the topic tagged when it happened"
 }
 
