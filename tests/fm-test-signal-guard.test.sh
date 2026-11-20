@@ -316,6 +316,61 @@ test_crash_at_below_signals_the_process_under_the_child() {
   pass "fm_test_crash_at with a command line signals the one process under the recorded child"
 }
 
+# A case script for a failed crash point, run as its own bash so the shell
+# that started the recorded child is that script's main shell: it starts a
+# --below tree whose victim keeps running for up to 40 s after its stand-in is
+# released (until <dir>/stop exists), records it, and calls fm_test_crash_at
+# with a command line nothing matches, so the guard refuses.
+write_abandon_case() {  # <dir>
+  cat > "$1/abandon-case.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+dir=$1
+. "$2/tests/lib.sh"
+fm_fake_crash_point "$dir/fakebin"
+cat > "$dir/fakebin/stand-in" <<'IN'
+#!/usr/bin/env bash
+fm-crash-point "$1" below || exit 1
+IN
+chmod +x "$dir/fakebin/stand-in"
+PATH="$dir/fakebin:$PATH" bash -c '"$0" "$1"; i=0; while [ ! -e "$1/stop" ] && [ "$i" -lt 800 ]; do sleep 0.05; i=$((i + 1)); done; : > "$1/went-on"' \
+  "$dir/fakebin/stand-in" "$dir" &
+child=$!
+printf '%s\n' "$child" > "$dir/child.pid"
+fm_test_record_child "$child"
+fm_test_crash_at "$dir" below KILL "$child" "bash $dir/no-such.sh *"
+echo "crash point returned"
+SH
+}
+
+test_a_refused_crash_point_never_leaves_its_child_behind() {
+  local dir="$TMP_ROOT/abandon" rc=0 child i=0 started
+  mkdir -p "$dir/fakebin"
+  write_abandon_case "$dir"
+  started=$SECONDS
+  bash "$dir/abandon-case.sh" "$dir" "$ROOT" > "$dir/out" 2> "$dir/err" || rc=$?
+  child=$(cat "$dir/child.pid")
+  if fm_test_signal_dry_run; then
+    [ "$rc" -eq 0 ] || fail "the log-only case failed (status $rc): $(cat "$dir/err")"
+    assert_contains "$(grep -F "source=fm_test_crash_at" "$FM_TEST_SIGNAL_LOG" | tail -n 1)" "refused: 0 processes" \
+      "the log-only refusal of the crash point was not logged"
+    : > "$dir/stop"
+    while [ -n "$(fm_test_process_state "$child")" ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+  else
+    [ "$rc" -eq 1 ] || fail "a refused crash point did not fail its case (status $rc): $(cat "$dir/out")"
+    assert_grep "signal guard: refused: 0 processes" "$dir/err" "the failure did not name the guard's refusal"
+    assert_no_grep "crash point returned" "$dir/out" "the case went on past its refused crash point"
+    [ $((SECONDS - started)) -ge 30 ] || fail "the child was ended before its 30 s to end by itself"
+    assert_absent "$dir/went-on" "the still-running child was left to go on"
+  fi
+  [ -z "$(fm_test_process_state "$child")" ] \
+    || fail "the refused crash point left its recorded child $child running"
+  i=0
+  while running_under "$dir/" && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
+  ! running_under "$dir/" || fail "the refused crash point left processes running under $dir"
+  pass "a refused crash point releases its stand-in and ends its own child before it fails"
+}
+
 fm_test_run \
   test_forms_without_one_explicit_pid_are_refused \
   test_the_suite_its_parent_and_the_user_manager_are_refused \
@@ -327,4 +382,5 @@ fm_test_run \
   test_crash_point_gives_up_without_resuming \
   test_below_accepts_only_the_one_matching_process_under_the_recorded_child \
   test_below_refuses_a_matching_process_outside_the_recorded_child \
-  test_crash_at_below_signals_the_process_under_the_child
+  test_crash_at_below_signals_the_process_under_the_child \
+  test_a_refused_crash_point_never_leaves_its_child_behind

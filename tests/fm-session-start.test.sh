@@ -514,12 +514,15 @@ SH
 }
 
 # make_fake_herdr_deadly_read <fakebin> <live-pane> <kill-pane> <crash-dir>:
-# like make_fake_herdr, but the first `pane get <kill-pane>` stops at crash
-# point deadly-read in <crash-dir>, where the case KILLs the shell running the
-# endpoint read (fm_test_crash_at with that read's command line). This is the
+# like make_fake_herdr, but the per-task endpoint read of <kill-pane> stops at
+# crash point deadly-read in <crash-dir>, where the case KILLs the shell running
+# that read (fm_test_crash_at with that read's command line). This is the
 # digest-death shape: a per-task herdr liveness read whose process died
-# mid-read, which used to take the whole session-start digest with it. A later
-# read of <kill-pane> reports the pane gone.
+# mid-read, which used to take the whole session-start digest with it. The
+# digest also reads <kill-pane> earlier, from its wake-queue stage, so the fake
+# picks the endpoint read by the digest's own stage record, fleet-state, never
+# by its parents; every other read of <kill-pane>, and a later one, reports it
+# alive.
 make_fake_herdr_deadly_read() {
   local fakebin=$1 live=$2 killpane=$3 crash_dir=$4
   fm_fake_crash_point "$fakebin"
@@ -528,8 +531,10 @@ make_fake_herdr_deadly_read() {
 set -u
 if [ "\${1:-}" = pane ] && [ "\${2:-}" = get ]; then
   if [ "\${3:-}" = "$killpane" ]; then
-    [ ! -e "$crash_dir/deadly-read.reached" ] || exit 1
-    fm-crash-point "$crash_dir" deadly-read || exit 1
+    if [ ! -e "$crash_dir/deadly-read.reached" ] &&
+      [ "\$(cat "\${FM_SESSION_START_STAGE_FILE:-/dev/null}" 2>/dev/null)" = fleet-state ]; then
+      fm-crash-point "$crash_dir" deadly-read || exit 1
+    fi
     exit 0
   fi
   [ "\${3:-}" = "$live" ] && exit 0
@@ -1470,8 +1475,12 @@ EOF
   printf 'window=sess:p-live\nkind=ship\nbackend=herdr\n' > "$home/state/task-z-live.meta"
 
   FM_SESSION_START_ENDPOINT_TIMEOUT=bogus start_session_start "$home" "$root" "$fakebin:$BASE_PATH" "${root%/root}/session-start.out"
+  # The read is `bash -c` whose script starts with a newline, four spaces and
+  # `. "$1"`. The runtime bound's own `bash -c` wrapper above it carries the
+  # read's arguments too but starts with `status_file=`, so it does not match.
+  # shellcheck disable=SC2016 # "$1" is literal text of the read's command line.
   fm_test_crash_at "${root%/root}" deadly-read KILL "$SESSION_START_PID" \
-    "bash -c *fm_backend_target_exists* herdr *p-doom*"
+    'bash -c ?????. "$1"*fm_backend_target_exists*herdr *p-doom*'
   wait "$SESSION_START_PID" || status=$?
   out=$(cat "${root%/root}/session-start.out")
 

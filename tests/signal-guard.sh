@@ -46,7 +46,7 @@ signal=${1-}
 target=- command=- parent=- walk_from=
 
 ps_field() {  # <field> <pid>: one field of <pid>, empty when it is gone.
-  command -p ps -o "$1=" -p "$2" 2>/dev/null | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+  command -p ps -ww -o "$1=" -p "$2" 2>/dev/null | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
 }
 
 judge_pid() {  # <pid>: prints the verdict on a pid already parsed as digits.
