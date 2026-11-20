@@ -513,22 +513,28 @@ SH
   chmod +x "$fakebin/herdr"
 }
 
-# make_fake_herdr_deadly_read <fakebin> <live-pane> <kill-pane>: like
-# make_fake_herdr, but `pane get <kill-pane>` KILLs the shell running the
-# endpoint read. The read's shell is the fake's grandparent (fm_backend_herdr_cli's
-# stderr-capture subshell sits in between), so the fake walks one /proc hop
-# above $PPID. This is the digest-death shape: a per-task herdr liveness
-# read whose process died mid-read, which used to take the whole
-# session-start digest with it.
+# make_fake_herdr_deadly_read <fakebin> <live-pane> <kill-pane> <crash-dir>:
+# like make_fake_herdr, but the per-task endpoint read of <kill-pane> stops at
+# crash point deadly-read in <crash-dir>, where the case KILLs the shell running
+# that read (fm_test_crash_at with that read's command line). This is the
+# digest-death shape: a per-task herdr liveness read whose process died
+# mid-read, which used to take the whole session-start digest with it. The
+# digest also reads <kill-pane> earlier, from its wake-queue stage, so the fake
+# picks the endpoint read by the digest's own stage record, fleet-state, never
+# by its parents; every other read of <kill-pane>, and a later one, reports it
+# alive.
 make_fake_herdr_deadly_read() {
-  local fakebin=$1 live=$2 killpane=$3
+  local fakebin=$1 live=$2 killpane=$3 crash_dir=$4
+  fm_fake_crash_point "$fakebin"
   cat > "$fakebin/herdr" <<SH
 #!/usr/bin/env bash
 set -u
 if [ "\${1:-}" = pane ] && [ "\${2:-}" = get ]; then
   if [ "\${3:-}" = "$killpane" ]; then
-    read_shell=\$(sed 's/^[^)]*) //' /proc/\$PPID/stat 2>/dev/null | awk '{print \$2}')
-    kill -KILL "\$read_shell" 2>/dev/null
+    if [ ! -e "$crash_dir/deadly-read.reached" ] &&
+      [ "\$(cat "\${FM_SESSION_START_STAGE_FILE:-/dev/null}" 2>/dev/null)" = fleet-state ]; then
+      fm-crash-point "$crash_dir" deadly-read || exit 1
+    fi
     exit 0
   fi
   [ "\${3:-}" = "$live" ] && exit 0
@@ -576,6 +582,18 @@ run_session_start() {
       FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
       "$SESSION_START"
   fi
+}
+
+# start_session_start <home> <root> <path> <out>: starts session start (not
+# under Pi) as this shell's own recorded child, writing its output to <out>;
+# sets SESSION_START_PID. Call it from the case's own shell, never in $(...).
+start_session_start() {
+  local home=$1 root=$2 path=$3 out=$4
+  env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
+    "$SESSION_START" > "$out" 2>&1 &
+  SESSION_START_PID=$!
+  fm_test_record_child "$SESSION_START_PID"
 }
 
 run_pi_session_start() {  # <home> <root> <path> [fm-session-start args...]
@@ -1450,13 +1468,21 @@ $rec
 EOF
   make_fake_toolchain "$fakebin"
   make_fake_ps_claude "$fakebin"
-  make_fake_herdr_deadly_read "$fakebin" "p-live" "p-doom"
+  make_fake_herdr_deadly_read "$fakebin" "p-live" "p-doom" "${root%/root}"
 
   printf 'window=sess:p-doom\nkind=ship\nbackend=herdr\n' > "$home/state/task-a-doom.meta"
   printf 'working: doomed task marker\n' > "$home/state/task-a-doom.status"
   printf 'window=sess:p-live\nkind=ship\nbackend=herdr\n' > "$home/state/task-z-live.meta"
 
-  out=$(FM_SESSION_START_ENDPOINT_TIMEOUT=bogus run_session_start "$home" "$root" "$fakebin:$BASE_PATH") || status=$?
+  FM_SESSION_START_ENDPOINT_TIMEOUT=bogus start_session_start "$home" "$root" "$fakebin:$BASE_PATH" "${root%/root}/session-start.out"
+  # The read is `bash -c` whose script starts with a newline, four spaces and
+  # `. "$1"`. The runtime bound's own `bash -c` wrapper above it carries the
+  # read's arguments too but starts with `status_file=`, so it does not match.
+  # shellcheck disable=SC2016 # "$1" is literal text of the read's command line.
+  fm_test_crash_at "${root%/root}" deadly-read KILL "$SESSION_START_PID" \
+    'bash -c ?????. "$1"*fm_backend_target_exists*herdr *p-doom*'
+  wait "$SESSION_START_PID" || status=$?
+  out=$(cat "${root%/root}/session-start.out")
 
   expect_code 0 "$status" "one killed endpoint read must not fail the digest"
   assert_contains "$out" \
@@ -1572,50 +1598,35 @@ $rec
 EOF
   make_fake_toolchain "$fakebin"
   make_fake_ps_claude "$fakebin"
-  # Replace the harness ps with one that TERMs the digest process itself when
-  # fm-lock.sh invokes it: the shape where the digest child dies mid-stage
-  # from something other than its runtime bound, which the parent used to
-  # swallow silently (no banner, exit 0, rest of the digest gone).
-  # ps sits below fm-lock.sh below the digest bash, so walk /proc upward.
-  # Flattened cmdline matching alone is useless: timeout's bash -c inner shell
-  # and the timeout wrapper carry the script path as an ARGV element, and the
-  # lock stage's own command substitution leaves a subshell whose argv is
-  # still `fm-session-start.sh` - only the topmost match is the digest bash
-  # itself. That digest child is the topmost ancestor whose ENVIRON carries
-  # FM_SESSION_START_STAGE_FILE: the parent wrapper mktemps the file and hands
-  # it over with env (which never keeps it for itself), the bash -c inner
-  # shell and timeout sit BELOW env, and the parent wrapper never holds it -
-  # so the env marker stops the walk above the digest child and below the
-  # wrapper whose death would skip the banner entirely. Kill that topmost
-  # marker carrier: the digest bash whose death the parent must banner.
+  # Replace the harness ps with one that stops at crash point digest-lock the
+  # first time fm-lock.sh invokes it, where the case sends TERM to the digest
+  # process itself: the shape where the digest child dies mid-stage from
+  # something other than its runtime bound, which the parent used to swallow
+  # silently (no banner, exit 0, rest of the digest gone).
+  # The digest child runs the same command line as the session start the case
+  # starts and records, `bash <script>` with no arguments, and sits below it
+  # under the runtime bound's watchdog, whose own command line differs. The
+  # lock stage's command substitution leaves a subshell with that same command
+  # line below the digest child, so the guard keeps only the match whose parent
+  # does not match: the digest bash whose death the parent must banner.
   mv "$fakebin/ps" "$fakebin/ps.real"
+  fm_fake_crash_point "$fakebin"
   cat > "$fakebin/ps" <<SH
 #!/usr/bin/env bash
 set -u
 case "\$(tr '\\0' ' ' < /proc/\$PPID/cmdline 2>/dev/null)" in
   *fm-lock.sh*)
-    pid=\$PPID
-    target=
-    matched=0
-    for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
-      [ -n "\$pid" ] && [ "\$pid" != 1 ] || break
-      if tr '\\0' '\\n' < /proc/\$pid/environ 2>/dev/null | grep -q '^FM_SESSION_START_STAGE_FILE=' \
-        && case "\$(tr '\\0' ' ' < /proc/\$pid/cmdline 2>/dev/null)" in *fm-session-start.sh*) true ;; *) false ;; esac; then
-        target=\$pid
-        matched=1
-      elif [ "\$matched" -eq 1 ]; then
-        break
-      fi
-      pid=\$(sed 's/^[^)]*) //' /proc/\$pid/stat 2>/dev/null | awk '{print \$2}')
-    done
-    [ -n "\$target" ] && kill -TERM "\$target" 2>/dev/null
+    [ -e "${root%/root}/digest-lock.reached" ] || fm-crash-point "${root%/root}" digest-lock || exit 1
     ;;
 esac
 exec "$fakebin/ps.real" "\$@"
 SH
   chmod +x "$fakebin/ps"
 
-  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH") || status=$?
+  start_session_start "$home" "$root" "$fakebin:$BASE_PATH" "${root%/root}/session-start.out"
+  fm_test_crash_at "${root%/root}" digest-lock TERM "$SESSION_START_PID" "bash $SESSION_START"
+  wait "$SESSION_START_PID" || status=$?
+  out=$(cat "${root%/root}/session-start.out")
 
   expect_code 0 "$status" "a digest child that died mid-stage must still let the session open (parent exits 0)"
   assert_contains "$out" \

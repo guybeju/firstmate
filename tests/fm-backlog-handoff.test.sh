@@ -262,7 +262,7 @@ SH
 
 test_move_crash_keeps_wake_pending_for_recovery() {
   local home="$TMP_ROOT/move-crash-main" sub="$TMP_ROOT/move-crash-sub"
-  local fakebin="$TMP_ROOT/move-crash-fakebin" real_tasks rc=0 prepared_state
+  local fakebin="$TMP_ROOT/move-crash-fakebin" real_tasks rc=0 prepared_state handoff_pid
   setup_homes "$home" "$sub"
   mkdir -p "$sub/data" "$fakebin"
   cat > "$home/data/backlog.md" <<'EOF'
@@ -273,7 +273,7 @@ test_move_crash_keeps_wake_pending_for_recovery() {
 EOF
   printf '## Queued\n\n## Done\n' > "$sub/data/backlog.md"
   real_tasks=$(command -v tasks-axi)
-  fm_fake_crash_injector "$fakebin"
+  fm_fake_crash_point "$fakebin"
   cat > "$fakebin/tasks-axi" <<'SH'
 #!/usr/bin/env bash
 "$FM_REAL_TASKS_AXI" "$@"
@@ -281,10 +281,10 @@ rc=$?
 case " $* " in
   *" --file "*" --to "*)
     if [ "$rc" -eq 0 ] && [ "${1:-}" = mv ]; then
-      # Crash AFTER the durable move lands, and only return once the handoff is
-      # observably gone so it cannot run its own post-move bookkeeping.
-      handoff_pid=$(ps -o ppid= -p "$PPID" | tr -d '[:space:]')
-      fm-crash-inject "$handoff_pid" || exit 1
+      # Crash AFTER the durable move lands: stop at crash point move-crash, and
+      # return only once the case has KILLed the handoff, so it cannot run its
+      # own post-move bookkeeping.
+      fm-crash-point "$FM_CRASH_DIR" move-crash || exit 1
     fi
     ;;
 esac
@@ -293,8 +293,12 @@ SH
   chmod +x "$fakebin/tasks-axi"
 
   set +e
-  FM_REAL_TASKS_AXI="$real_tasks" PATH="$fakebin:$PATH" FM_HOME="$home" \
-    "$ROOT/bin/fm-backlog-handoff.sh" design crash-item > "$TMP_ROOT/move-crash.out" 2>&1
+  FM_CRASH_DIR="$TMP_ROOT" FM_REAL_TASKS_AXI="$real_tasks" PATH="$fakebin:$PATH" FM_HOME="$home" \
+    "$ROOT/bin/fm-backlog-handoff.sh" design crash-item > "$TMP_ROOT/move-crash.out" 2>&1 &
+  handoff_pid=$!
+  fm_test_record_child "$handoff_pid"
+  fm_test_crash_at "$TMP_ROOT" move-crash KILL "$handoff_pid"
+  wait "$handoff_pid"
   rc=$?
   set +e
   [ "$rc" -ne 0 ] || fail "post-move crash fixture unexpectedly reported success"
@@ -338,7 +342,7 @@ EOF
 
 test_pre_move_crash_does_not_wake_until_move_lands() {
   local home="$TMP_ROOT/pre-move-crash-main" sub="$TMP_ROOT/pre-move-crash-sub"
-  local fakebin="$TMP_ROOT/pre-move-crash-fakebin" real_tasks rc=0 wake_count
+  local fakebin="$TMP_ROOT/pre-move-crash-fakebin" real_tasks rc=0 wake_count handoff_pid
   setup_homes "$home" "$sub"
   mkdir -p "$sub/data" "$fakebin"
   cat > "$home/data/backlog.md" <<'EOF'
@@ -349,17 +353,17 @@ test_pre_move_crash_does_not_wake_until_move_lands() {
 EOF
   printf '## Queued\n\n## Done\n' > "$sub/data/backlog.md"
   real_tasks=$(command -v tasks-axi)
-  fm_fake_crash_injector "$fakebin"
+  fm_fake_crash_point "$fakebin"
   cat > "$fakebin/tasks-axi" <<'SH'
 #!/usr/bin/env bash
 case " $* " in
   *" --file "*" --to "*)
     if [ "${1:-}" = mv ]; then
-      # Crash BEFORE the move and never run it. This fake outlives the handoff
-      # it kills, so delegating to the real binary at all - even after a pause -
+      # Crash BEFORE the move and never run it: stop at crash point
+      # pre-move-crash while the case KILLs the handoff. This fake outlives the
+      # handoff, so delegating to the real binary at all - even after a pause -
       # lets an orphan complete the move the case requires left undone.
-      handoff_pid=$(ps -o ppid= -p "$PPID" | tr -d '[:space:]')
-      fm-crash-inject "$handoff_pid" || exit 1
+      fm-crash-point "$FM_CRASH_DIR" pre-move-crash || exit 1
       exit 137
     fi
     ;;
@@ -370,8 +374,12 @@ SH
   : > "$TMP_ROOT/default-tmux.log"
 
   set +e
-  FM_REAL_TASKS_AXI="$real_tasks" PATH="$fakebin:$PATH" FM_HOME="$home" \
-    "$ROOT/bin/fm-backlog-handoff.sh" design pre-move-crash > "$TMP_ROOT/pre-move-crash.out" 2>&1
+  FM_CRASH_DIR="$TMP_ROOT" FM_REAL_TASKS_AXI="$real_tasks" PATH="$fakebin:$PATH" FM_HOME="$home" \
+    "$ROOT/bin/fm-backlog-handoff.sh" design pre-move-crash > "$TMP_ROOT/pre-move-crash.out" 2>&1 &
+  handoff_pid=$!
+  fm_test_record_child "$handoff_pid"
+  fm_test_crash_at "$TMP_ROOT" pre-move-crash KILL "$handoff_pid"
+  wait "$handoff_pid"
   rc=$?
   set -e
   [ "$rc" -ne 0 ] || fail "pre-move crash fixture unexpectedly reported success"
@@ -413,7 +421,7 @@ EOF
 
 test_delivery_confirmation_crash_does_not_resend() {
   local home="$TMP_ROOT/confirm-crash-main" sub="$TMP_ROOT/confirm-crash-sub"
-  local fakebin="$TMP_ROOT/confirm-crash-fakebin" real_rm rc=0 wake_count
+  local fakebin="$TMP_ROOT/confirm-crash-fakebin" real_rm rc=0 wake_count handoff_pid
   setup_homes "$home" "$sub"
   mkdir -p "$sub/data" "$fakebin"
   cat > "$home/data/backlog.md" <<'EOF'
@@ -424,15 +432,16 @@ test_delivery_confirmation_crash_does_not_resend() {
 EOF
   printf '## Queued\n\n## Done\n' > "$sub/data/backlog.md"
   real_rm=$(command -v rm)
-  fm_fake_crash_injector "$fakebin"
+  fm_fake_crash_point "$fakebin"
   cat > "$fakebin/rm" <<'SH'
 #!/usr/bin/env bash
 for arg in "$@"; do
   if [ "$arg" = "$FM_CONFIRM_WAKE_MARKER" ] \
     && mkdir "$FM_CONFIRM_CRASH_ONCE" 2>/dev/null; then
-    # Crash instead of clearing the marker, and confirm the handoff is gone
-    # before returning so it cannot proceed past this step.
-    fm-crash-inject "$PPID" || exit 1
+    # Crash instead of clearing the marker: stop at crash point confirm-crash
+    # and return only once the case has KILLed the handoff, so it cannot
+    # proceed past this step.
+    fm-crash-point "$FM_CRASH_DIR" confirm-crash || exit 1
     exit 0
   fi
 done
@@ -442,11 +451,15 @@ SH
   : > "$TMP_ROOT/default-tmux.log"
 
   set +e
-  PATH="$fakebin:$PATH" FM_REAL_RM="$real_rm" \
+  FM_CRASH_DIR="$TMP_ROOT" PATH="$fakebin:$PATH" FM_REAL_RM="$real_rm" \
     FM_CONFIRM_CRASH_ONCE="$TMP_ROOT/confirm-crash.once" \
     FM_CONFIRM_WAKE_MARKER="$home/state/.backlog-handoff-design.wake-pending" \
     FM_HOME="$home" "$ROOT/bin/fm-backlog-handoff.sh" design confirm-crash \
-    > "$TMP_ROOT/confirm-crash.out" 2>&1
+    > "$TMP_ROOT/confirm-crash.out" 2>&1 &
+  handoff_pid=$!
+  fm_test_record_child "$handoff_pid"
+  fm_test_crash_at "$TMP_ROOT" confirm-crash KILL "$handoff_pid"
+  wait "$handoff_pid"
   rc=$?
   set +e
   [ "$rc" -ne 0 ] || fail "post-confirmation crash fixture unexpectedly reported success"
@@ -492,7 +505,7 @@ EOF
 
 test_unresolved_delivery_attempt_refuses_immediate_resend() {
   local home="$TMP_ROOT/attempt-crash-main" sub="$TMP_ROOT/attempt-crash-sub"
-  local fakebin="$TMP_ROOT/attempt-crash-fakebin" real_mv rc=0 wake_count out
+  local fakebin="$TMP_ROOT/attempt-crash-fakebin" real_mv rc=0 wake_count out handoff_pid
   setup_homes "$home" "$sub"
   mkdir -p "$sub/data" "$fakebin"
   cat > "$home/data/backlog.md" <<'EOF'
@@ -503,14 +516,15 @@ test_unresolved_delivery_attempt_refuses_immediate_resend() {
 EOF
   printf '## Queued\n\n## Done\n' > "$sub/data/backlog.md"
   real_mv=$(command -v mv)
-  fm_fake_crash_injector "$fakebin"
+  fm_fake_crash_point "$fakebin"
   cat > "$fakebin/mv" <<'SH'
 #!/usr/bin/env bash
 for arg in "$@"; do
   if [ -f "$arg" ] && grep -q '^confirmed=' "$arg" 2>/dev/null; then
-    # Crash instead of publishing the confirmed record, and confirm the handoff
-    # is gone before returning so it cannot reach its later doorbell step.
-    fm-crash-inject "$PPID" || exit 1
+    # Crash instead of publishing the confirmed record: stop at crash point
+    # attempt-crash, and return only once the case has KILLed the fm-send.sh
+    # delivering it, so the delivery cannot reach its later doorbell step.
+    fm-crash-point "$FM_CRASH_DIR" attempt-crash || exit 1
     exit 1
   fi
 done
@@ -519,10 +533,16 @@ SH
   chmod +x "$fakebin/mv"
   : > "$TMP_ROOT/default-tmux.log"
 
+  # The confirmed record is written by the fm-send.sh the handoff starts, so the
+  # victim is that process under the handoff this case starts and records.
   set +e
-  PATH="$fakebin:$PATH" FM_REAL_MV="$real_mv" FM_HOME="$home" \
+  FM_CRASH_DIR="$TMP_ROOT" PATH="$fakebin:$PATH" FM_REAL_MV="$real_mv" FM_HOME="$home" \
     "$ROOT/bin/fm-backlog-handoff.sh" design attempt-crash \
-    > "$TMP_ROOT/attempt-crash.out" 2>&1
+    > "$TMP_ROOT/attempt-crash.out" 2>&1 &
+  handoff_pid=$!
+  fm_test_record_child "$handoff_pid"
+  fm_test_crash_at "$TMP_ROOT" attempt-crash KILL "$handoff_pid" "bash $ROOT/bin/fm-send.sh *"
+  wait "$handoff_pid"
   rc=$?
   set +e
   [ "$rc" -ne 0 ] || fail "unresolved-attempt crash fixture unexpectedly reported success"

@@ -209,9 +209,10 @@ Nothing tore it down: the fake outlives the process it kills, so on a host slow 
 Direct observation of the source and destination backlogs during the injected crash showed exactly that, the item moving one second after the crash while the case was still asserting.
 
 The injection is now decided by observation rather than by a clock.
-`fm_fake_crash_injector` in `tests/lib.sh` drops an `fm-crash-inject <pid>` shim that signals the target and returns only once that process is observably gone, and the pre-move fake never delegates the move at all.
-All four crash injections in that file use it, so none of them is a wall-clock bet any more.
+Each fake stops at an `fm-crash-point` (`fm_fake_crash_point` in `tests/lib.sh`), the case KILLs the process it started itself through `fm_test_crash_at`, and the fake is released only once that process is observably gone; the pre-move fake never delegates the move at all.
+All four crash injections in that file work this way, so none of them is a wall-clock bet any more.
 Under a synthetic five-minute load average above 30, the case failed on the old injection and passed six of six on the new one, and the whole script passed end to end twice at that load.
+Those load runs used the earlier `fm-crash-inject` shim, which the fake itself called with the same release-only-once-gone ordering; the current form has not been measured under load.
 
 ### session-bootstrap: admitted
 
