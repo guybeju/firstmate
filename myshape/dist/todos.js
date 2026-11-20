@@ -13,7 +13,8 @@ export function emptyTodos() {
 }
 /** The id grammar topic ids and task ids share, at most 128 characters. */
 export function isValidItemId(id) {
-    return (id.length <= ID_MAX && /^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(id) && !(id in Object.prototype));
+    // Assigning to "__proto__" would set the store's prototype instead of an item.
+    return id.length <= ID_MAX && /^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(id) && id !== "__proto__";
 }
 function refused(line) {
     return { ok: false, code: "refused", line };

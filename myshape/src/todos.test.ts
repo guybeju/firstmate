@@ -138,6 +138,12 @@ describe("adding an item", () => {
       { ref: "x".repeat(129) },
     ];
     for (const extra of bad) expect(add(extra)).toMatchObject({ ok: false, code: "usage" });
+    const member = ok(add({ id: "constructor" }));
+    expect(Object.keys(member.store.items)).toEqual(["constructor"]);
+    expect(ok(todos.doneItem(member.store, "constructor", "plain", NOW)).store.items).toEqual({});
+    expect(refusal(todos.doneItem(todos.emptyTodos(), "toString", "plain", NOW))).toContain(
+      "不是開著的",
+    );
   });
 });
 

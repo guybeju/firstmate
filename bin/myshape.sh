@@ -72,7 +72,9 @@
 # one --cmd, for example --cmd "$(cat <<'EOF' ... EOF)". An item with no --cmd
 # shows no command. add reads no stdin: the old "-" form is refused. --ref is
 # opaque text of at most 128 characters that the board hands back in its
-# notices about the item. The page offers 做完了 and 不做了. 做完了 does not close
+# notices about the item. The title is one line of at most 200 characters and
+# --do one of at most 1000, neither with control or direction characters;
+# there are at most 50 --cmd. The page offers 做完了 and 不做了. 做完了 does not close
 # the item: the board tells the aggregator, who checks and then runs done
 # (which closes it) or failed (which puts it back in front of the captain with
 # the reason). obsolete takes an item the aggregator no longer needs off the

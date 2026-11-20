@@ -24,7 +24,10 @@
 # "myshape.sh todo add … --ref hold --adopt --captain-closes": the action is the
 # reason's first line, and its labelled lines (說明：, 指令：, 續：) give the
 # guidance and the commands; an older record without labels has everything
-# after its first line as one command. Its topic is the hold's tag, else its
+# after its first line as one command. The title and the action are made one
+# plain line within the board's limits (200 and 1000 characters; control and
+# direction characters become spaces), the title falling back to the id and an
+# empty action to the title, so no old hold is refused for its text. Its topic is the hold's tag, else its
 # origin's; none when it has neither; --since is the hold's set time when it
 # has one. Only holds not on the board yet, and not closed on it while their
 # hold here is still open, are added. When the board keeps waiting marks or adopted items, the pass ends
@@ -103,6 +106,9 @@ FMB_TODO_MARKER='動手：'
 fmb_adopt_args() {
   jq -j --argjson board "$1" --arg marker "$FMB_TODO_MARKER" '
     def trimmed: sub("^\\s+"; "") | sub("\\s+$"; "");
+    def plain($max): explode
+      | map(if . < 32 or . == 127 or (. >= 8234 and . <= 8238) or (. >= 8294 and . <= 8297) then 32 else . end)
+      | implode | trimmed | .[0:$max] | trimmed;
     def taglast($text): ($text // "") | split("\n") | map(select(length > 0)) | (last // "") | (split(" ")[0] // "");
     .topics as $tags
     | (($board.items // {}) + ($board.closed // {})) as $known
@@ -119,9 +125,11 @@ fmb_adopt_args() {
        else {guidance: "", commands: ([$rest | join("\n") | sub("\\s+$"; "")] | map(select(length > 0)))} end) as $text
     | taglast($tags[.id]) as $own
     | (if $own != "" then $own elif .origin != "" then taglast($tags[.origin]) else "" end) as $topic
-    | [.id, (if .title == "" then .id else .title end)]
+    | (((.title // "") | split("\n")[0] // "" | plain(200)) as $t | if $t == "" then .id else $t end) as $title
+    | (($lines[0] // "") | plain(1000) | if . == "" then $title else . end) as $action
+    | [.id, $title]
       + (if ($topic | test("^[A-Za-z0-9_][A-Za-z0-9._-]*$")) then ["--topic", $topic] else [] end)
-      + ["--do", ($lines[0] | trimmed)]
+      + ["--do", $action]
       + (if ($text.guidance | trimmed) == "" then [] else ["--note", $text.guidance] end)
       + ($text.commands | map(select(trimmed != "")) | map("--cmd", .))
       + ["--ref", "hold", "--adopt", "--captain-closes"]

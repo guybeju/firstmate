@@ -211,6 +211,27 @@ test_a_hold_closed_elsewhere_takes_its_item_off() {
   pass "an adopted item whose hold is closed elsewhere leaves the board with a record, and only when the backlog was read"
 }
 
+# Old holds whose text the board would refuse as written are still adopted:
+# a title over the board's 200 characters, a tab in the action, no action at all.
+test_odd_old_holds_are_adopted() {
+  local long
+  long=$(printf 'T%.0s' $(seq 1 250))
+  {
+    printf '## In flight\n\n## Queued\n'
+    hold_line odd-long "$long" "動手：做長的"
+    hold_line odd-tab "Tab" "$(printf '動手：按\tTab')"
+    hold_line odd-empty "Empty" "動手："
+    printf '\n## Done\n'
+  } > "$MAIN/data/backlog.md"
+  view >/dev/null
+  assert_equals "$(printf 'T%.0s' $(seq 1 200))|做長的" "$(item odd-long | jq -r '"\(.title)|\(.action)"')" "a long title must be cut to the board's limit"
+  assert_equals "Tab|按 Tab" "$(item odd-tab | jq -r '"\(.title)|\(.action)"')" "a tab in the action must become a space"
+  assert_equals "Empty|Empty" "$(item odd-empty | jq -r '"\(.title)|\(.action)"')" "an empty action must fall back to the title"
+  backlog
+  view >/dev/null
+  pass "old holds the board would refuse as written are adopted, made plain"
+}
+
 test_the_session_start_hook_adopts_with_no_page_open() {
   local out
   backlog old-hook
@@ -279,6 +300,6 @@ test_nothing_is_left() {
 }
 
 fm_test_run test_a_read_of_the_main_home_adopts_the_old_items test_a_second_pass_calls_the_board_only_when_needed \
-  test_closing_an_item_closes_its_hold test_a_hold_closed_elsewhere_takes_its_item_off \
+  test_closing_an_item_closes_its_hold test_a_hold_closed_elsewhere_takes_its_item_off test_odd_old_holds_are_adopted \
   test_the_session_start_hook_adopts_with_no_page_open test_a_secondmate_home_keeps_its_holds_as_decisions \
   test_an_adoption_replaces_a_board_on_older_code test_nothing_is_left
