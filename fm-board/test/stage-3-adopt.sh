@@ -175,6 +175,12 @@ test_closing_an_item_closes_its_hold() {
     -H 'Content-Type: application/json' -d "{\"task\":\"nas-2fa\",\"confirm\":\"$code\"}" "$base/api/todos/takedown"
   wait_for "the captain's words to close the hold" grep -qF "$(printf 'stdin=nas-2fa\t撤下\t撤下\tdone')" "$TB_LOG"
   wait_for "the note" grep -qF 'stdin=使用者在看板上：「Turn on 2FA」撤下（nas-2fa）' "$TB_LOG"
+  # Until the holds close here, a pass must not ask the board about the two
+  # items again: a board command would also start a board that was stopped.
+  backlog nas-2fa old-restart
+  : > "$TOPIC_LOG"
+  b adopt >/dev/null || fail "adopt failed while the closed items' holds are open"
+  assert_equals "" "$(cat "$TOPIC_LOG")" "a pass must not call the board for items closed on it whose holds are still open"
   assert_equals "todo.taken_down/captain/taken_down/billing" \
     "$(jq -r -s '[.[] | select(.item == "nas-2fa")] | last | "\(.kind)/\(.by)/\(.outcome)/\(.topic)"' "$MAIN/data/myshape/events.jsonl")" \
     "the captain's takedown must be recorded as the captain's"

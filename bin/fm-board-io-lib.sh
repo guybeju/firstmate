@@ -26,8 +26,8 @@
 # guidance and the commands; an older record without labels has everything
 # after its first line as one command. Its topic is the hold's tag, else its
 # origin's; none when it has neither; --since is the hold's set time when it
-# has one. Only holds not on the board yet are
-# added. When the board keeps waiting marks or adopted items, the pass ends
+# has one. Only holds not on the board yet, and not closed on it while their
+# hold here is still open, are added. When the board keeps waiting marks or adopted items, the pass ends
 # with "myshape.sh todo adopt-done <every such hold still open>"; so does an
 # adopted item the board closed whose hold is now closed too. It reads the
 # board's data/myshape/todos.json first and calls the board only when there is
@@ -98,14 +98,16 @@ FMB_TODO_MARKER='動手：'
 # fmb_adopt_args: the legacy_todos of the main home's report on stdin, as one
 # NUL-terminated argument list per hold to adopt (the arguments of
 # "myshape.sh todo add"), each list ended by an empty argument. $1 is the
-# board's items as JSON.
+# board's todos.json (or {}): a hold already on the board, or closed on it and
+# not yet closed here, is left out.
 fmb_adopt_args() {
-  jq -j --argjson items "$1" --arg marker "$FMB_TODO_MARKER" '
+  jq -j --argjson board "$1" --arg marker "$FMB_TODO_MARKER" '
     def trimmed: sub("^\\s+"; "") | sub("\\s+$"; "");
     def taglast($text): ($text // "") | split("\n") | map(select(length > 0)) | (last // "") | (split(" ")[0] // "");
     .topics as $tags
+    | (($board.items // {}) + ($board.closed // {})) as $known
     | .legacy_todos[]
-    | select($items[.id] == null)
+    | select($known[.id] == null)
     | (.question[($marker | length):] | sub("\n+$"; "") | split("\n")) as $lines
     | ($lines[1:]) as $rest
     | (reduce $rest[] as $line ({ok: true, guidance: [], commands: []};
@@ -132,7 +134,7 @@ fmb_adopt_args() {
 # keeps something the pass may clear. Prints one line saying what it did;
 # says on stderr which hold could not be adopted. Returns 1 when one failed.
 fmb_adopt() {
-  local report=$1 file="$DATA/myshape/todos.json" items='{}' pending=0 failed=0 added=0 arg
+  local report=$1 file="$DATA/myshape/todos.json" board='{}' pending=0 failed=0 added=0 arg
   local -a args=() open=()
   jq -e '.legacy_todos | arrays' <<< "$report" >/dev/null 2>&1 ||
     { printf '%s\n' "adopt：讀不到這個 home 的 backlog，沒有動看板" >&2; return 1; }
@@ -143,8 +145,8 @@ fmb_adopt() {
     return 0
   fi
   if [ -f "$file" ]; then
-    items=$(jq -c '.items // {} | objects' "$file" 2>/dev/null) || items=''
-    [ -n "$items" ] || { printf '%s\n' "adopt：讀不懂 ${file}，沒有動看板" >&2; return 1; }
+    board=$(jq -c 'objects' "$file" 2>/dev/null) || board=''
+    [ -n "$board" ] || { printf '%s\n' "adopt：讀不懂 ${file}，沒有動看板" >&2; return 1; }
     pending=$(jq --argjson open "$(jq -c '[.legacy_todos[].id]' <<< "$report")" \
       '((.marks // {}) | length)
        + ([(.items // {}) | to_entries[] | select(.value.adopted == true and ((.key as $id | $open | index($id)) == null))] | length)
@@ -162,7 +164,7 @@ fmb_adopt() {
       failed=1
     fi
     args=()
-  done < <(fmb_adopt_args "$items" <<< "$report")
+  done < <(fmb_adopt_args "$board" <<< "$report")
   while IFS= read -r arg; do open+=("$arg"); done < <(jq -r '.legacy_todos[].id' <<< "$report")
   if [ "$pending" -gt 0 ]; then
     "$SCRIPT_DIR/myshape.sh" todo adopt-done ${open[@]+"${open[@]}"} </dev/null >/dev/null ||
