@@ -508,13 +508,18 @@ SH
   chmod +x "$case_dir/fakebin/treehouse"
 }
 
+# The Kimi config lives in the HOME the spawn runs with (spawn_env's
+# user-home), and every tmux call other than the readiness ones goes to the
+# case's ordinary fake tmux, which tracks the spawn's window; without either
+# the spawn stops before readiness and the case passes without an
+# interruption.
 interrupt_kimi_readiness() {  # <case-dir>
-  local case_dir=$1 home
-  home=$(home_of "$case_dir")
-  mkdir -p "$home/.kimi-code"
-  printf '# test config\n' > "$home/.kimi-code/config.toml"
+  local case_dir=$1
+  mkdir -p "$case_dir/user-home/.kimi-code"
+  printf '# test config\n' > "$case_dir/user-home/.kimi-code/config.toml"
   fm_fake_exit0 "$case_dir/fakebin" kimi
   fm_fake_crash_point "$case_dir/fakebin"
+  mv "$case_dir/fakebin/tmux" "$case_dir/fakebin/tmux.base"
   cat > "$case_dir/fakebin/tmux" <<SH
 #!/usr/bin/env bash
 case "\$*" in
@@ -532,7 +537,7 @@ case "\${1:-}" in
     exit 0
     ;;
 esac
-exit 0
+exec "$case_dir/fakebin/tmux.base" "\$@"
 SH
   chmod +x "$case_dir/fakebin/tmux"
 }
@@ -650,9 +655,20 @@ start_spawn() {
 # interrupted_spawn <case-dir> <crash-point> <args...>: starts the spawn, sends
 # it TERM at <crash-point>, and waits for it; sets SPAWN_RC and SPAWN_OUT.
 interrupted_spawn() {
-  local case_dir=$1 point=$2
+  local case_dir=$1 point=$2 i=0 rc=0
   shift 2
   start_spawn "$case_dir" "$@"
+  # A spawn that ends before its crash point fails here with its own output.
+  while [ ! -s "$case_dir/$point.reached" ] && [ "$i" -lt 600 ]; do
+    case "$(fm_test_process_state "$SPAWN_PID")" in
+      '' | Z*)
+        wait "$SPAWN_PID" || rc=$?
+        fail "the spawn ended (status $rc) before crash point $point: $(cat "$case_dir/spawn.out")"
+        ;;
+    esac
+    sleep 0.05
+    i=$((i + 1))
+  done
   fm_test_crash_at "$case_dir" "$point" TERM "$SPAWN_PID"
   SPAWN_RC=0
   wait "$SPAWN_PID" || SPAWN_RC=$?
@@ -1585,7 +1601,7 @@ test_dispatch_interruption_during_kimi_readiness_fails_before_commit() {
   add_item "$case_dir" "$id"
   interrupt_kimi_readiness "$case_dir"
 
-  HOME="$home" FM_KIMI_READY_POLLS=2 FM_KIMI_POLL_INTERVAL=0 \
+  FM_KIMI_READY_POLLS=2 FM_KIMI_POLL_INTERVAL=0 \
     interrupted_spawn "$case_dir" capture-pane "$id" "$case_dir/project" --harness kimi \
       --mode no-mistakes --yolo off
   out=$SPAWN_OUT rc=$SPAWN_RC
