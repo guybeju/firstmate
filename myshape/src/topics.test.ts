@@ -4,9 +4,15 @@ import type { TopicResult, TopicState } from "./topics.js";
 
 const NOW = "2026-11-16T00:00:00Z";
 
-function done(result: TopicResult): Extract<TopicResult, { ok: true }> {
+/** A successful result, with its records and dispatchable topics (none when nothing changed). */
+function done(result: TopicResult) {
   if (!result.ok) throw new Error(`refused: ${result.line}`);
-  return result;
+  return {
+    ...result,
+    state: result.state as TopicState,
+    events: result.changed ? result.records : [],
+    dispatchable: result.changed ? result.dispatchable : [],
+  };
 }
 
 function refusal(result: TopicResult): string {

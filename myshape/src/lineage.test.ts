@@ -5,7 +5,7 @@ import type { Queue, TopicResult, TopicState } from "./topics.js";
 
 function done(result: TopicResult): TopicState {
   if (!result.ok) throw new Error(`refused: ${result.line}`);
-  return result.state;
+  return result.state as TopicState;
 }
 
 /** Topics: 帳務重構 (billing, high), 登入 (login, normal), 點子 (idea, later). */

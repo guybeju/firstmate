@@ -1,4 +1,8 @@
-// Loads and saves the topic files. The service is their only writer.
+// Loads the board's state files and is their only writer. A change and its
+// records are saved together: commitChange renames the change's one commit
+// file with the records in its `outbox`, then appends them to events.jsonl,
+// and every later commit (and every start) first saves any outbox record the
+// journal still lacks.
 import fs from "node:fs";
 import {
   isRecord,
@@ -9,11 +13,14 @@ import {
   writeFileAtomic,
 } from "./files.js";
 import type { BoardPaths } from "./layout.js";
+import { stampRecord } from "./records.js";
+import type { Actor, Draft, Frozen, Records, StoredRecord } from "./records.js";
 import {
   GOAL_MAX,
   HISTORY_ACTORS,
   HISTORY_KINDS,
   QUEUES,
+  QUEUE_LABEL,
   TODO_STATES,
   emptyState,
   isQueue,
@@ -29,7 +36,7 @@ import type {
   TopicState,
   TopicsDoc,
 } from "./topics.js";
-import { emptyTodos, isValidItemId } from "./todos.js";
+import { carryMarks, emptyTodos, isValidItemId, withProjection } from "./todos.js";
 import type { ItemState, TodoItem, TodoStore } from "./todos.js";
 
 const FILE_MODE = 0o644;
@@ -178,8 +185,8 @@ function parseDoc(raw: unknown): ParsedDoc {
 
 interface ParsedArchive {
   archive: ArchiveDoc;
-  /** True when an archived topic was stored as a proposal, which the file no longer holds. */
-  hadProposals: boolean;
+  /** Archived topics stored as proposals, which the file will no longer hold once rewritten. */
+  proposals: { id: string; name: string }[];
 }
 
 function parseArchive(raw: unknown): ParsedArchive {
@@ -187,27 +194,28 @@ function parseArchive(raw: unknown): ParsedArchive {
     throw new Error("expected an object with v: 1 and topics");
   }
   const archive: ArchiveDoc = { v: 1, topics: {} };
-  let hadProposals = false;
+  const proposals: { id: string; name: string }[] = [];
   for (const [id, value] of Object.entries(raw["topics"])) {
     const { topic, proposedFor } = parseTopic(id, value);
-    if (proposedFor !== null) hadProposals = true;
+    if (proposedFor !== null) proposals.push({ id, name: topic.name });
     const archived: ArchivedTopic = {
       ...topic,
       archived_at: textField(value as Record<string, unknown>, "archived_at"),
     };
     archive.topics[id] = archived;
   }
-  return { archive, hadProposals };
+  return { archive, proposals };
 }
 
-function loadFile<T>(file: string, parse: (raw: unknown) => T, fallback: T): T {
-  let raw: unknown;
+function readFile(file: string): unknown {
   try {
-    raw = readJsonFile(file);
+    return readJsonFile(file);
   } catch (error) {
     throw new Error(`${file} 讀不懂：${(error as Error).message}`, { cause: error });
   }
-  if (raw === null) return fallback;
+}
+
+function parseFile<T>(file: string, raw: unknown, parse: (raw: unknown) => T): T {
   try {
     return parse(raw);
   } catch (error) {
@@ -215,64 +223,295 @@ function loadFile<T>(file: string, parse: (raw: unknown) => T, fallback: T): T {
   }
 }
 
-export interface LoadedTopics {
-  state: TopicState;
-  /** Leftover proposals this load confirmed and wrote back; empty on every later load. */
-  confirmed: LeftoverProposal[];
+const OPTIONAL_RECORD_FIELDS = ["item", "outcome", "reason"] as const;
+
+function parseRecord(raw: unknown): StoredRecord | null {
+  if (!isRecord(raw) || raw["src"] !== "board") return null;
+  const rid = stringField(raw, "rid");
+  const kind = stringField(raw, "kind");
+  const by = stringField(raw, "by");
+  const ts = raw["ts"];
+  if (rid === null || kind === null || by === null || typeof ts !== "number") return null;
+  const record: StoredRecord = {
+    src: "board",
+    rid,
+    ts,
+    kind,
+    topic: stringField(raw, "topic"),
+    home: stringField(raw, "home"),
+    task: stringField(raw, "task"),
+    by,
+    label: textField(raw, "label"),
+    text: textField(raw, "text"),
+  };
+  for (const name of OPTIONAL_RECORD_FIELDS) {
+    const value = stringField(raw, name);
+    if (value !== null) record[name] = value;
+  }
+  return record;
 }
 
-/**
- * Loads both topic files. Leftover proposals are confirmed at the end of the
- * queue each was proposed for (normal when it named none), oldest first, and
- * the files are rewritten at once, so the commands that read the files
- * directly see the same topics as the board.
- */
-export function loadTopicState(paths: BoardPaths): LoadedTopics {
-  const empty = emptyState();
-  const live = loadFile(paths.topics, parseDoc, { doc: empty.doc, confirmed: [] });
-  const gone = loadFile(paths.archive, parseArchive, {
-    archive: empty.archive,
-    hadProposals: false,
+/** The records a commit file says it saved last; anything that is not a whole record is skipped. */
+function parseOutbox(raw: unknown): StoredRecord[] {
+  if (!isRecord(raw) || !Array.isArray(raw["outbox"])) return [];
+  return raw["outbox"].flatMap((entry: unknown) => {
+    const parsed = parseRecord(entry);
+    return parsed === null ? [] : [parsed];
   });
-  const state: TopicState = { doc: live.doc, archive: gone.archive };
-  // A crash between the two writes of an archive or reopen can leave a topic in
-  // both files. The live copy wins: an interrupted archive is simply redone,
-  // and an interrupted reopen is already complete.
-  for (const id of Object.keys(state.archive.topics)) {
-    if (state.doc.topics[id] !== undefined) delete state.archive.topics[id];
-  }
-  // A proposal was read from one of these files, so their directory exists.
-  if (gone.hadProposals) writeFileAtomic(paths.archive, serialize(state.archive), FILE_MODE);
-  if (live.confirmed.length > 0) writeFileAtomic(paths.topics, serialize(state.doc), FILE_MODE);
-  return { state, confirmed: live.confirmed };
 }
+
+/** The two files a change can commit through; each holds the records of its last commit. */
+export type CommitFile = "topics" | "todos";
+
+/** What the board keeps on disk, as the service holds it. */
+export interface StoredBoard {
+  topics: Frozen<TopicState>;
+  todos: Frozen<TodoStore>;
+  outbox: Readonly<Record<CommitFile, readonly StoredRecord[]>>;
+}
+
+/** Where records are saved: the journal, or a stand-in in a test. */
+export interface RecordSink {
+  has: (rid: string) => boolean;
+  /** Saves one record durably; throws when it cannot. */
+  append: (record: StoredRecord) => void;
+}
+
+/** What commitChange needs besides the change: the files, the journal, record ids and the clock. */
+export interface CommitTarget {
+  paths: BoardPaths;
+  sink: RecordSink;
+  nextRid: () => string;
+  nowSeconds: () => number;
+}
+
+/** One change: its commit file, the next state of that file's family, and its records. */
+export type Change =
+  | { file: "topics"; next: Frozen<TopicState>; records: Records }
+  | { file: "todos"; next: Frozen<TodoStore>; records: Records };
+
+export type Committed =
+  | {
+      ok: true;
+      board: StoredBoard;
+      records: StoredRecord[];
+      /** Why the records could not be appended after the change was saved; they wait in the outbox. */
+      appendError: string | null;
+    }
+  | { ok: false; line: string };
 
 function serialize(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
-/** Writes whichever of the two files changed, the file gaining a topic first. */
-export function saveTopicState(paths: BoardPaths, previous: TopicState, next: TopicState): void {
-  fs.mkdirSync(paths.dataDir, { recursive: true });
-  const docText = serialize(next.doc);
-  const archiveText = serialize(next.archive);
-  const writeDoc = (): void => {
-    if (docText !== serialize(previous.doc)) writeFileAtomic(paths.topics, docText, FILE_MODE);
-  };
-  const writeArchive = (): void => {
-    if (archiveText !== serialize(previous.archive))
-      writeFileAtomic(paths.archive, archiveText, FILE_MODE);
-  };
-  const archiveGained = Object.keys(next.archive.topics).some(
-    (id) => previous.archive.topics[id] === undefined,
-  );
-  if (archiveGained) {
-    writeArchive();
-    writeDoc();
-  } else {
-    writeDoc();
-    writeArchive();
+/**
+ * Writes `text` to `file` unless the file already holds exactly that; a
+ * missing file counts as holding `absent`, the text of an empty one.
+ */
+function writeIfChanged(file: string, text: string, absent: string): void {
+  const current = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : absent;
+  if (current !== text) writeFileAtomic(file, text, FILE_MODE);
+}
+
+const EMPTY_ARCHIVE = serialize(emptyState().archive);
+const EMPTY_DOC = serialize({ ...emptyState().doc, outbox: [] });
+
+/** Appends every outbox record the journal lacks; returns why it could not, or null. */
+function flushOutbox(sink: RecordSink, outbox: StoredBoard["outbox"]): string | null {
+  for (const record of [...outbox.topics, ...outbox.todos]) {
+    if (sink.has(record.rid)) continue;
+    try {
+      sink.append(record);
+    } catch (error) {
+      return (error as Error).message;
+    }
   }
+  return null;
+}
+
+/**
+ * Writes the files of a topic change. topics.json is the commit point: the
+ * archive is written before it unless the change takes a topic out of the
+ * archive (a reopen), so a crash before the commit point leaves the topic
+ * live and nothing recorded, and one after it leaves a copy the loader drops.
+ */
+function writeTopics(
+  paths: BoardPaths,
+  previous: Frozen<TopicState>,
+  next: Frozen<TopicState>,
+  outbox: readonly StoredRecord[],
+): void {
+  const archiveText = serialize(next.archive);
+  const losesTopic = Object.keys(previous.archive.topics).some(
+    (id) => next.archive.topics[id] === undefined,
+  );
+  if (!losesTopic) writeIfChanged(paths.archive, archiveText, EMPTY_ARCHIVE);
+  writeFileAtomic(paths.topics, serialize({ ...next.doc, outbox }), FILE_MODE);
+  if (losesTopic) writeIfChanged(paths.archive, archiveText, EMPTY_ARCHIVE);
+}
+
+/**
+ * Writes the files of a hands-on change. todos.json is the commit point;
+ * topics.json's projection of it is written first and rebuilt from todos.json
+ * at load, so a crash between the two leaves no change and nothing recorded.
+ * topics.json keeps the outbox of the last topic change.
+ */
+function writeTodos(
+  paths: BoardPaths,
+  board: StoredBoard,
+  next: Frozen<TodoStore>,
+  outbox: readonly StoredRecord[],
+): Frozen<TopicState> {
+  const topics = withProjection(board.topics, next);
+  writeIfChanged(
+    paths.topics,
+    serialize({ ...topics.doc, outbox: board.outbox.topics }),
+    EMPTY_DOC,
+  );
+  fs.mkdirSync(paths.boardDataDir, { recursive: true });
+  writeFileAtomic(paths.todos, serialize({ ...next, outbox }), FILE_MODE);
+  return topics;
+}
+
+/**
+ * The only writer of the board's state files. First saves every earlier
+ * record still waiting in an outbox, and refuses the change when it cannot.
+ * Then saves the change with its records in the commit file's outbox, in the
+ * same rename, and appends them to the journal. A failed append after the
+ * rename does not undo the change: its records wait in the outbox for the
+ * next commit or start.
+ */
+export function commitChange(
+  target: CommitTarget,
+  board: StoredBoard,
+  change: Change,
+  actor: Actor,
+): Committed {
+  const unsaved = flushOutbox(target.sink, board.outbox);
+  if (unsaved !== null)
+    return { ok: false, line: `看板寫不進紀錄（${unsaved}），這次的修改沒有做` };
+  const ts = target.nowSeconds();
+  const records = change.records.map((draft: Draft) =>
+    stampRecord(draft, actor, target.nextRid(), ts),
+  );
+  fs.mkdirSync(target.paths.dataDir, { recursive: true });
+  let next: StoredBoard;
+  if (change.file === "topics") {
+    writeTopics(target.paths, board.topics, change.next, records);
+    next = { ...board, topics: change.next, outbox: { ...board.outbox, topics: records } };
+  } else {
+    const topics = writeTodos(target.paths, board, change.next, records);
+    next = { topics, todos: change.next, outbox: { ...board.outbox, todos: records } };
+  }
+  return { ok: true, board: next, records, appendError: flushOutbox(target.sink, next.outbox) };
+}
+
+export interface ReadBoard {
+  board: StoredBoard;
+  /** Whether todos.json exists: a board that never kept items carries topics.json's marks over. */
+  hasTodos: boolean;
+  /** Leftover live proposals the read confirmed, oldest first. */
+  confirmed: LeftoverProposal[];
+  /** Archived topics stored as proposals. */
+  archivedProposals: { id: string; name: string }[];
+}
+
+/**
+ * Reads the state files without writing anything. A crash between the two
+ * writes of an archive or reopen can leave a topic in both topic files; the
+ * live copy wins (an interrupted archive is simply redone, an interrupted
+ * reopen is already complete). topics.json's marks are rebuilt from
+ * todos.json when it exists.
+ */
+export function readBoard(paths: BoardPaths): ReadBoard {
+  const empty = emptyState();
+  const rawTopics = readFile(paths.topics);
+  const rawArchive = readFile(paths.archive);
+  const rawTodos = readFile(paths.todos);
+  const live =
+    rawTopics === null
+      ? { doc: empty.doc, confirmed: [] }
+      : parseFile(paths.topics, rawTopics, parseDoc);
+  const gone =
+    rawArchive === null
+      ? { archive: empty.archive, proposals: [] }
+      : parseFile(paths.archive, rawArchive, parseArchive);
+  for (const id of Object.keys(gone.archive.topics)) {
+    if (live.doc.topics[id] !== undefined) delete gone.archive.topics[id];
+  }
+  const state: TopicState = { doc: live.doc, archive: gone.archive };
+  const store = rawTodos === null ? null : parseFile(paths.todos, rawTodos, parseTodoStore);
+  return {
+    board: {
+      topics: store === null ? state : withProjection(state, store),
+      todos: store ?? emptyTodos(),
+      outbox: { topics: parseOutbox(rawTopics), todos: parseOutbox(rawTodos) },
+    },
+    hasTodos: store !== null,
+    confirmed: live.confirmed,
+    archivedProposals: gone.proposals,
+  };
+}
+
+export interface LoadedBoard {
+  board: StoredBoard;
+  /** Leftover live proposals this start confirmed; empty on every later start. */
+  confirmed: LeftoverProposal[];
+  /** Why records of this start could not be appended; they wait in the outbox. */
+  appendErrors: string[];
+}
+
+/** The records of confirming leftover proposals, live and archived; null when there are none. */
+function confirmRecords(read: ReadBoard): Records | null {
+  const drafts: Draft[] = [
+    ...read.confirmed.map((proposal) => ({
+      kind: "topic.confirmed" as const,
+      topic: proposal.id,
+      text: `議題「${proposal.name}」已確認，排在「${QUEUE_LABEL[proposal.queue]}」最後`,
+    })),
+    ...read.archivedProposals.map((proposal) => ({
+      kind: "topic.confirmed" as const,
+      topic: proposal.id,
+      text: `議題「${proposal.name}」已確認，留在已封存`,
+    })),
+  ];
+  const [first, ...rest] = drafts;
+  return first === undefined ? null : [first, ...rest];
+}
+
+function afterCommit(result: Committed, errors: string[]): StoredBoard {
+  if (!result.ok) throw new Error(result.line);
+  if (result.appendError !== null) errors.push(result.appendError);
+  return result.board;
+}
+
+/**
+ * Loads the board at startup. Saves every outbox record the journal lacks
+ * (throwing when it cannot, since no change could be made), then makes the
+ * start's own changes through commitChange as the board itself: leftover
+ * proposals are confirmed, and the first start of a board that keeps items
+ * carries topics.json's marks into todos.json.
+ */
+export function loadBoard(target: CommitTarget, label: string): LoadedBoard {
+  const read = readBoard(target.paths);
+  const unsaved = flushOutbox(target.sink, read.board.outbox);
+  if (unsaved !== null) throw new Error(`看板寫不進紀錄（${unsaved}）`);
+  const actor: Actor = { by: "board", label };
+  const errors: string[] = [];
+  let board = read.board;
+  const confirms = confirmRecords(read);
+  if (confirms !== null) {
+    const change: Change = { file: "topics", next: board.topics, records: confirms };
+    board = afterCommit(commitChange(target, board, change, actor), errors);
+  }
+  if (!read.hasTodos) {
+    const carried = carryMarks(board.topics.doc.todos);
+    if (carried.ok && carried.changed) {
+      const change: Change = { file: "todos", next: carried.store, records: carried.records };
+      board = afterCommit(commitChange(target, board, change, actor), errors);
+    }
+  }
+  return { board, confirmed: read.confirmed, appendErrors: errors };
 }
 
 const ITEM_STATES: readonly ItemState[] = ["open", ...TODO_STATES];
@@ -319,25 +558,4 @@ function parseTodoStore(raw: unknown): TodoStore {
   store.marks = parseTodos(raw["marks"]);
   store.closed = isRecord(raw["closed"]) ? stringRecord(raw["closed"]) : {};
   return store;
-}
-
-/**
- * Loads the hands-on items. On the first start of a board that keeps them,
- * the file does not exist yet: topics.json's marks become waiting marks, and
- * the file is written at once when there are any, so nothing an older board
- * recorded is lost. With none it is written at the first change, like the
- * board's other files, so a start alone leaves the home as it was.
- */
-export function loadTodos(paths: BoardPaths, doc: TopicsDoc): TodoStore {
-  const fresh = { ...emptyTodos(), marks: structuredClone(doc.todos) };
-  const store = loadFile<TodoStore | null>(paths.todos, parseTodoStore, null);
-  if (store !== null) return store;
-  if (Object.keys(fresh.marks).length === 0) return fresh;
-  fs.mkdirSync(paths.boardDataDir, { recursive: true });
-  writeFileAtomic(paths.todos, serialize(fresh), FILE_MODE);
-  return fresh;
-}
-
-export function saveTodos(paths: BoardPaths, store: TodoStore): void {
-  writeFileAtomic(paths.todos, serialize(store), FILE_MODE);
 }

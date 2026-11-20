@@ -1,5 +1,6 @@
 // The topic model and every change the board can make to it. Pure: no I/O, no
 // clock. Callers pass the current time and persist the returned state.
+import type { Draft, Frozen, Records } from "./records.js";
 
 export const QUEUES = ["high", "normal", "later"] as const;
 export type Queue = (typeof QUEUES)[number];
@@ -103,34 +104,25 @@ export interface TopicState {
   archive: ArchiveDoc;
 }
 
-export type SystemEventKind =
-  | "topic.created"
-  | "topic.confirmed"
-  | "topic.merged"
-  | "topic.split"
-  | "topic.close_proposed"
-  | "topic.archived"
-  | "topic.reopened"
-  | "topic.moved"
-  | "topic.renamed"
-  | "topic.goal_changed";
+/** A record of a topic change: it always names its topic. */
+export type TopicRecord = Draft & { topic: string };
 
-export interface TopicEvent {
-  kind: SystemEventKind;
-  topic: string;
-  text: string;
-}
-
+/**
+ * What a topic operation did. A change carries its next state and at least
+ * one record, so a change with no record does not compile; an unchanged
+ * result carries no record and the state it was given.
+ */
 export type TopicResult =
   | {
       ok: true;
+      changed: true;
       state: TopicState;
       line: string;
-      changed: boolean;
-      events: TopicEvent[];
+      records: Records;
       // Ids of topics that just became dispatchable (left "later" or were reopened).
       dispatchable: string[];
     }
+  | { ok: true; changed: false; state: Frozen<TopicState>; line: string }
   | { ok: false; code: "refused"; line: string };
 
 export const NAME_MAX = 80;
@@ -165,7 +157,7 @@ export function isValidTopicId(id: string): boolean {
 }
 
 /** Follows the merged table from `id` to the id that currently owns it. */
-export function resolveTopicId(doc: TopicsDoc, id: string): string {
+export function resolveTopicId(doc: Frozen<TopicsDoc>, id: string): string {
   let current = id;
   for (let hops = 0; hops < 64; hops += 1) {
     const next = doc.merged[current];
@@ -179,21 +171,21 @@ function refuse(line: string): TopicResult {
   return { ok: false, code: "refused", line };
 }
 
-function unchanged(state: TopicState, line: string): TopicResult {
-  return { ok: true, state, line, changed: false, events: [], dispatchable: [] };
+function unchanged(state: Frozen<TopicState>, line: string): TopicResult {
+  return { ok: true, changed: false, state, line };
 }
 
 function changed(
   state: TopicState,
   line: string,
-  events: TopicEvent[] = [],
+  records: readonly [TopicRecord, ...TopicRecord[]],
   dispatchable: string[] = [],
 ): TopicResult {
-  return { ok: true, state, line, changed: true, events, dispatchable };
+  return { ok: true, changed: true, state, line, records, dispatchable };
 }
 
-function clone(state: TopicState): TopicState {
-  return structuredClone(state);
+function clone(state: Frozen<TopicState>): TopicState {
+  return structuredClone(state) as TopicState;
 }
 
 function codePoints(text: string): number {
@@ -211,7 +203,7 @@ export function oneLine(text: string, max: number): string | null {
   return trimmed;
 }
 
-function idInUse(state: TopicState, id: string): boolean {
+function idInUse(state: Frozen<TopicState>, id: string): boolean {
   return (
     state.doc.topics[id] !== undefined ||
     state.archive.topics[id] !== undefined ||
@@ -244,7 +236,7 @@ function mintId(state: TopicState, name: string): string {
   }
 }
 
-function queueOf(doc: TopicsDoc, id: string): Queue | undefined {
+function queueOf(doc: Frozen<TopicsDoc>, id: string): Queue | undefined {
   return QUEUES.find((queue) => doc.queues[queue].includes(id));
 }
 
@@ -279,7 +271,7 @@ function chooseId(
  * caller names another. A live topic with the same name and goal is the same
  * topic, so a repeat changes nothing and leaves it where it is.
  */
-export function create(state: TopicState, input: CreateInput, now: string): TopicResult {
+export function create(state: Frozen<TopicState>, input: CreateInput, now: string): TopicResult {
   const name = oneLine(input.name, NAME_MAX);
   const goal = oneLine(input.goal, GOAL_MAX);
   if (name === null) return refuse(`名稱要是一行、不能是空的、最多 ${NAME_MAX} 個字。`);
@@ -306,7 +298,7 @@ export function create(state: TopicState, input: CreateInput, now: string): Topi
 }
 
 /** Why a topic that is not live cannot be acted on: it is archived, or it does not exist. */
-function unusable(state: TopicState, id: string, rawId: string): TopicResult {
+function unusable(state: Frozen<TopicState>, id: string, rawId: string): TopicResult {
   if (state.archive.topics[id] !== undefined) return refuse(`議題 ${id} 已封存，要先 reopen。`);
   return missing(rawId);
 }
@@ -316,7 +308,7 @@ function missing(id: string): TopicResult {
 }
 
 export function merge(
-  state: TopicState,
+  state: Frozen<TopicState>,
   rawFrom: string,
   rawInto: string,
   now: string,
@@ -376,7 +368,7 @@ function reasonOf(reason: string | undefined): { reason?: string } | null {
  * same queue so work moved to it keeps its priority. Moving the tasks is the
  * caller's job; the history records only that the topic was split off.
  */
-export function split(state: TopicState, input: SplitInput, now: string): TopicResult {
+export function split(state: Frozen<TopicState>, input: SplitInput, now: string): TopicResult {
   const why = reasonOf(input.reason);
   if (why === null) return refuse(REASON_PROBLEM);
   const found = liveTopic(state, input.from);
@@ -416,7 +408,10 @@ export function split(state: TopicState, input: SplitInput, now: string): TopicR
   ]);
 }
 
-function liveTopic(state: TopicState, rawId: string): { id: string; topic: Topic } | TopicResult {
+function liveTopic(
+  state: Frozen<TopicState>,
+  rawId: string,
+): { id: string; topic: Frozen<Topic> } | TopicResult {
   const id = resolveTopicId(state.doc, rawId);
   const topic = state.doc.topics[id];
   if (topic === undefined) return unusable(state, id, rawId);
@@ -424,7 +419,7 @@ function liveTopic(state: TopicState, rawId: string): { id: string; topic: Topic
 }
 
 export function closePropose(
-  state: TopicState,
+  state: Frozen<TopicState>,
   rawId: string,
   rawReason: string,
   now: string,
@@ -446,11 +441,11 @@ export function closePropose(
 export type MovePosition = { first: true } | { last: true } | { before: string } | undefined;
 
 function insertAt(
-  queue: string[],
+  queue: readonly string[],
   id: string,
   position: MovePosition,
-  doc: TopicsDoc,
-): string[] | string {
+  doc: Frozen<TopicsDoc>,
+): readonly string[] | string {
   const without = queue.filter((entry) => entry !== id);
   if (position === undefined) return queue.includes(id) ? queue : [...without, id];
   if ("first" in position) return [id, ...without];
@@ -462,7 +457,7 @@ function insertAt(
 }
 
 export function move(
-  state: TopicState,
+  state: Frozen<TopicState>,
   rawId: string,
   queue: Queue,
   position: MovePosition,
@@ -479,7 +474,7 @@ export function move(
   }
   const next = clone(state);
   removeFromQueues(next.doc, id);
-  next.doc.queues[queue] = target;
+  next.doc.queues[queue] = [...target];
   const place = target.indexOf(id) + 1;
   const name = found.topic.name;
   next.doc.history.push({ at: now, kind: "moved", topic: id, name, queue, position: place });
@@ -494,7 +489,7 @@ export function move(
 }
 
 function setText(
-  state: TopicState,
+  state: Frozen<TopicState>,
   rawId: string,
   field: "name" | "goal",
   value: string,
@@ -528,15 +523,25 @@ function setText(
   ]);
 }
 
-export function rename(state: TopicState, rawId: string, name: string, now: string): TopicResult {
+export function rename(
+  state: Frozen<TopicState>,
+  rawId: string,
+  name: string,
+  now: string,
+): TopicResult {
   return setText(state, rawId, "name", name, now);
 }
 
-export function setGoal(state: TopicState, rawId: string, goal: string, now: string): TopicResult {
+export function setGoal(
+  state: Frozen<TopicState>,
+  rawId: string,
+  goal: string,
+  now: string,
+): TopicResult {
   return setText(state, rawId, "goal", goal, now);
 }
 
-export function archive(state: TopicState, rawId: string, now: string): TopicResult {
+export function archive(state: Frozen<TopicState>, rawId: string, now: string): TopicResult {
   const id = resolveTopicId(state.doc, rawId);
   if (state.archive.topics[id] !== undefined) return unchanged(state, `ok ${id} 本來就已封存`);
   const topic = state.doc.topics[id];
@@ -555,7 +560,7 @@ export function archive(state: TopicState, rawId: string, now: string): TopicRes
 }
 
 export function reopen(
-  state: TopicState,
+  state: Frozen<TopicState>,
   rawId: string,
   queue: Queue | undefined,
   now: string,
@@ -590,14 +595,16 @@ export function reopen(
 }
 
 /** Turns down firstmate's proposal to close a topic. */
-export function keepOpen(state: TopicState, rawId: string): TopicResult {
+export function keepOpen(state: Frozen<TopicState>, rawId: string): TopicResult {
   const id = resolveTopicId(state.doc, rawId);
   const topic = state.doc.topics[id];
   if (topic === undefined) return unusable(state, id, rawId);
   if (topic.close_proposal === undefined) return unchanged(state, `ok ${id} 沒有關閉的提議`);
   const next = clone(state);
   delete (next.doc.topics[id] as Topic).close_proposal;
-  return changed(next, `ok ${id} 先不關`);
+  return changed(next, `ok ${id} 先不關`, [
+    { kind: "topic.kept", topic: id, text: `議題「${topic.name}」先不關` },
+  ]);
 }
 
 /** Marks the history entries a change just added with where the change was made. */

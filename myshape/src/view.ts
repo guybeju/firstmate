@@ -1,5 +1,6 @@
 // Computes what the board shows from what the service knows. Pure: the same
 // inputs always give the same view.
+import type { Frozen } from "./records.js";
 import type { JournalEvent, LedgerEvent, Summary } from "./journal.js";
 import type { HomeReport, OnAnswer, ReportHold, ReportQueued, ReportTask } from "./report.js";
 import { orNull } from "./files.js";
@@ -22,8 +23,8 @@ export interface HomeSnapshot {
 }
 
 export interface ViewInput {
-  topics: TopicState;
-  todos: TodoStore;
+  topics: Frozen<TopicState>;
+  todos: Frozen<TodoStore>;
   homes: HomeSnapshot[];
   events: JournalEvent[];
   summaries: Summary[];
@@ -247,7 +248,7 @@ class Placer {
   private readonly tags = new Map<string, Tag[]>();
 
   constructor(
-    private readonly topics: TopicState,
+    private readonly topics: Frozen<TopicState>,
     homes: HomeSnapshot[],
   ) {
     for (const home of homes) {
@@ -297,7 +298,7 @@ class Placer {
 
 /** Where one task belongs right now, given what the homes last reported. */
 export function placeTask(
-  topics: TopicState,
+  topics: Frozen<TopicState>,
   homes: HomeSnapshot[],
   home: string,
   task: string,
@@ -577,7 +578,7 @@ function prForSummary(summary: Summary, events: LedgerEvent[]): string | null {
   return latest === undefined ? null : prOf(latest);
 }
 
-function topicViews(topics: TopicState): Record<string, TopicView> {
+function topicViews(topics: Frozen<TopicState>): Record<string, TopicView> {
   const views: Record<string, TopicView> = {};
   for (const [id, topic] of Object.entries(topics.doc.topics)) {
     views[id] = {
@@ -610,7 +611,7 @@ export function buildView(input: ViewInput): BoardView {
   const homes = input.homes.map((home) => homeView(home, input));
   const view: BoardView = {
     homes,
-    queues: structuredClone(input.topics.doc.queues),
+    queues: structuredClone(input.topics.doc.queues) as Record<Queue, string[]>,
     topics: topicViews(input.topics),
     agents: [],
     queued: [],
@@ -665,7 +666,7 @@ function todoViews(input: ViewInput, view: BoardView): TodoView[] {
       topic: itemTopic(input.topics, item),
       what: item.action,
       guidance: item.guidance,
-      commands: item.commands,
+      commands: [...item.commands],
       state: item.state,
       reason: item.reason,
     },

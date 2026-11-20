@@ -6,19 +6,61 @@ import * as files from "./files.js";
 import { Journal, Offsets, Summaries } from "./journal.js";
 import { boardPaths, parseConfigArgs } from "./layout.js";
 import type { BoardPaths } from "./layout.js";
-import { loadTopicState, saveTopicState } from "./store.js";
+import type { StoredRecord } from "./records.js";
+import { commitChange, loadBoard, readBoard } from "./store.js";
+import type { CommitTarget, StoredBoard } from "./store.js";
+import { emptyTodos } from "./todos.js";
 import { archive, create, emptyState } from "./topics.js";
 import type { TopicResult, TopicState } from "./topics.js";
 
 let dir: string;
 let paths: BoardPaths;
+let saved: StoredRecord[];
+let target: CommitTarget;
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "tb-storage-"));
   paths = boardPaths({ state: path.join(dir, "state"), data: path.join(dir, "data") });
   fs.mkdirSync(paths.boardDataDir, { recursive: true });
+  saved = [];
+  let n = 0;
+  target = {
+    paths,
+    sink: {
+      has: (rid) => saved.some((record) => record.rid === rid),
+      append: (record) => void saved.push(record),
+    },
+    nextRid: () => `r-test-${(n += 1)}`,
+    nowSeconds: () => 100,
+  };
 });
 afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+/** What the files hold, read without writing anything. */
+function loadTopicState(at: BoardPaths): { state: TopicState; confirmed: unknown[] } {
+  const read = readBoard(at);
+  return { state: read.board.topics as TopicState, confirmed: read.confirmed };
+}
+
+function boardOf(state: TopicState): StoredBoard {
+  return { topics: state, todos: emptyTodos(), outbox: { topics: [], todos: [] } };
+}
+
+/** Saves `next` over `previous` as one topic change with one record. */
+function saveTopicState(at: BoardPaths, previous: TopicState, next: TopicState): void {
+  void at;
+  const records = [{ kind: "topic.moved" as const, topic: "a", text: "moved" }] as const;
+  const result = commitChange(
+    target,
+    boardOf(previous),
+    { file: "topics", next, records },
+    {
+      by: "aggregator",
+      label: "plain",
+    },
+  );
+  if (!result.ok) throw new Error(result.line);
+}
 
 const mode = (file: string): number => fs.statSync(file).mode & 0o777;
 
@@ -163,7 +205,7 @@ describe("layout", () => {
 
 function done(result: TopicResult): TopicState {
   if (!result.ok) throw new Error(result.line);
-  return result.state;
+  return result.state as TopicState;
 }
 
 describe("store", () => {
@@ -189,13 +231,16 @@ describe("store", () => {
     expect(mode(paths.topics)).toBe(0o644);
   });
 
-  it("writes only the file that changed", () => {
+  it("writes the archive only when it changes, and never todos.json for a topic change", () => {
     const state = done(create(emptyState(), { name: "A", goal: "g", id: "a" }, "T"));
     saveTopicState(paths, emptyState(), state);
-    const before = fs.statSync(paths.topics).mtimeMs;
-    saveTopicState(paths, state, state);
-    expect(fs.statSync(paths.topics).mtimeMs).toBe(before);
     expect(fs.existsSync(paths.archive)).toBe(false);
+    const archived = done(archive(state, "a", "T2"));
+    saveTopicState(paths, state, archived);
+    const inode = fs.statSync(paths.archive).ino;
+    saveTopicState(paths, archived, archived);
+    expect(fs.statSync(paths.archive).ino).toBe(inode);
+    expect(fs.existsSync(paths.todos)).toBe(false);
   });
 
   it("writes the file that gains the topic first, so a crash never loses it", () => {
@@ -310,7 +355,7 @@ describe("store", () => {
       merged: { old: "a", bad: 3 },
     };
     fs.writeFileSync(paths.topics, JSON.stringify(raw));
-    const { doc } = loadTopicState(paths).state;
+    const { doc } = loadBoard(target, "plain").board.topics;
     // A proposal listed in a queue by hand is not in it; it is confirmed like any other.
     expect(doc.queues).toEqual({ high: ["a"], normal: ["p"], later: [] });
     expect(doc.merged).toEqual({ old: "a" });
@@ -365,7 +410,8 @@ describe("store", () => {
     };
     fs.writeFileSync(paths.topics, JSON.stringify(raw));
     fs.writeFileSync(paths.archive, JSON.stringify(gone));
-    const first = loadTopicState(paths);
+    const loaded = loadBoard(target, "plain");
+    const first = { state: loaded.board.topics as TopicState, confirmed: loaded.confirmed };
     expect(first.state.doc.queues).toEqual({
       high: ["h", "hot"],
       normal: ["n1", "n2", "early", "late"],
@@ -394,16 +440,34 @@ describe("store", () => {
       archived_at: "T",
     });
 
-    // Written back at once: the files no longer hold a proposal, so the next load confirms nothing.
-    const onDisk = JSON.parse(fs.readFileSync(paths.topics, "utf8")) as { topics: object };
+    // Written back at once, by the board, with a record for each, the archived one too:
+    // the files no longer hold a proposal, so the next load confirms nothing.
+    const { outbox, ...onDisk } = JSON.parse(fs.readFileSync(paths.topics, "utf8")) as {
+      outbox: StoredRecord[];
+    };
     expect(JSON.stringify(onDisk)).not.toContain("proposed");
     expect(fs.readFileSync(paths.archive, "utf8")).not.toContain("proposed");
     expect(onDisk).toEqual(first.state.doc);
+    expect(saved.map((record) => [record.kind, record.topic, record.by, record.text])).toEqual([
+      ["topic.confirmed", "early", "board", "議題「Early」已確認，排在「一般」最後"],
+      ["topic.confirmed", "hot", "board", "議題「Hot」已確認，排在「高」最後"],
+      ["topic.confirmed", "late", "board", "議題「Late」已確認，排在「一般」最後"],
+      ["topic.confirmed", "dropped", "board", "議題「D」已確認，留在已封存"],
+      [
+        "todo.marks_carried",
+        null,
+        "board",
+        "看板開始自己存「要你動手」：從 topics.json 帶過來 1 個舊狀態（x）",
+      ],
+    ]);
+    expect(outbox).toEqual(saved.slice(0, 4));
     // A rewrite replaces the file, so an unchanged inode means it was left alone.
     const written = [fs.statSync(paths.topics).ino, fs.statSync(paths.archive).ino];
-    const second = loadTopicState(paths);
-    expect(second).toEqual({ state: first.state, confirmed: [] });
+    const second = loadBoard(target, "plain");
+    expect(second.board.topics).toEqual(first.state);
+    expect(second.confirmed).toEqual([]);
     expect([fs.statSync(paths.topics).ino, fs.statSync(paths.archive).ino]).toEqual(written);
+    expect(saved).toHaveLength(5);
   });
 
   it("orders leftover proposals made at the same moment by id", () => {
@@ -421,7 +485,7 @@ describe("store", () => {
     expect(loadTopicState(paths).state.doc.queues.normal).toEqual(["a", "b", "c"]);
   });
 
-  it("rewrites only the archive when only the archive holds a proposal", () => {
+  it("records an archived proposal's confirmation through topics.json", () => {
     const live = {
       v: 1,
       queues: { normal: ["a"] },
@@ -433,11 +497,15 @@ describe("store", () => {
       topics: { d: { name: "D", goal: "g", status: "proposed", archived_at: "T" } },
     };
     fs.writeFileSync(paths.archive, JSON.stringify(gone));
-    const loaded = loadTopicState(paths);
+    const loaded = loadBoard(target, "plain");
     expect(loaded.confirmed).toEqual([]);
-    expect(fs.readFileSync(paths.topics, "utf8")).toBe(JSON.stringify(live));
+    const { outbox, ...doc } = JSON.parse(fs.readFileSync(paths.topics, "utf8")) as {
+      outbox: StoredRecord[];
+    };
+    expect(doc).toEqual(loaded.board.topics.doc);
+    expect(outbox.map((record) => record.text)).toEqual(["議題「D」已確認，留在已封存"]);
     expect(fs.readFileSync(paths.archive, "utf8")).not.toContain("proposed");
-    expect(loaded.state.archive.topics["d"]?.status).toBe("confirmed");
+    expect(loaded.board.topics.archive.topics["d"]?.status).toBe("confirmed");
   });
 
   it("refuses a file it cannot understand, naming it", () => {
@@ -512,36 +580,38 @@ describe("journal", () => {
 
   it("stores board events and skips junk lines on reload", () => {
     const journal = new Journal(paths.events);
-    journal.appendBoard({
+    const record = {
+      src: "board" as const,
+      rid: "r-1",
       ts: 9,
       kind: "topic.confirmed",
       topic: "a",
       home: null,
       task: null,
+      by: "board",
+      label: "plain",
       text: "confirmed",
-    });
+    };
+    journal.appendRecord(record);
     fs.appendFileSync(
       paths.events,
       `junk\n[]\n${JSON.stringify({ src: "other" })}\n${JSON.stringify({ src: "board", kind: "k" })}\n${JSON.stringify({ src: "board", ts: 1 })}\n${JSON.stringify({ src: "ledger", home: "h" })}\n${JSON.stringify({ src: "ledger", raw: "r" })}\n${JSON.stringify({ src: "board", ts: 3, kind: "k" })}\n`,
     );
-    expect(new Journal(paths.events).events).toEqual([
-      {
-        src: "board",
-        ts: 9,
-        kind: "topic.confirmed",
-        topic: "a",
-        home: null,
-        task: null,
-        text: "confirmed",
-      },
+    const reloaded = new Journal(paths.events);
+    expect(reloaded.events).toEqual([
+      record,
       { src: "board", ts: 3, kind: "k", topic: null, home: null, task: null, text: "" },
     ]);
+    expect(reloaded.hasRecord("r-1")).toBe(true);
+    expect(reloaded.hasRecord("r-2")).toBe(false);
     expect(mode(paths.events)).toBe(0o644);
   });
 
   it("reads back a hands-on record's item, actor, label, outcome and reason", () => {
     const journal = new Journal(paths.events);
     const event = {
+      src: "board" as const,
+      rid: "r-1",
       ts: 9,
       kind: "todo.taken_down",
       topic: null,
@@ -554,8 +624,8 @@ describe("journal", () => {
       reason: "不用了",
       text: "要你動手「登入 VPN」已撤下：不再需要，不用了（plain 用指令）",
     };
-    journal.appendBoard(event);
-    expect(new Journal(paths.events).events).toEqual([{ src: "board", ...event }]);
+    journal.appendRecord(event);
+    expect(new Journal(paths.events).events).toEqual([event]);
   });
 
   it("stores a summary once and reloads valid ones", () => {

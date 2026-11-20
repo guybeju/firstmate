@@ -2,6 +2,7 @@
 // queue or was reopened, and then stayed put for the delay. Dragging it back
 // cancels; moving it again restarts the wait. The waits are kept in the
 // board's data, so a restart inside one neither drops nor repeats its notice.
+import type { Frozen } from "./records.js";
 import { isRecord, readJsonFile, writeFileAtomic } from "./files.js";
 import { QUEUES } from "./topics.js";
 import type { TopicState } from "./topics.js";
@@ -28,7 +29,7 @@ export interface NotifyStore {
 }
 
 /** "<queue>:<index>" of a topic that the aggregator may dispatch from, or null. */
-function dispatchableSpot(state: TopicState, id: string): string | null {
+function dispatchableSpot(state: Frozen<TopicState>, id: string): string | null {
   for (const queue of QUEUES) {
     const index = state.doc.queues[queue].indexOf(id);
     if (index !== -1) return queue === "later" ? null : `${queue}:${index}`;
@@ -80,7 +81,7 @@ export class DispatchNotifier {
    * Picks up the waits an earlier start left, keeping those still dispatchable;
    * a wait already over fires at once.
    */
-  start(state: TopicState): void {
+  start(state: Frozen<TopicState>): void {
     const before = this.pending.size;
     for (const id of this.pending.keys()) {
       if (dispatchableSpot(state, id) === null) this.pending.delete(id);
@@ -90,7 +91,11 @@ export class DispatchNotifier {
   }
 
   /** Call after every topic change with the topics the change made dispatchable. */
-  observe(before: TopicState, after: TopicState, becameDispatchable: string[]): void {
+  observe(
+    before: Frozen<TopicState>,
+    after: Frozen<TopicState>,
+    becameDispatchable: string[],
+  ): void {
     const due = Date.now() + this.delayMs;
     let changed = false;
     for (const [id, entry] of this.pending) {

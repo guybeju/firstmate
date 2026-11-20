@@ -3,6 +3,7 @@
 // per-home ledger offsets.
 import {
   appendLine,
+  appendLineDurable,
   isRecord,
   readCompleteLines,
   readJsonFile,
@@ -11,6 +12,7 @@ import {
   writeFileAtomic,
 } from "./files.js";
 import type { BoardPaths } from "./layout.js";
+import type { StoredRecord } from "./records.js";
 import path from "node:path";
 
 const FILE_MODE = 0o644;
@@ -28,6 +30,8 @@ export interface LedgerEvent {
 
 export interface BoardEvent {
   src: "board";
+  /** The record's id, the key replay dedupes on; lines written before records had one have none. */
+  rid?: string;
   ts: number;
   kind: string;
   topic: string | null;
@@ -42,7 +46,7 @@ export interface BoardEvent {
   reason?: string;
 }
 
-const OPTIONAL_BOARD_FIELDS = ["item", "by", "label", "outcome", "reason"] as const;
+const OPTIONAL_BOARD_FIELDS = ["rid", "item", "by", "label", "outcome", "reason"] as const;
 
 export type JournalEvent = LedgerEvent | BoardEvent;
 
@@ -108,13 +112,20 @@ function parseStored(text: string): { event: JournalEvent | null; key: string | 
 export class Journal {
   readonly events: JournalEvent[] = [];
   private readonly seen = new Set<string>();
+  private readonly rids = new Set<string>();
 
   constructor(private readonly file: string) {
     for (const line of readCompleteLines(file)) {
       const { event, key } = parseStored(line);
       if (key !== null) this.seen.add(key);
+      if (event?.src === "board" && event.rid !== undefined) this.rids.add(event.rid);
       if (event !== null) this.events.push(event);
     }
+  }
+
+  /** True when the record with this id is already saved. */
+  hasRecord(rid: string): boolean {
+    return this.rids.has(rid);
   }
 
   /** Stores the ledger lines not seen before for `home`; returns how many were new. */
@@ -132,10 +143,11 @@ export class Journal {
     return added;
   }
 
-  appendBoard(event: Omit<BoardEvent, "src">): void {
-    const stored: BoardEvent = { src: "board", ...event };
-    appendLine(this.file, JSON.stringify(stored), FILE_MODE);
-    this.events.push(stored);
+  /** Saves one system record, on disk before it returns; only store.ts commitChange calls it. */
+  appendRecord(record: StoredRecord): void {
+    appendLineDurable(this.file, JSON.stringify(record), FILE_MODE);
+    this.rids.add(record.rid);
+    this.events.push(record);
   }
 }
 

@@ -39,7 +39,8 @@ interface Harness {
   /** Results for the next deliverer runs, in order; anything unscripted is delivered. */
   next: (...results: CommandResult[]) => void;
   tags: Map<string, string | null>;
-  delivered: WriteRecord[];
+  /** Every write that ended delivered or handled elsewhere, in the order it did. */
+  finished: WriteRecord[];
   changes: () => number;
   audit: () => Record<string, unknown>[];
   restart: (timings?: Partial<WriteTimings>, unavailable?: string | null) => Harness;
@@ -135,7 +136,7 @@ function harness(
   const queue: CommandResult[] = [];
   const calls: Record<string, unknown>[] = [];
   const tags = new Map<string, string | null>();
-  const delivered: WriteRecord[] = [];
+  const finished: WriteRecord[] = [];
   let changes = 0;
   const engine = new WriteEngine(
     auditFile,
@@ -151,7 +152,7 @@ function harness(
       onChange: () => {
         changes += 1;
       },
-      onDelivered: (record) => delivered.push(record),
+      onFinished: (record) => finished.push(record),
     },
     { retryDelaysMs: [5, 5], resumeWindowMs: 60_000, commandTimeoutMs: 1000, ...timings },
   );
@@ -162,7 +163,7 @@ function harness(
     calls,
     next: (...results) => queue.push(...results),
     tags,
-    delivered,
+    finished,
     changes: () => changes,
     audit: () =>
       fs
@@ -260,7 +261,7 @@ describe("message", () => {
       sending: { text: "請先做帳務", action: { kind: "message" } },
     });
     expect(fs.statSync(path.join(dir, "audit.jsonl")).mode & 0o777).toBe(0o600);
-    expect(h.delivered).toEqual([write]);
+    expect(h.finished).toEqual([write]);
     expect(h.changes()).toBe(1);
   });
 
@@ -297,7 +298,7 @@ describe("message", () => {
     await settled(stuck, "undelivered");
     expect(stuck.error).toBe("still asleep");
     expect(h.calls).toHaveLength(6);
-    expect(h.delivered).toEqual([woken]);
+    expect(h.finished).toEqual([woken]);
   });
 
   it("settles at once as failed or handled elsewhere when the deliverer says so", async () => {
@@ -310,7 +311,7 @@ describe("message", () => {
     expect(first).toMatchObject({ state: "failed", error: "no inbox", attempt: 0 });
     expect(second).toMatchObject({ state: "failed", error: "crashed" });
     expect(h.calls).toHaveLength(3);
-    expect(h.delivered).toEqual([]);
+    expect(h.finished).toEqual([third]);
   });
 });
 
@@ -377,7 +378,7 @@ describe("answer", () => {
         topic: { id: "login", name: "Login" },
       },
     ]);
-    expect(h.delivered).toEqual([write]);
+    expect(h.finished).toEqual([write]);
   });
 
   it("names the topic by the task, its origin, or none, and the home the hold lives in", async () => {
@@ -808,7 +809,7 @@ describe("serialization", () => {
         unavailable: null,
         readTags: async () => "",
         onChange: () => undefined,
-        onDelivered: () => undefined,
+        onFinished: () => undefined,
       },
       { retryDelaysMs: [80], resumeWindowMs: 1000, commandTimeoutMs: 1000 },
     );
