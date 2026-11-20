@@ -36,6 +36,60 @@ function dropOnQueue(name, queue) {
   })()`;
 }
 
+/**
+ * AT10.4 and the hands-on states of AT10.7: the card shows the guidance as
+ * plain text and one block per command, each copy button copying exactly its
+ * command, an item with no command shows no block, and no state or confirm
+ * step names Firstmate.
+ */
+async function handsOn(page) {
+  const commands = ["sudo openconnect vpn.example.com", "ping -c1 intra \\\n  && echo ok"];
+  topic("todo", "add", "k1", "登入 VPN", "--topic", "solo", "--do", "用公司帳號登入", "--note", "只在公司網路外",
+    "--cmd", commands[0], "--cmd", commands[1]);
+  topic("todo", "add", "k2", "按一下", "--topic", "solo", "--do", "按一下就好");
+  topic("todo", "add", "k3", "舊的", "--topic", "solo", "--do", "x", "--captain-closes");
+  const card = (id, expression) =>
+    `(() => { const card = document.querySelector('[data-todo="${id}"]'); return ${expression}; })()`;
+  await page.waitFor("the hands-on cards", `document.querySelectorAll("[data-todo]").length === 3`);
+  const shape = await page.evaluate(card("k1",
+    `JSON.stringify([[...card.querySelectorAll("pre.cmd")].map((pre) => pre.textContent), card.querySelectorAll(".cmd-row button").length, card.querySelector(".guide")?.textContent ?? null])`));
+  if (shape !== JSON.stringify([commands, 2, "只在公司網路外"]))
+    throw new Error(`the card must show the guidance apart and each command in its own block: ${shape}`);
+  if ((await page.evaluate(card("k2", `card.querySelectorAll("pre.cmd, .cmd-row").length`))) !== 0)
+    throw new Error("an item with no command must show no command block");
+  for (const [index, command] of commands.entries()) {
+    await page.evaluate(card("k1", `card.querySelectorAll(".cmd-row button")[${index}].click()`));
+    await page.waitFor(`copy button ${index} to answer`, card("k1", `["已複製", "已選取"].some((word) => card.querySelectorAll(".cmd-row button")[${index}].textContent.startsWith(word))`));
+    const copied = await page.evaluate(card("k1",
+      `card.querySelectorAll(".cmd-row button")[${index}].textContent === "已複製" ? "clipboard" : getSelection().toString()`));
+    if (copied !== "clipboard" && copied !== command) throw new Error(`copy button ${index} must copy exactly its command, selected: ${JSON.stringify(copied)}`);
+  }
+  await noFirstmate(page, "a hands-on card still to do");
+  await page.click('[data-todo="k1"] button', "做完了");
+  await page.waitFor("the claim shown", card("k1", `card.innerText.includes("你已按做完了，等 plain 驗證")`));
+  await noFirstmate(page, "a claimed card");
+  topic("todo", "failed", "k1", "--reason", "連不上");
+  await page.waitFor("the failed check", card("k1", `card.innerText.includes("plain 驗證沒過：連不上")`));
+  topic("todo", "obsolete", "k3", "--reason", "不用了");
+  await page.waitFor("the item no longer needed", card("k3", `card.innerText.includes("plain：不再需要了。不用了")`));
+  await noFirstmate(page, "a rejected card and a card no longer needed");
+  await page.click('[data-todo="k3"] button', "好，撤下");
+  await page.waitFor("the takedown's confirm step", card("k3", `card.querySelector(".confirm") !== null`));
+  await noFirstmate(page, "the takedown's confirm step");
+  await page.click('[data-todo="k3"] .confirm button', "確定");
+  await page.waitFor("k3 gone", `document.querySelector('[data-todo="k3"]') === null`);
+  await page.click('[data-todo="k2"] button', "不做了");
+  await page.waitFor("不做了's confirm step", card("k2", `card.querySelector(".confirm") !== null`));
+  await page.click('[data-todo="k2"] .confirm button', "確定");
+  await page.waitFor("k2 gone", `document.querySelector('[data-todo="k2"]') === null`);
+  for (let tries = 0; tries < 60 && received().filter((entry) => entry.event === "todo.closed").length < 2; tries += 1) await sleep(150);
+  const closes = received().filter((entry) => entry.event === "todo.closed").map((entry) => `${entry.item.id}:${entry.by}:${entry.words}`);
+  if (closes.join(" ") !== "k3:captain:撤下 k2:captain:不做了") throw new Error(`each press must reach the stub: ${closes.join(" ")}`);
+  topic("todo", "done", "k1");
+  await page.waitFor("k1 gone", `document.querySelector('[data-todo="k1"]') === null`);
+  await noFirstmate(page, "the home page after the items closed");
+}
+
 async function connected(page) {
   await page.waitFor("the fed work", has("建置"));
   await page.waitFor("the fed workers", has("j1 working"), 15000);
@@ -83,6 +137,7 @@ async function connected(page) {
   const answer = received().find((entry) => entry.kind === "answer");
   if (answer?.task !== "h1" || answer?.answer !== "A") throw new Error(`the answer must reach the stub: ${JSON.stringify(answer)}`);
   await page.click("button.link", "回首頁");
+  await handsOn(page);
 
   // AT10.5: the service stopped, then back; a home that stops answering goes stale.
   topic("stop");

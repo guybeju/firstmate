@@ -283,6 +283,14 @@ test_page_actions_complete_with_nothing_connected() {
   api "$MAIN" topics/rename '{"id":"one","value":"One two"}' >/dev/null
   api "$MAIN" topics/goal '{"id":"one","value":"both"}' >/dev/null
   api "$MAIN" topics/reopen '{"id":"three","queue":"later"}' >/dev/null
+  t todo add by-hand "手動" --topic one --do "做一下" >/dev/null || fail "todo add must work with nothing connected"
+  t todo add old-hand "舊的" --topic one --do "做舊的" --captain-closes >/dev/null
+  t todo obsolete old-hand --reason "不用了" >/dev/null
+  code=$(api "$MAIN" todos/drop '{"task":"by-hand"}' | jq -r '.confirm')
+  assert_equals true "$(api "$MAIN" todos/drop "{\"task\":\"by-hand\",\"confirm\":\"$code\"}" | jq -r '.ok')" "不做了 must work"
+  code=$(api "$MAIN" todos/takedown '{"task":"old-hand"}' | jq -r '.confirm')
+  assert_equals true "$(api "$MAIN" todos/takedown "{\"task\":\"old-hand\",\"confirm\":\"$code\"}" | jq -r '.ok')" "好，撤下 must work"
+  assert_equals '{}' "$(jq -c '.items' "$MAIN/data/myshape/todos.json")" "不做了 and 好，撤下 must take effect at once"
   assert_equals "null|One two|both|null" \
     "$(jq -r '"\(.topics.two)|\(.topics.one.name)|\(.topics.one.goal)|\(.topics.four.close_proposal)"' "$MAIN/data/topics.json")" \
     "the merge, rename, goal and keep must take effect at once"
@@ -297,8 +305,8 @@ test_nothing_fails_with_nothing_connected() {
   local writes
   sleep 3.5
   writes=$(new_writes "$BEFORE_AT8")
-  assert_equals 5 "$(printf '%s' "$writes" | jq 'length')" \
-    "the merge, the archive, the keep, the message and five's dispatchable notice are the five writes"
+  assert_equals 7 "$(printf '%s' "$writes" | jq 'length')" \
+    "the merge, the archive, the keep, the message, 不做了, 好，撤下 and five's dispatchable notice are the seven writes"
   assert_equals "waiting:0" "$(printf '%s' "$writes" | jq -r 'map("\(.state):\(.attempt)") | unique | join(" ")')" \
     "every write must wait at attempt 0"
   assert_equals "message notice" "$(printf '%s' "$writes" | jq -r 'map(.kind) | unique | join(" ")')" \
@@ -398,7 +406,7 @@ test_status_and_stop() {
 
 test_only_the_boards_files() {
   local file extra=""
-  for file in data/topics.json data/topics-archive.json data/myshape/events.jsonl \
+  for file in data/topics.json data/topics-archive.json data/myshape/events.jsonl data/myshape/todos.json \
     data/myshape/summaries.jsonl data/myshape/notify-pending.json state/myshape/audit.jsonl state/myshape/port \
     state/myshape/service.log state/myshape/token; do
     assert_present "$MAIN/$file" "the board must have written $file"
@@ -410,7 +418,7 @@ test_only_the_boards_files() {
     case "$file" in
       config/myshape-port | data/topics.json | data/topics-archive.json | data/myshape/events.jsonl | \
         data/myshape/summaries.jsonl | data/myshape/offsets.json | data/myshape/notify-pending.json | \
-        data/myshape/aggregator.json | state/myshape/token | \
+        data/myshape/aggregator.json | data/myshape/todos.json | state/myshape/token | \
         state/myshape/port | state/myshape/service.log | state/myshape/service.log.1 | \
         state/myshape/audit.jsonl | state/myshape/startup-error) ;;
       *) extra+=" $file" ;;

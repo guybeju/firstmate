@@ -549,10 +549,10 @@ describe("journal", () => {
       task: null,
       item: "vpn-login",
       by: "aggregator",
-      label: "first mate",
+      label: "plain",
       outcome: "taken_down",
       reason: "不用了",
-      text: "要你動手「登入 VPN」已撤下：不再需要，不用了（first mate 用指令）",
+      text: "要你動手「登入 VPN」已撤下：不再需要，不用了（plain 用指令）",
     };
     journal.appendBoard(event);
     expect(new Journal(paths.events).events).toEqual([{ src: "board", ...event }]);

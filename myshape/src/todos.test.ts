@@ -343,7 +343,7 @@ describe("ending an adoption pass", () => {
     store = added({ id: "adopted", ref: "hold", adopt: true }, store);
     store = added({ id: "still", ref: "hold", adopt: true }, store);
     store = added({ id: "fresh" }, store);
-    const result = ok(todos.adoptDone(store, ["kept", "still"], "first mate"));
+    const result = ok(todos.adoptDone(store, ["kept", "still"], "plain"));
     expect(Object.keys(result.store.marks)).toEqual(["kept"]);
     expect(Object.keys(result.store.items).toSorted()).toEqual(["fresh", "still"]);
     expect(result.events).toEqual([
@@ -352,13 +352,13 @@ describe("ending an adoption pass", () => {
         topic: "solo",
         item: "adopted",
         by: "aggregator",
-        label: "first mate",
+        label: "plain",
         outcome: "elsewhere",
-        text: "要你動手「登入 VPN」已關：hold 已在別處關掉（first mate 用指令）",
+        text: "要你動手「登入 VPN」已關：hold 已在別處關掉（plain 用指令）",
       },
     ]);
     expect(result.notices).toEqual([]);
-    expect(ok(todos.adoptDone(result.store, ["kept", "still"], "first mate")).changed).toBe(false);
+    expect(ok(todos.adoptDone(result.store, ["kept", "still"], "plain")).changed).toBe(false);
   });
 });
 
