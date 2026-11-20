@@ -79,17 +79,18 @@
 # page at once, with the reason in its topic's updates; an item added with
 # --captain-closes waits instead for the captain's 好，撤下.
 #
-# --adopt is for items that existed before the board kept them (Firstmate's
-# hands-on holds): it accepts an archived topic or none, keeps the mark such an
-# item already had, and changes nothing for an item already on the board;
-# --since is when the item was first opened, an ISO 8601 time.
+# --adopt is for items an aggregator kept before the board kept them: it
+# accepts an archived topic, an unknown one or none, keeps the mark such an
+# item already had, and changes nothing for an item already on the board or
+# one closed on the board whose hold is still open; --since is when the item
+# was first opened, an ISO 8601 time. adopt-done ends such a pass: given every
+# such item still open on the aggregator's side, it drops the marks of the
+# others and takes adopted items (--ref hold) that are no longer open off the
+# page, with a record and no notice.
 #
 # Every step of an item (put on, rewritten, adopted, claimed, failed, marked no
 # longer needed, closed) writes a record on its topic's updates saying who made
 # it: the captain on the page, or the aggregator by its label.
-# adopt-done ends such a pass: given every item that is still an open hold, it
-# drops the marks of the others and takes adopted items (--ref hold) whose hold
-# is gone off the page, with a record and no notice.
 #
 # Repeating add, failed, or obsolete unchanged is safe; done on an item that
 # is already closed changes nothing and says so.
