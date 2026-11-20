@@ -644,8 +644,10 @@ fm_tmux_isolation_gate() {
 #
 # fm_fakebin <dir> creates <dir>/fakebin and echoes it; prepend it to PATH to
 # shadow real tools with stubs. fm_fake_exit0 drops trivial exit-0 stubs for the
-# named tools into a fakebin dir. fm_fake_crash_injector drops the shim a fake
-# uses to crash the process under test deterministically. fm_fake_version_tool
+# named tools into a fakebin dir. fm_fake_crash_point drops the shim a fake
+# stops at so the test can signal its own child there (see "the guarded signal"
+# below); fm_fake_crash_injector drops the older shim a fake uses to crash the
+# process under test itself. fm_fake_version_tool
 # drops a stub for a tool whose installed version bootstrap gates, so a fixture
 # cannot be reported as an unparseable build simply for answering `--version`
 # with nothing. fm_fake_nonexclusive_mkdir (tests/nonexclusive-mkdir-fixture.sh)
@@ -667,6 +669,151 @@ exit 0
 SH
     chmod +x "$fakebin/$tool"
   done
+}
+
+# --- the guarded signal (signal policy P-010) --------------------------------
+#
+# A test signals only a child it started itself as a plain background command
+# from its own shell, recorded at once with fm_test_record_child "$!", and only
+# through fm_test_signal, whose verdict tests/signal-guard.sh owns. A stand-in
+# never signals and never picks a pid by walking up the process tree: an
+# exec'ing wrapper, or a parent that died first, moves that pid one level up,
+# and on a desktop an orphan's parent is the user's service manager, which the
+# same user may signal, ending the login. A stand-in instead stops at
+# fm-crash-point (fm_fake_crash_point) and the test signals its own child from
+# there (fm_test_crash_at).
+#
+# Start the child as a plain command, not through a wrapper function, a
+# `( ... )` or `$(...)`, so that `$!` is the script under test itself:
+#   FM_HOME="$home" "$SCRIPT" args > "$out" 2>&1 &
+#   fm_test_record_child "$!"
+#
+# Log-only mode: FM_TEST_SIGNAL_DRY_RUN=1 (myshape/test/signal-lib.sh also
+# accepts "unfixed") with FM_TEST_SIGNAL_LOG, an absolute path. fm_test_signal
+# then sends nothing and the guard appends one line per call to the log; a case
+# that needs the signal to land does not pass in this mode.
+case "${FM_TEST_SIGNAL_DRY_RUN:-}" in
+  '' | 1 | unfixed) ;;
+  *) echo "not ok - FM_TEST_SIGNAL_DRY_RUN must be 1, unfixed, or unset" >&2; exit 1 ;;
+esac
+if [ -n "${FM_TEST_SIGNAL_DRY_RUN:-}" ]; then
+  case "${FM_TEST_SIGNAL_LOG:-}" in
+    /*) ;;
+    *) echo "not ok - FM_TEST_SIGNAL_DRY_RUN needs FM_TEST_SIGNAL_LOG, an absolute path for its log" >&2; exit 1 ;;
+  esac
+fi
+FM_TEST_SUITE_PARENT=$PPID
+export FM_TEST_SUITE_PARENT
+FM_TEST_RECORDED_CHILDREN=
+
+fm_test_signal_dry_run() {
+  [ -n "${FM_TEST_SIGNAL_DRY_RUN:-}" ]
+}
+
+fm_test_record_child() {  # <pid that $! just gave>
+  case "${1:-}" in
+    '' | 0* | *[!0-9]*) fail "fm_test_record_child: '${1:-}' is not a pid from \$!" ;;
+  esac
+  FM_TEST_RECORDED_CHILDREN="$FM_TEST_RECORDED_CHILDREN $1"
+}
+
+# fm_test_signal <signal-name> <pid>: the one signal command of the tests that
+# source this file. Anything the guard refuses fails the test unsent; in
+# log-only mode nothing is sent at all. The pid is a child this shell has not
+# waited for yet, so it cannot have been reused.
+fm_test_signal() {
+  local self verdict log=""
+  self=$(exec sh -c 'printf "%s\n" "$PPID"')
+  ! fm_test_signal_dry_run || log=$FM_TEST_SIGNAL_LOG
+  verdict=$(FM_TEST_RECORDED_CHILDREN=$FM_TEST_RECORDED_CHILDREN \
+    sh "$ROOT/tests/signal-guard.sh" "$self" "$log" "${FUNCNAME[1]:-main}" "$@")
+  ! fm_test_signal_dry_run || return 0
+  case "$verdict" in "accepted "*) ;; *) fail "signal guard: $verdict" ;; esac
+  kill -s "$1" "${verdict#accepted }"
+}
+
+# fm_fake_crash_point <fakebin>
+# Drops `fm-crash-point <dir> <name>`, the place a stand-in stops so the test
+# can signal its own child: it writes <dir>/<name>.reached (atomically) with
+# the pids above it, nearest first, and returns 0 once <dir>/<name>.release
+# exists. It signals nothing. It gives up with status 1 after
+# FM_TEST_STUB_MAX_BLOCK_SECONDS or once the suite is gone, and a stand-in that
+# sees that status must exit without doing the work it stood in for, so an
+# abandoned stand-in never resumes while its victim may still be alive. Its
+# tools are resolved now, so a fake mv, sleep, ps or tr in the same fakebin is
+# never run by it.
+fm_fake_crash_point() {
+  local fakebin=$1 tool path
+  local -a tools=()
+  for tool in ps tr mv sleep; do
+    path=$(command -v "$tool") || return 1
+    tools+=("$path")
+  done
+  cat > "$fakebin/fm-crash-point" <<SH
+#!/usr/bin/env bash
+set -u
+dir=\${1:?fm-crash-point: <dir> required} name=\${2:?fm-crash-point: <name> required}
+chain= pid=\$PPID levels=0
+while [ -n "\$pid" ] && [ "\$pid" -gt 1 ] 2>/dev/null && [ "\$levels" -lt 64 ]; do
+  chain="\$chain \$pid"
+  pid=\$('${tools[0]}' -o ppid= -p "\$pid" 2>/dev/null | '${tools[1]}' -d '[:space:]')
+  levels=\$((levels + 1))
+done
+printf '%s\n' "\${chain# }" > "\$dir/\$name.reached.tmp" || exit 1
+'${tools[2]}' -f "\$dir/\$name.reached.tmp" "\$dir/\$name.reached" || exit 1
+waited=0 limit=\$((\${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120} * 20))
+while [ ! -e "\$dir/\$name.release" ]; do
+  if [ "\$waited" -ge "\$limit" ] || ! '${tools[0]}' -p "\${FM_TEST_SUITE_PID:-\$PPID}" >/dev/null 2>&1; then
+    echo "fm-crash-point: \$name was never released; giving up without resuming" >&2
+    exit 1
+  fi
+  '${tools[3]}' 0.05
+  waited=\$((waited + 1))
+done
+exit 0
+SH
+  chmod +x "$fakebin/fm-crash-point"
+}
+
+fm_test_process_state() {  # <pid>: its ps state letter, empty once it is gone.
+  ps -o state= -p "$1" 2>/dev/null | tr -d '[:space:]'
+}
+
+# fm_test_crash_at <dir> <name> <signal-name> <pid>
+# Waits until a stand-in stops at fm-crash-point <dir> <name>, checks that
+# <pid> is above it, signals <pid> through fm_test_signal, and then releases
+# the stand-in: after KILL only once <pid> is gone, after STOP only once it is
+# stopped, so the stand-in never resumes while its victim can still act. Fails
+# if <pid> exits first, if the point is not reached within 30 s, or if the
+# stand-in is not running under <pid>, and releases the stand-in first. When the
+# guard refuses <pid> the test fails at once and the stand-in, never released,
+# gives up at its bound without resuming.
+fm_test_crash_at() {
+  local dir=$1 name=$2 signal=$3 pid=$4 i=0 chain
+  while [ ! -s "$dir/$name.reached" ]; do
+    case "$(fm_test_process_state "$pid")" in
+      '' | Z*) : > "$dir/$name.release"; fail "pid $pid ended before reaching crash point $name" ;;
+    esac
+    [ "$i" -lt 600 ] || { : > "$dir/$name.release"; fail "crash point $name was not reached within 30s"; }
+    sleep 0.05
+    i=$((i + 1))
+  done
+  chain=$(cat "$dir/$name.reached")
+  case " $chain " in
+    *" $pid "*) ;;
+    *) : > "$dir/$name.release"; fail "the stand-in at crash point $name is not running under pid $pid (above it: $chain)" ;;
+  esac
+  fm_test_signal "$signal" "$pid"
+  i=0
+  while ! fm_test_signal_dry_run && [ "$i" -lt 600 ]; do
+    case "$signal:$(fm_test_process_state "$pid")" in
+      KILL:'' | KILL:Z* | STOP:T* | TERM:* | INT:* | HUP:* | QUIT:* | CONT:*) break ;;
+    esac
+    sleep 0.05
+    i=$((i + 1))
+  done
+  : > "$dir/$name.release"
+  [ "$i" -lt 600 ] || fail "pid $pid did not take $signal within 30s"
 }
 
 # fm_fake_crash_injector <fakebin>
