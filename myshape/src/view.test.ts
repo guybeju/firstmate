@@ -83,7 +83,7 @@ function input(extra: Partial<ViewInput> = {}): ViewInput {
     summaries: [],
     nowMs: NOW,
     staleMs: 180_000,
-    label: "first mate",
+    label: "plain",
     ...extra,
   };
 }
@@ -924,8 +924,8 @@ describe("updates and summaries", () => {
     const lines = view.updates.map((update) => `${update.source} ${update.task} ${update.text}`);
     expect(lines.toSorted()).toEqual([
       "board page main/page 歸到「Hi」",
-      "tag cmd 歸到「High」（first mate 用指令）",
-      "tag cmd 歸到「Normal two」（first mate 用指令）",
+      "tag cmd 歸到「High」（plain 用指令）",
+      "tag cmd 歸到「Normal two」（plain 用指令）",
     ]);
     expect(view.updates.find((update) => update.text.includes("Normal two"))).toEqual({
       ts: day(3),
@@ -933,7 +933,7 @@ describe("updates and summaries", () => {
       home: "main",
       task: "cmd",
       event: "agent.tagged",
-      text: "歸到「Normal two」（first mate 用指令）",
+      text: "歸到「Normal two」（plain 用指令）",
       pr: null,
       topic: "n2",
     });
@@ -1040,7 +1040,7 @@ describe("closed hands-on items", () => {
     task: null,
     item,
     by: "aggregator",
-    label: "first mate",
+    label: "plain",
     text: `${item} ${kind}`,
     ...extra,
   });

@@ -597,50 +597,51 @@ function ledgerUpdates(input: ViewInput, placer: Placer): UpdateView[] {
 }
 
 /**
- * The tags made by command: every tag line of a task that no agent.tagged
- * record accounts for. A page tag writes its line first and its record once
- * delivered, so a record takes the latest earlier line of the same topic.
+ * The tag lines of one task that no agent.tagged record accounts for. A page
+ * tag writes its line first and its record once delivered, so each record
+ * takes the latest earlier line of the same topic.
  */
+function unmatchedTags(tags: Tag[], records: BoardEvent[]): Tag[] {
+  const unmatched = [...tags];
+  for (const record of records) {
+    const limitMs = (record.ts + TAG_RECORD_SKEW_S) * 1000;
+    const match = unmatched.findLastIndex(
+      (tag) => tag.topic === record.topic && tag.atMs <= limitMs,
+    );
+    if (match !== -1) unmatched.splice(match, 1);
+  }
+  return unmatched;
+}
+
+/** The line a tag made by command shows, or null when its topic is not one the board knows. */
+function tagLine(input: ViewInput, home: string, task: string, tag: Tag): UpdateView | null {
+  const topic = resolveTopicId(input.topics.doc, tag.topic);
+  const name = input.topics.doc.topics[topic]?.name ?? input.topics.archive.topics[topic]?.name;
+  if (name === undefined) return null;
+  return {
+    ts: Math.floor(tag.atMs / 1000),
+    source: "tag",
+    home,
+    task,
+    event: "agent.tagged",
+    text: `歸到「${name}」（${input.label} 用指令）`,
+    pr: null,
+    topic,
+  };
+}
+
+/** The tags made by command: every tag line with a time that no agent.tagged record accounts for. */
 function tagUpdates(input: ViewInput): UpdateView[] {
   const records = input.events.filter(
     (event): event is BoardEvent => event.src === "board" && event.kind === "agent.tagged",
   );
-  const lines: UpdateView[] = [];
-  for (const home of input.homes) {
-    for (const [task, text] of Object.entries(home.report?.topics ?? {})) {
-      const tags = parseTags(text).filter((tag) => tag.atMs > 0);
-      const unmatched = new Set(tags.keys());
-      for (const record of records) {
-        if (record.home !== home.id || record.task !== task) continue;
-        const match = [...unmatched]
-          .toReversed()
-          .find(
-            (index) =>
-              tags[index]?.topic === record.topic &&
-              (tags[index]?.atMs ?? 0) <= (record.ts + TAG_RECORD_SKEW_S) * 1000,
-          );
-        if (match !== undefined) unmatched.delete(match);
-      }
-      for (const index of unmatched) {
-        const tag = tags[index] as Tag;
-        const topic = resolveTopicId(input.topics.doc, tag.topic);
-        const name =
-          input.topics.doc.topics[topic]?.name ?? input.topics.archive.topics[topic]?.name;
-        if (name === undefined) continue;
-        lines.push({
-          ts: Math.floor(tag.atMs / 1000),
-          source: "tag",
-          home: home.id,
-          task,
-          event: "agent.tagged",
-          text: `歸到「${name}」（${input.label} 用指令）`,
-          pr: null,
-          topic,
-        });
-      }
-    }
-  }
-  return lines;
+  return input.homes.flatMap((home) =>
+    Object.entries(home.report?.topics ?? {}).flatMap(([task, text]) => {
+      const own = records.filter((record) => record.home === home.id && record.task === task);
+      const timed = parseTags(text).filter((tag) => tag.atMs > 0);
+      return unmatchedTags(timed, own).flatMap((tag) => tagLine(input, home.id, task, tag) ?? []);
+    }),
+  );
 }
 
 function updatesOf(input: ViewInput, placer: Placer): UpdateView[] {

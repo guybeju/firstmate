@@ -20,7 +20,7 @@ import type { TodoItem, TodoStore } from "./todos.js";
 import { emptyState } from "./topics.js";
 import type { TopicState } from "./topics.js";
 
-const WHO = { label: "first mate", agent: "firstmate", now: "2026-11-21T00:00:00Z" };
+const WHO = { label: "plain", agent: "plain-agent", now: "2026-11-21T00:00:00Z" };
 
 interface Fixture {
   args: Record<string, unknown>;
@@ -79,7 +79,7 @@ function item(state: TodoItem["state"], extra: Partial<TodoItem> = {}): TodoItem
     state,
     reason: null,
     at: "T",
-    by: "firstmate",
+    by: "plain-agent",
     ref: "",
     captain_closes: false,
     adopted: false,
@@ -175,7 +175,7 @@ describe("every operation in the table", () => {
       for (const line of lines) {
         expect(line.rid).toMatch(/^r-ops-\d+$/);
         expect(line.by).toBe(FIXTURES[op].fromPage ? "captain" : "aggregator");
-        expect(line.label).toBe("first mate");
+        expect(line.label).toBe("plain");
         expect(line.ts).toBe(1_795_200_000);
         expect(RECORD_KINDS).toContain(line.kind);
         expect(line.topic !== null || line.item !== undefined).toBe(true);
@@ -227,9 +227,7 @@ describe("every operation in the table", () => {
       { event: "topic.merged", topic: "a", line: "議題「B」已併入「A two」（id：a）" },
     ]);
     const command = run(merged.board, "goal");
-    expect(command.records[0]?.text).toBe(
-      "議題「A two」的目標改為「new goal」（first mate 用指令）",
-    );
+    expect(command.records[0]?.text).toBe("議題「A two」的目標改為「new goal」（plain 用指令）");
     expect(command.decisions).toEqual([]);
     const claimed = run(command.board, "todo-claim");
     expect(claimed.records[0]).toMatchObject({ kind: "todo.claimed", item: "open", topic: "a" });
@@ -257,5 +255,98 @@ describe("a result that says it changed nothing", () => {
   it("must hand back the state it was given", () => {
     expect(() => assertUnchanged("op", { a: 1 }, { a: 1 })).not.toThrow();
     expect(() => assertUnchanged("op", { a: 1 }, { a: 2 })).toThrow("op 說沒有改任何東西");
+  });
+});
+
+describe("each operation's arguments", () => {
+  function reply(op: string, args: Record<string, unknown>, fromPage = false) {
+    return applyOperation(target, readBoard(paths).board, { op, args, fromPage }, WHO);
+  }
+  const usage = (op: string, args: Record<string, unknown>, fromPage = false) =>
+    expect(reply(op, args, fromPage).response).toMatchObject({ ok: false, code: "usage" });
+
+  it("create takes a name, a goal, and an optional string id and queue", () => {
+    usage("create", { goal: "g" });
+    usage("create", { name: "N", goal: "g", queue: "soon" });
+    usage("create", { name: "N", goal: "g", id: 5 });
+    expect(reply("create", { name: "N", goal: "g", id: "n", queue: "later" }).response.line).toBe(
+      "ok n 已建立，排在「待辦」最後",
+    );
+  });
+
+  it("move takes a queue and at most one of first, last and before", () => {
+    usage("move", { id: "c" }, true);
+    usage("move", { id: "c", queue: "normal", first: true, before: "b" }, true);
+    usage("move", { id: "c", queue: "normal", last: true, before: "b" }, true);
+    usage("move", { id: "c", queue: "normal", before: 3 }, true);
+    const first = reply("move", { id: "c", queue: "normal", first: true }, true);
+    expect(first.board.topics.doc.queues.normal).toEqual(["c", "b"]);
+    const last = reply("move", { id: "a", queue: "normal", last: true }, true);
+    expect(last.board.topics.doc.queues.normal).toEqual(["c", "b", "a"]);
+    const before = reply("move", { id: "a", queue: "normal", before: "b" }, true);
+    expect(before.board.topics.doc.queues.normal).toEqual(["c", "a", "b"]);
+  });
+
+  it("merge, split and reopen check their optional reason, id and queue", () => {
+    usage("merge", { from: "b", into: "a", reason: 3 }, true);
+    usage("split", { from: "a", name: "P" });
+    usage("split", { from: "a", name: "P", goal: "g", id: 3 });
+    usage("split", { from: "a", name: "P", goal: "g", reason: 3 });
+    usage("reopen", { id: "z", queue: "soon" });
+    usage("close-propose", { id: "a" });
+    usage("rename", { id: "a" }, true);
+    usage("archive", {}, true);
+    usage("keep", {}, true);
+    const split = reply("split", { from: "a", name: "P", goal: "g", id: "p", reason: "太寬" });
+    expect(split.records[0]).toMatchObject({ kind: "topic.split", topic: "p" });
+  });
+
+  it("split --dry answers what it would do and changes nothing", () => {
+    const dry = reply("split", { from: "a", name: "P", goal: "g", dry: true });
+    expect(dry.response).toEqual({ ok: true, line: "ok p 已從 a 拆出，放進「高」" });
+    expect(dry.committed).toBeNull();
+    expect(dry.board.topics.doc.topics["p"]).toBeUndefined();
+    expect(journalLines()).toEqual([]);
+  });
+
+  it("todo-add reads every part of the item it is given", () => {
+    usage("todo-add", { id: "x", title: "T", action: "a", commands: "c" });
+    usage("todo-add", { id: "x", title: "T", action: "a", commands: [1] });
+    usage("todo-add", { id: "x", title: "T", action: "a", commands: [], topic: 3 });
+    const added = reply("todo-add", {
+      id: "x",
+      title: "T",
+      topic: null,
+      action: "a",
+      guidance: "g",
+      commands: ["c"],
+      ref: "r",
+      captain_closes: true,
+      adopt: true,
+      since: "2026-11-17T10:00:00Z",
+    });
+    expect(added.board.todos.items["x"]).toMatchObject({
+      topic: null,
+      guidance: "g",
+      commands: ["c"],
+      ref: "r",
+      captain_closes: true,
+      adopted: true,
+      by: "plain-agent",
+      created_at: "2026-11-17T10:00:00Z",
+    });
+    expect(added.records[0]).toMatchObject({ kind: "todo.adopted", topic: null, item: "x" });
+  });
+
+  it("the verdicts, the presses and adopt-done name their item and reason", () => {
+    usage("todo-done", {});
+    usage("todo-failed", { reason: "r" });
+    usage("todo-obsolete", { task: "open" });
+    usage("todo-adopt-done", { open: "x" });
+    usage("todo-adopt-done", { open: [1] });
+    usage("todo-claim", {}, true);
+    usage("todo-drop", {}, true);
+    const refused = reply("todo-done", { task: "nope" });
+    expect(refused.response).toMatchObject({ ok: false, code: "refused" });
   });
 });

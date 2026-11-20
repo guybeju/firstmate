@@ -280,38 +280,52 @@ export function closeByCaptain(store, id, words, label, now) {
 export function adoptDone(store, open, label) {
     const still = new Set(open);
     const next = structuredClone(store);
-    const actor = { by: "aggregator", label };
-    const suffix = `（${label} 用指令）`;
-    const records = [];
-    for (const [id, item] of Object.entries(store.items)) {
-        if (!item.adopted || still.has(id))
-            continue;
-        delete next.items[id];
-        records.push(record("todo.taken_down", item, id, actor, "已關：hold 已在別處關掉", {
-            outcome: "elsewhere",
-        }));
-    }
-    for (const [id, mark] of Object.entries(store.marks)) {
-        if (still.has(id))
-            continue;
-        delete next.marks[id];
-        const why = mark.reason === undefined ? {} : { reason: mark.reason };
-        const text = `要你動手 ${id} 沒搬上看板，hold 已在別處關掉，清掉它的舊狀態（${MARK_LABEL[mark.state]}）${suffix}`;
-        records.push({ kind: "todo.forgotten", topic: null, item: id, ...why, text });
-    }
-    for (const id of Object.keys(store.closed)) {
-        if (still.has(id))
-            continue;
-        delete next.closed[id];
-        const text = `要你動手 ${id} 的 hold 已關掉，之後可以再放上看板${suffix}`;
-        records.push({ kind: "todo.settled", topic: null, item: id, text });
-    }
+    const records = [
+        ...retireAdopted(store, next, still, label),
+        ...forgetMarks(store, next, still, label),
+        ...settleClosed(store, next, still, label),
+    ];
     const [first, ...rest] = records;
     if (first === undefined)
         return unchanged(store, "ok adopt-done 沒有要清的");
     const gone = records.filter((entry) => entry.kind === "todo.taken_down").length;
     const marks = records.filter((entry) => entry.kind === "todo.forgotten").length;
     return changed(next, `ok adopt-done 清掉 ${marks} 個等著的狀態，拿掉 ${gone} 個已在別處關掉的項目`, [first, ...rest]);
+}
+/** Takes the adopted items no longer open on the aggregator's side out of `next`. */
+function retireAdopted(store, next, still, label) {
+    const actor = { by: "aggregator", label };
+    return Object.entries(store.items).flatMap(([id, item]) => {
+        if (!item.adopted || still.has(id))
+            return [];
+        delete next.items[id];
+        return [
+            record("todo.taken_down", item, id, actor, "已關：hold 已在別處關掉", {
+                outcome: "elsewhere",
+            }),
+        ];
+    });
+}
+/** Forgets in `next` the waiting marks of items never adopted whose hold is gone. */
+function forgetMarks(store, next, still, label) {
+    return Object.entries(store.marks).flatMap(([id, mark]) => {
+        if (still.has(id))
+            return [];
+        delete next.marks[id];
+        const why = mark.reason === undefined ? {} : { reason: mark.reason };
+        const text = `要你動手 ${id} 沒搬上看板，hold 已在別處關掉，清掉它的舊狀態（${MARK_LABEL[mark.state]}）（${label} 用指令）`;
+        return [{ kind: "todo.forgotten", topic: null, item: id, ...why, text }];
+    });
+}
+/** Stops holding back in `next` the items closed on the board whose hold has now closed. */
+function settleClosed(store, next, still, label) {
+    return Object.keys(store.closed).flatMap((id) => {
+        if (still.has(id))
+            return [];
+        delete next.closed[id];
+        const text = `要你動手 ${id} 的 hold 已關掉，之後可以再放上看板（${label} 用指令）`;
+        return [{ kind: "todo.settled", topic: null, item: id, text }];
+    });
 }
 const MARK_LABEL = {
     claimed: "說做完了",

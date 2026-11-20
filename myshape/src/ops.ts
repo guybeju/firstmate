@@ -100,23 +100,29 @@ function move(ctx: OpContext, args: Record<string, unknown>): TopicResult | Usag
   return topics.move(ctx.topics, id, queue, position, ctx.now);
 }
 
-function split(ctx: OpContext, args: Record<string, unknown>): TopicResult | Usage {
+/** What a split asks for, or why it is malformed. */
+function splitInput(args: Record<string, unknown>): topics.SplitInput | Usage {
   const from = stringField(args, "from");
   const name = stringField(args, "name");
   const goal = stringField(args, "goal");
   const id = args["id"];
+  const reason = optionalReason(args);
   if (from === null || name === null || goal === null)
     return { usage: "split 需要來源議題、新名稱與 --goal。" };
-  const reason = optionalReason(args);
   if (id !== undefined && typeof id !== "string") return { usage: "--id 要是字串。" };
   if (reason === null) return { usage: "--reason 要是一行文字。" };
-  const input = {
+  return {
     from,
     name,
     goal,
     ...(id === undefined ? {} : { id }),
     ...(reason === undefined ? {} : { reason }),
   };
+}
+
+function split(ctx: OpContext, args: Record<string, unknown>): TopicResult | Usage {
+  const input = splitInput(args);
+  if ("usage" in input) return input;
   const result = topics.split(ctx.topics, input, ctx.now);
   // --dry answers what the split would do, so the caller can check its tasks first.
   if (args["dry"] !== true || !result.ok) return result;
@@ -140,6 +146,17 @@ function todoUsage(line: string): TodoResult {
   return { ok: false, code: "usage", line };
 }
 
+/** The optional parts of a `todo-add` request. */
+function todoOptions(args: Record<string, unknown>) {
+  return {
+    guidance: typeof args["guidance"] === "string" ? args["guidance"] : "",
+    ref: typeof args["ref"] === "string" ? args["ref"] : "",
+    captainCloses: args["captain_closes"] === true,
+    adopt: args["adopt"] === true,
+    ...(typeof args["since"] === "string" ? { since: args["since"] } : {}),
+  };
+}
+
 /** What a `todo-add` request asks for, or why it is malformed. */
 function todoInput(args: Record<string, unknown>): todos.TodoInput | string {
   const commands = args["commands"];
@@ -152,18 +169,7 @@ function todoInput(args: Record<string, unknown>): todos.TodoInput | string {
   if (!Array.isArray(commands) || !commands.every((command) => typeof command === "string"))
     return "--cmd 要是文字。";
   if (topic !== null && typeof topic !== "string") return "--topic 要是議題 id。";
-  return {
-    id,
-    title,
-    topic,
-    action,
-    guidance: typeof args["guidance"] === "string" ? args["guidance"] : "",
-    commands,
-    ref: typeof args["ref"] === "string" ? args["ref"] : "",
-    captainCloses: args["captain_closes"] === true,
-    adopt: args["adopt"] === true,
-    ...(typeof args["since"] === "string" ? { since: args["since"] } : {}),
-  };
+  return { id, title, topic, action, commands, ...todoOptions(args) };
 }
 
 /** The item id and one-line reason of a verdict, or why they are missing. */
