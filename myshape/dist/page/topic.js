@@ -1,6 +1,6 @@
 import { h } from "./dom.js";
 import { mergeConfirm, mergeMenu } from "./home.js";
-import { draftInput, holdCard, light, liveTodos, queuedRow, questionRow, summaryRow, updateRow, when, writeRows, } from "./parts.js";
+import { draftInput, holdCard, light, liveTodos, todoCard, queuedRow, questionRow, summaryRow, updateRow, when, writeRows, } from "./parts.js";
 import { QUEUE_LABEL, agentName } from "./state.js";
 const MAX_UPDATES = 200;
 /** A line of text with an edit button that swaps it for an input in place. */
@@ -71,7 +71,7 @@ function handsOn(page, view, actions, id) {
     const todos = liveTodos(view, id);
     if (todos.length === 0)
         return null;
-    return h("section", {}, h("h2", {}, "要你動手"), todos.map((hold) => holdCard(page, view, actions, hold, false)));
+    return h("section", {}, h("h2", {}, "要你動手"), todos.map((todo) => todoCard(page, view, actions, todo, false)));
 }
 function decisions(page, view, actions, id) {
     const topic = view.topics[id];
@@ -79,9 +79,7 @@ function decisions(page, view, actions, id) {
     const deferred = holds.filter((hold) => !hold.live);
     return h("section", {}, h("h2", {}, "待決"), topic?.close_reason == null
         ? null
-        : h("div", { class: "card" }, h("span", { class: "pill warn" }, "提議關閉"), ` ${agentName()} 認為這個議題可以關了：${topic.close_reason}`, h("div", { class: "btns" }, h("button", { onclick: () => actions.topic("archive", { id }) }, "關閉並封存"), h("button", { onclick: () => actions.topic("keep", { id }) }, "先不關"))), holds
-        .filter((hold) => hold.live && hold.todo === null)
-        .map((hold) => holdCard(page, view, actions, hold, false)), deferred.length === 0
+        : h("div", { class: "card" }, h("span", { class: "pill warn" }, "提議關閉"), ` ${agentName()} 認為這個議題可以關了：${topic.close_reason}`, h("div", { class: "btns" }, h("button", { onclick: () => actions.topic("archive", { id }) }, "關閉並封存"), h("button", { onclick: () => actions.topic("keep", { id }) }, "先不關"))), holds.filter((hold) => hold.live).map((hold) => holdCard(page, view, actions, hold, false)), deferred.length === 0
         ? null
         : h("details", { "data-key": `deferred:${id}` }, h("summary", {}, `暫緩 ${deferred.length}`), deferred.map((hold) => holdCard(page, view, actions, hold, false))), view.questions
         .filter((question) => question.topic === id)

@@ -305,7 +305,7 @@ const TOPIC_COMMANDS: Record<string, CommandShape> = {
   "reset-token": { positional: [] },
   which: { positional: ["task"], valued: ["home"] },
   find: { positional: ["query"], bare: ["all"] },
-  "todo-clear": { positional: ["task"] },
+  "todo-done": { positional: ["task"] },
   "todo-failed": { positional: ["task"], valued: ["reason"], required: ["reason"] },
   "todo-obsolete": { positional: ["task"], valued: ["reason"], required: ["reason"] },
 };
@@ -469,6 +469,38 @@ async function summaryCommand(
   );
 }
 
+/**
+ * todo-add reads the item, one JSON object built by myshape.sh, from stdin;
+ * todo-adopt-done takes the ids of the items still open, any number of them.
+ */
+async function todoCommand(
+  config: BoardConfig,
+  paths: BoardPaths,
+  [op, ...args]: string[],
+): Promise<never> {
+  let message: BoardRequest;
+  if (op === "todo-add") {
+    let item: unknown = null;
+    try {
+      item = JSON.parse(fs.readFileSync(0, "utf8"));
+    } catch {
+      item = null;
+    }
+    if (!isRecord(item) || args.length !== 1 || args[0] !== "-")
+      throw new Exit(
+        EXIT_USAGE,
+        "todo-add 的項目要是一個 JSON 物件，從 stdin 讀（myshape.sh todo add 會組好）",
+      );
+    message = request("todo-add", item);
+  } else {
+    if (args.some((id) => id.startsWith("--")))
+      throw new Exit(EXIT_USAGE, "todo adopt-done 的用法：myshape.sh todo adopt-done [<task-id>]…");
+    message = request("todo-adopt-done", { open: args });
+  }
+  await ensureRunning(config, paths);
+  return finish(await send(config, paths, message));
+}
+
 async function topicCommand(
   config: BoardConfig,
   paths: BoardPaths,
@@ -495,6 +527,8 @@ async function run(): Promise<never> {
   const paths = boardPaths(config);
   const [sub = "", ...args] = rest;
   if (sub === "summary" || sub === "retract") return summaryCommand(config, paths, [sub, ...args]);
+  if (sub === "todo-add" || sub === "todo-adopt-done")
+    return todoCommand(config, paths, [sub, ...args]);
   const lifecycle = LIFECYCLE[sub];
   return lifecycle === undefined
     ? topicCommand(config, paths, sub, args)

@@ -114,6 +114,7 @@ describe("layout", () => {
       summaries: "/d/myshape/summaries.jsonl",
       notifyPending: "/d/myshape/notify-pending.json",
       aggregator: "/d/myshape/aggregator.json",
+      todos: "/d/myshape/todos.json",
     });
   });
 

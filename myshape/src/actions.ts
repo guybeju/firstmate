@@ -154,8 +154,8 @@ function holdTopic(
 }
 
 /** The mode an answer carries for what answering `hold` does: close the item or let it go on. */
-export function answerMode(home: string, hold: ReportHold): "done" | "release" {
-  return answerOutcome(home, hold).on_answer === "close" ? "done" : "release";
+export function answerMode(hold: ReportHold): "done" | "release" {
+  return answerOutcome(hold).on_answer === "close" ? "done" : "release";
 }
 
 /** An answer to a waiting decision, closing or releasing it as the decision recorded. */
@@ -184,7 +184,7 @@ export function answer(context: ActionContext, input: AnswerInput, channel: Chan
         task: input.task,
         answer: input.answer,
         label: input.label,
-        mode: answerMode(input.home, hold),
+        mode: answerMode(hold),
         question_sha256: crypto.createHash("sha256").update(hold.question).digest("hex"),
         topic: topicRef(context.topics, topic),
       },

@@ -32,7 +32,8 @@ export type NoticeEvent =
   | "topic.archived"
   | "topic.kept"
   | "topic.confirmed"
-  | "todo.claimed";
+  | "todo.claimed"
+  | "todo.closed";
 
 export interface NoticeItem {
   id: string;
@@ -65,6 +66,9 @@ export type Action =
       text: string;
       topic?: TopicRef;
       item?: NoticeItem;
+      /** todo.closed: who closed the item, and the words it was closed with. */
+      by?: "captain" | "aggregator";
+      words?: string;
       legacy_request_id?: string;
     };
 

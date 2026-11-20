@@ -29,6 +29,8 @@ import type {
   TopicState,
   TopicsDoc,
 } from "./topics.js";
+import { emptyTodos, isValidItemId } from "./todos.js";
+import type { ItemState, TodoItem, TodoStore } from "./todos.js";
 
 const FILE_MODE = 0o644;
 
@@ -271,4 +273,66 @@ export function saveTopicState(paths: BoardPaths, previous: TopicState, next: To
     writeDoc();
     writeArchive();
   }
+}
+
+const ITEM_STATES: readonly ItemState[] = ["open", ...TODO_STATES];
+
+function stringList(raw: unknown): string[] | null {
+  return Array.isArray(raw) && raw.every((value) => typeof value === "string") ? raw : null;
+}
+
+/** One stored item, or null when it lacks what the page needs to show it. */
+function parseItem(raw: unknown): TodoItem | null {
+  if (!isRecord(raw)) return null;
+  const title = stringField(raw, "title");
+  const action = stringField(raw, "action");
+  const state = ITEM_STATES.find((name) => name === raw["state"]);
+  const commands = stringList(raw["commands"]);
+  const topic = raw["topic"];
+  if (title === null || action === null || state === undefined || commands === null) return null;
+  if (topic !== null && typeof topic !== "string") return null;
+  return {
+    title,
+    topic,
+    action,
+    guidance: textField(raw, "guidance"),
+    commands,
+    state,
+    reason: stringField(raw, "reason"),
+    at: textField(raw, "at"),
+    by: textField(raw, "by"),
+    ref: textField(raw, "ref"),
+    captain_closes: raw["captain_closes"] === true,
+    created_at: textField(raw, "created_at"),
+  };
+}
+
+function parseTodoStore(raw: unknown): TodoStore {
+  if (!isRecord(raw) || raw["v"] !== 1) throw new Error("expected an object with v: 1");
+  const store = emptyTodos();
+  const items = isRecord(raw["items"]) ? raw["items"] : {};
+  for (const [id, value] of Object.entries(items)) {
+    const item = parseItem(value);
+    if (item !== null && isValidItemId(id)) store.items[id] = item;
+  }
+  store.marks = parseTodos(raw["marks"]);
+  return store;
+}
+
+/**
+ * Loads the hands-on items. On the first start of a board that keeps them,
+ * the file does not exist yet: it is created with topics.json's marks as
+ * waiting marks, so nothing an older board recorded is lost.
+ */
+export function loadTodos(paths: BoardPaths, doc: TopicsDoc): TodoStore {
+  const fresh = { ...emptyTodos(), marks: structuredClone(doc.todos) };
+  const store = loadFile<TodoStore | null>(paths.todos, parseTodoStore, null);
+  if (store !== null) return store;
+  fs.mkdirSync(paths.boardDataDir, { recursive: true });
+  writeFileAtomic(paths.todos, serialize(fresh), FILE_MODE);
+  return fresh;
+}
+
+export function saveTodos(paths: BoardPaths, store: TodoStore): void {
+  writeFileAtomic(paths.todos, serialize(store), FILE_MODE);
 }

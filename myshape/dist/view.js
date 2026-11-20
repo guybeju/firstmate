@@ -1,80 +1,21 @@
-// Computes what the board shows from what the service knows. Pure: the same
-// inputs always give the same view.
-import { MAIN_HOME } from "./journal.js";
 import { orNull } from "./files.js";
 import { QUEUES, resolveTopicId } from "./topics.js";
+import { itemTopic } from "./todos.js";
 const MAX_UPDATES = 2000;
 // Upstream keeps a hold reason on the backlog item's title line, so a reason
 // written as several lines may reach the board as one. The marker is therefore
 // accepted anywhere in the last line, not only at its start.
 const OPTION_MARKER = "選項：";
-/** A hold reason that starts with this asks the captain to do something by hand. */
-export const TODO_MARKER = "動手：";
-/**
- * Labels `myshape.sh todo add` puts on every line after the action: a line of
- * guidance, the first line of a command, and each further line of that command.
- */
-export const TODO_LABELS = { guidance: "說明：", command: "指令：", more: "續：" };
-/**
- * Reads the lines after the action of a record `todo add` wrote, where every
- * line carries a label. Null when any line does not, which is how a record
- * written before the labels is told apart.
- */
-function labelledTodo(what, lines) {
-    const guidance = [];
-    const commands = [];
-    for (const line of lines) {
-        const last = commands[commands.length - 1];
-        if (line.startsWith(TODO_LABELS.guidance))
-            guidance.push(line.slice(TODO_LABELS.guidance.length));
-        else if (line.startsWith(TODO_LABELS.command))
-            commands.push([line.slice(TODO_LABELS.command.length)]);
-        else if (line.startsWith(TODO_LABELS.more) && last !== undefined)
-            last.push(line.slice(TODO_LABELS.more.length));
-        else
-            return null;
-    }
-    return {
-        what,
-        guidance: guidance.join("\n"),
-        commands: commands.map((command) => command.join("\n")),
-    };
-}
-/**
- * Splits a hands-on hold's reason into its action (the first line), guidance,
- * and commands. A record from before the labels has no guidance and shows
- * everything after its first line as one command, as it always did.
- */
-export function parseTodo(question) {
-    if (!question.startsWith(TODO_MARKER))
-        return null;
-    const [first = "", ...rest] = question.slice(TODO_MARKER.length).replace(/\n+$/, "").split("\n");
-    const what = first.trim();
-    const labelled = labelledTodo(what, rest);
-    if (labelled !== null)
-        return labelled;
-    const block = rest.join("\n").replace(/\s+$/, "");
-    return { what, guidance: "", commands: block === "" ? [] : [block] };
-}
 /**
  * What answering `hold` does: what whoever opened it recorded, else a default
  * that cannot finish unfinished work. A decision without a record is released,
  * so an item that still gates work (a merge approval) goes back to the queue
- * instead of being marked done. A main-home hands-on item without a record is
- * closed, as it always was: it carries only the captain's own action.
+ * instead of being marked done.
  */
-export function answerOutcome(home, hold) {
+export function answerOutcome(hold) {
     if (hold.on_answer !== null)
         return { on_answer: hold.on_answer, recorded: true };
-    const handsOn = home === MAIN_HOME && parseTodo(hold.question) !== null;
-    return { on_answer: handsOn ? "close" : "release", recorded: false };
-}
-function todoView(home, hold, marks) {
-    const text = home === MAIN_HOME ? parseTodo(hold.question) : null;
-    if (text === null)
-        return null;
-    const mark = Object.hasOwn(marks, hold.id) ? marks[hold.id] : undefined;
-    return { ...text, state: mark?.state ?? "open", reason: mark?.reason ?? null };
+    return { on_answer: "release", recorded: false };
 }
 /** Parses a tag file: one "<topic-id> <UTC time>" per line, oldest first. */
 export function parseTags(text) {
@@ -128,10 +69,9 @@ function deferredReason(hold) {
             return `等 ${hold.unresolved_blocker_ids.join("、")} 完成`;
     }
 }
-function waitingFor(home, item) {
-    const todo = home === MAIN_HOME && item.hold !== null && parseTodo(item.hold) !== null;
+function waitingFor(item) {
     if (item.captain)
-        return todo ? "要你動手" : "等你決定";
+        return "等你決定";
     if (item.hold !== null)
         return `停著：${item.hold}`;
     if (item.blockers.length > 0)
@@ -303,18 +243,14 @@ function agentsOf(home, stale, placer, last, runs) {
     return [...running, ...ended];
 }
 /** Whether a hold is due now, and if not, why it waits. */
-function holdTiming(hold, todo) {
-    // Something to do by hand does not become less due by sitting there.
-    if (todo !== null && hold.hold_bucket === "aged")
-        return { live: true, deferred_reason: null };
+function holdTiming(hold) {
     return { live: hold.hold_bucket === "live", deferred_reason: deferredReason(hold) };
 }
-function holdsOf(home, stale, placer, marks) {
+function holdsOf(home, stale, placer) {
     if (home.report === null)
         return [];
     return home.report.holds.map((hold) => {
-        const todo = todoView(home.id, hold, marks);
-        const outcome = answerOutcome(home.id, hold);
+        const outcome = answerOutcome(hold);
         const own = placer.current(home.id, hold.id);
         const placement = own.topic === null && hold.origin !== "" ? placer.current(home.id, hold.origin) : own;
         return {
@@ -324,11 +260,10 @@ function holdsOf(home, stale, placer, marks) {
                 task: hold.id,
                 title: hold.title,
                 question: hold.question,
-                options: todo === null ? parseOptions(hold.question) : [],
-                todo,
+                options: parseOptions(hold.question),
                 on_answer: outcome.on_answer,
                 on_answer_recorded: outcome.recorded,
-                ...holdTiming(hold, todo),
+                ...holdTiming(hold),
                 topic: placement.topic,
                 stale,
             },
@@ -458,6 +393,7 @@ export function buildView(input) {
         agents: [],
         queued: [],
         holds: [],
+        todos: [],
         questions: [],
         updates: updatesOf(input, placer),
         summaries: input.summaries
@@ -472,7 +408,7 @@ export function buildView(input) {
     input.homes.forEach((home, index) => {
         const stale = homes[index].stale;
         view.agents.push(...agentsOf(home, stale, placer, last, runs));
-        ranked.push(...holdsOf(home, stale, placer, input.topics.doc.todos));
+        ranked.push(...holdsOf(home, stale, placer));
         if (home.report === null)
             return;
         for (const item of home.report.queued) {
@@ -482,11 +418,39 @@ export function buildView(input) {
                 kind: item.kind,
                 title: item.title,
                 topic: placer.queued(home.id, item).topic,
-                waiting: waitingFor(home.id, item),
+                waiting: waitingFor(item),
             });
         }
         view.questions.push(...questionsOf(home.id, home.report, placer));
     });
     view.holds = ranked.toSorted(holdOrder(view)).map((entry) => entry.view);
+    view.todos = todoViews(input, view);
     return view;
+}
+/** Sort key for an item: its topic's queue and place (no topic and archived last), then age. */
+function itemRank(view, item) {
+    const queue = item.topic === null ? null : (view.topics[item.topic]?.queue ?? null);
+    if (item.topic === null || queue === null)
+        return [QUEUES.length, QUEUES.length];
+    return [QUEUES.indexOf(queue), view.queues[queue].indexOf(item.topic)];
+}
+function todoViews(input, view) {
+    const entries = Object.entries(input.todos.items).map(([task, item]) => ({
+        created: item.created_at,
+        view: {
+            task,
+            title: item.title,
+            topic: itemTopic(input.topics, item),
+            what: item.action,
+            guidance: item.guidance,
+            commands: item.commands,
+            state: item.state,
+            reason: item.reason,
+        },
+    }));
+    return entries
+        .toSorted((a, b) => compareRanks(itemRank(view, a.view), itemRank(view, b.view)) ||
+        a.created.localeCompare(b.created) ||
+        a.view.task.localeCompare(b.view.task))
+        .map((entry) => entry.view);
 }

@@ -27,6 +27,11 @@
 # command replaces that one (myshape.sh open). A board that is not running,
 # including one stopped on purpose with myshape.sh stop, is started.
 #
+# Once the board runs, it also runs bin/fm-board.sh adopt (bounded at
+# ADOPT_BOUND seconds, its output discarded), so hands-on holds from before the
+# board kept hands-on items reach the board even when no page is open; adopt
+# calls the board only when there is something to adopt.
+#
 # Costs: one myshape.sh status when the board is running. Otherwise also one
 # myshape.sh open, whose stdout carries the board's access token and is
 # discarded unread. status is bounded at STATUS_BOUND seconds and open at
@@ -45,6 +50,7 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 STATUS_BOUND=10
 START_BOUND=30
+ADOPT_BOUND=30
 RUNNING_LINE='看板服務：在跑'
 HUNG_LINE='看板服務：沒有回應'
 
@@ -68,6 +74,10 @@ start_failure_reason() {  # <rc> <text>
   printf '%s\n' "$reason"
 }
 
+adopt() {
+  fm_run_timed "$ADOPT_BOUND" "$SCRIPT_DIR/fm-board.sh" adopt >/dev/null 2>&1 || true
+}
+
 main() {
   local status_out first err rc=0
   fm_root_is_secondmate_home "$FM_HOME" && return 0
@@ -80,9 +90,11 @@ main() {
   IFS= read -r first <<< "$status_out" || true
   if [ "$first" = "$RUNNING_LINE" ]; then
     printf '%s\n' "$RUNNING_LINE"
+    adopt
     return 0
   fi
   err=$(fm_run_timed "$START_BOUND" "$SCRIPT_DIR/myshape.sh" open 2>&1 >/dev/null) || rc=$?
+  [ "$rc" -ne 0 ] || adopt
   if [ "$rc" -ne 0 ]; then
     printf '%s\n' "看板服務：無法啟動：$(start_failure_reason "$rc" "$err")"
   elif [ "$first" = "$HUNG_LINE" ]; then

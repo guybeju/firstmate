@@ -195,16 +195,14 @@ export function untaggedQueued(view: View): QueuedView[] {
 }
 
 /** True for a hands-on item the captain still has to act on. */
-export function needsCaptain(hold: HoldView): boolean {
-  return hold.todo !== null && hold.todo.state !== "claimed";
+export function needsCaptain(todo: TodoView): boolean {
+  return todo.state !== "claimed";
 }
 
-/** The hands-on items in play, the ones waiting on the captain first. */
-export function liveTodos(view: View, topic?: string): HoldView[] {
-  const todos = view.holds.filter(
-    (hold) => hold.todo !== null && hold.live && (topic === undefined || hold.topic === topic),
-  );
-  return [...todos.filter(needsCaptain), ...todos.filter((hold) => !needsCaptain(hold))];
+/** The hands-on items, every one on the home page or a topic's own, the ones waiting on the captain first. */
+export function liveTodos(view: View, topic?: string): TodoView[] {
+  const todos = view.todos.filter((todo) => topic === undefined || todo.topic === topic);
+  return [...todos.filter(needsCaptain), ...todos.filter((todo) => !needsCaptain(todo))];
 }
 
 /** Copies one command; a browser that refuses gets that block selected, ready for the copy key. */
@@ -242,17 +240,21 @@ const TODO_NOTE: Record<TodoView["state"], (reason: string) => Child> = {
   obsolete: (reason) => h("div", { class: "wr" }, `${agentName()}：不再需要了。${reason}`),
 };
 
-function todoButtons(actions: Actions, hold: HoldView, todo: TodoView, key: string): Child {
-  const close = (answer: string): void =>
-    actions.ask(key, "holds/answer", { home: hold.home, task: hold.task, answer, label: answer });
+function todoButtons(actions: Actions, todo: TodoView, key: string): Child {
+  const close = (route: string, answer: string): void =>
+    actions.ask(key, route, { task: todo.task, answer });
   if (todo.state === "claimed") return null;
   if (todo.state === "obsolete")
-    return h("div", { class: "btns" }, h("button", { onclick: () => close("撤下") }, "好，撤下"));
+    return h(
+      "div",
+      { class: "btns" },
+      h("button", { onclick: () => close("todos/takedown", "撤下") }, "好，撤下"),
+    );
   return h(
     "div",
     { class: "btns" },
-    h("button", { onclick: () => actions.claim(hold.task) }, "做完了"),
-    h("button", { onclick: () => close("不做了") }, "不做了"),
+    h("button", { onclick: () => actions.claim(todo.task) }, "做完了"),
+    h("button", { onclick: () => close("todos/drop", "不做了") }, "不做了"),
   );
 }
 
@@ -273,31 +275,30 @@ function todoConfirm(page: Page, actions: Actions, key: string): Child {
 }
 
 /** Something the captain has to do by hand: what, any guidance, each command to copy, and where it stands. */
-function todoCard(
+export function todoCard(
   page: Page,
   view: View,
   actions: Actions,
-  hold: HoldView,
   todo: TodoView,
   showTopic: boolean,
 ): Child {
-  const key = `answer:${hold.home}/${hold.task}`;
+  const key = `todo:${todo.task}`;
   return h(
     "div",
-    { class: "card todo", "data-todo": hold.task },
-    holdMeta(view, actions, hold, showTopic),
-    h("b", {}, hold.title),
+    { class: "card todo", "data-todo": todo.task },
+    h(
+      "div",
+      { class: "meta" },
+      showTopic ? topicLink(view, todo.topic, actions) : null,
+      h("span", { class: "note" }, todo.task),
+    ),
+    h("b", {}, todo.title),
     TODO_NOTE[todo.state](todo.reason ?? ""),
     h("div", {}, todo.what),
     todo.guidance === "" ? null : h("div", { class: "guide" }, todo.guidance),
     todo.commands.map(commandBlock),
-    todoButtons(actions, hold, todo, key),
+    todoButtons(actions, todo, key),
     todoConfirm(page, actions, key),
-    writeRows(
-      page,
-      actions,
-      (write) => write.kind === "answer" && write.home === hold.home && write.task === hold.task,
-    ),
   );
 }
 
@@ -308,7 +309,6 @@ export function holdCard(
   hold: HoldView,
   showTopic: boolean,
 ): Child {
-  if (hold.todo !== null) return todoCard(page, view, actions, hold, hold.todo, showTopic);
   const key = `answer:${hold.home}/${hold.task}`;
   const draftKey = `answer-text:${hold.home}/${hold.task}`;
   const ask = (answer: string, label: string): void => {

@@ -8,6 +8,7 @@ import {
   holdCard,
   light,
   liveTodos,
+  todoCard,
   queuedRow,
   questionRow,
   summaryRow,
@@ -144,7 +145,7 @@ function handsOn(page: Page, view: View, actions: Actions, id: string): Child {
     "section",
     {},
     h("h2", {}, "要你動手"),
-    todos.map((hold) => holdCard(page, view, actions, hold, false)),
+    todos.map((todo) => todoCard(page, view, actions, todo, false)),
   );
 }
 
@@ -170,9 +171,7 @@ function decisions(page: Page, view: View, actions: Actions, id: string): Child 
             h("button", { onclick: () => actions.topic("keep", { id }) }, "先不關"),
           ),
         ),
-    holds
-      .filter((hold) => hold.live && hold.todo === null)
-      .map((hold) => holdCard(page, view, actions, hold, false)),
+    holds.filter((hold) => hold.live).map((hold) => holdCard(page, view, actions, hold, false)),
     deferred.length === 0
       ? null
       : h(

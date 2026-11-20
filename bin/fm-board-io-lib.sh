@@ -15,12 +15,32 @@
 # only), a ledger_hint for a home whose ledger is off, and read hints of 60 s
 # and 400 s for remote secondmates. Exit 0 prints the report; 4 says the remote
 # checkout has no reader, with one line on stderr; 2 an unknown home; any other
-# code is the reader's own failure.
+# code is the reader's own failure. Before it prints the main home's report it
+# adopts that home's hands-on holds onto the board (adopt, below); a failed
+# adoption is said on stderr and never fails the read.
+#
+# adopt puts every open captain hold of the main home whose reason starts with
+# 動手： (a hands-on item from before the board kept them) on the board with
+# "myshape.sh todo add … --ref hold --adopt --captain-closes": the action is the
+# reason's first line, and its labelled lines (說明：, 指令：, 續：) give the
+# guidance and the commands; an older record without labels has everything
+# after its first line as one command. Its topic is the hold's tag, else its
+# origin's; none when it has neither. Only holds not on the board yet are
+# added. When the board keeps waiting marks or adopted items, the pass ends
+# with "myshape.sh todo adopt-done <every such hold still open>". It reads the
+# board's data/myshape/todos.json first and calls the board only when there is
+# something to do.
 #
 # deliver reads one action record on stdin and prints one outcome line,
 # {"outcome":"delivered|handled_elsewhere|retry|failed"[,"error":…]}, always
 # exiting 0 once it has an outcome. Each kind runs:
 #   message, notice  fm-inbox.sh note --request-id tb-<id> -
+#   notice todo.closed of an adopted item (item.ref "hold")
+#                    fm-captain-hold.sh answers --source myshape with
+#                    <id>\t<words>\t<words>\tdone (the captain's 不做了 or 撤下)
+#                    or <id>\t做完了\tfirst mate 已驗證\tdone (todo done); then,
+#                    for the captain's press only, the note. A todo.closed the
+#                    aggregator caused itself is delivered without a note.
 #   direct           fm-send.sh <task> <text> (main) or
 #                    fm-send.sh <id> --fire-and-forget <16 hex> 轉給 <task>：<text>
 #   answer           fm-captain-hold.sh answers --source myshape (main),
@@ -69,14 +89,92 @@ fmb_decorate() {
       else . end'
 }
 
+FMB_TODO_MARKER='動手：'
+
+# fmb_adopt_args: the legacy_todos of the main home's report on stdin, as one
+# NUL-terminated argument list per hold to adopt (the arguments of
+# "myshape.sh todo add"), each list ended by an empty argument. $1 is the
+# board's items as JSON.
+fmb_adopt_args() {
+  jq -j --argjson items "$1" --arg marker "$FMB_TODO_MARKER" '
+    def trimmed: sub("^\\s+"; "") | sub("\\s+$"; "");
+    def taglast($text): ($text // "") | split("\n") | map(select(length > 0)) | last // "" | split(" ")[0];
+    .topics as $tags
+    | .legacy_todos[]
+    | select($items[.id] == null)
+    | (.question[($marker | length):] | sub("\n+$"; "") | split("\n")) as $lines
+    | ($lines[1:]) as $rest
+    | (reduce $rest[] as $line ({ok: true, guidance: [], commands: []};
+        if ($line | startswith("說明：")) then .guidance += [$line[3:]]
+        elif ($line | startswith("指令：")) then .commands += [[$line[3:]]]
+        elif ($line | startswith("續：")) and (.commands | length) > 0 then .commands[-1] += [$line[2:]]
+        else .ok = false end)) as $parsed
+    | (if $parsed.ok then {guidance: ($parsed.guidance | join("\n")), commands: ($parsed.commands | map(join("\n")))}
+       else {guidance: "", commands: ([$rest | join("\n") | sub("\\s+$"; "")] | map(select(length > 0)))} end) as $text
+    | taglast($tags[.id]) as $own
+    | (if $own != "" then $own elif .origin != "" then taglast($tags[.origin]) else "" end) as $topic
+    | [.id, (if .title == "" then .id else .title end)]
+      + (if ($topic | test("^[A-Za-z0-9_][A-Za-z0-9._-]*$")) then ["--topic", $topic] else [] end)
+      + ["--do", ($lines[0] | trimmed)]
+      + (if ($text.guidance | trimmed) == "" then [] else ["--note", $text.guidance] end)
+      + ($text.commands | map(select(trimmed != "")) | map("--cmd", .))
+      + ["--ref", "hold", "--adopt", "--captain-closes"]
+    | (.[] | ., "\u0000"), "\u0000"'
+}
+
+# fmb_adopt <report>: adopts the hands-on holds the main home's report lists
+# (fm-topic-board-read.sh --legacy-todos), then ends the pass when the board
+# keeps something the pass may clear. Prints one line saying what it did;
+# says on stderr which hold could not be adopted. Returns 1 when one failed.
+fmb_adopt() {
+  local report=$1 file="$DATA/myshape/todos.json" items='{}' pending=0 failed=0 added=0 arg
+  local -a args=() open=()
+  if [ -f "$file" ]; then
+    items=$(jq -c '.items // {} | objects' "$file" 2>/dev/null) || items=''
+    [ -n "$items" ] || { printf '%s\n' "adopt：讀不懂 ${file}，沒有動看板" >&2; return 1; }
+    pending=$(jq --argjson open "$(jq -c '[.legacy_todos[].id]' <<< "$report")" \
+      '((.marks // {}) | length) + ([(.items // {}) | to_entries[] | select(.value.ref == "hold" and ((.key as $id | $open | index($id)) == null))] | length)' "$file" 2>/dev/null) || pending=0
+  fi
+  while IFS= read -r -d '' arg; do
+    if [ -n "$arg" ]; then
+      args+=("$arg")
+      continue
+    fi
+    if "$TOPIC" todo add "${args[@]}" </dev/null >/dev/null; then
+      added=$((added + 1))
+    else
+      printf '%s\n' "adopt：${args[0]} 沒有放上看板" >&2
+      failed=1
+    fi
+    args=()
+  done < <(fmb_adopt_args "$items" <<< "$report")
+  while IFS= read -r arg; do open+=("$arg"); done < <(jq -r '.legacy_todos[].id' <<< "$report")
+  if [ "$pending" -gt 0 ]; then
+    "$TOPIC" todo adopt-done ${open[@]+"${open[@]}"} </dev/null >/dev/null ||
+      { printf '%s\n' "adopt：adopt-done 沒有完成" >&2; failed=1; }
+  fi
+  printf '%s\n' "ok adopt 放上 ${added} 個舊項目，還開著的舊 hold ${#open[@]} 個"
+  return "$failed"
+}
+
+cmd_adopt() {
+  local report
+  [ "$#" -eq 0 ] || usage_error "adopt 不收參數"
+  ! fm_root_is_secondmate_home "$FM_HOME" || tb_die 1 "adopt 只在主 home 跑。"
+  report=$("$SCRIPT_DIR/fm-topic-board-read.sh" --legacy-todos 0 -) ||
+    tb_die 1 "adopt：讀不到這個 home 的 backlog，沒有動看板。"
+  fmb_adopt "$report"
+}
+
 cmd_feed() {
   local home=${1:-} offset=${2:-} sha=${3:-} remote out err rc=0
   [ "$#" -eq 3 ] || usage_error "feed 的用法是 <home> <offset> <prefix-sha256>"
   case "$offset" in '' | *[!0-9]*) usage_error "offset 要是非負整數：$offset" ;; esac
   [ "$sha" = - ] || [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || usage_error "prefix-sha256 要是 64 位十六進位或 -"
   if [ "$home" = main ]; then
-    out=$("$SCRIPT_DIR/fm-topic-board-read.sh" "$offset" "$sha") || exit $?
-    printf '%s\n' "$out" | fmb_decorate main 0
+    out=$("$SCRIPT_DIR/fm-topic-board-read.sh" --legacy-todos "$offset" "$sha") || exit $?
+    fmb_adopt "$out" >/dev/null || true
+    printf '%s\n' "$out" | jq -c 'del(.legacy_todos)' | fmb_decorate main 0
     return
   fi
   remote=$(fmb_registry_remote "$home") || {
@@ -256,6 +354,37 @@ fmb_deliver_answer() {
   fmb_note "$(fmb_request_id "$1" -note)" "［議題：${name:-未分類}］已在看板回答 $home/$task：$answer"
 }
 
+# fmb_deliver_notice <record>: a notice is a note, except that an item closed
+# on the board closes the hold an adopted item still has, and an item the
+# aggregator closed itself needs no note.
+fmb_deliver_notice() {
+  local id words line verdict by
+  if [ "$(fmb_field "$1" .event)" != todo.closed ]; then
+    fmb_note "$(fmb_request_id "$1")" "$(fmb_field "$1" .text)"
+    return
+  fi
+  id=$(fmb_field "$1" .item.id)
+  by=$(fmb_field "$1" .by)
+  words=$(fmb_field "$1" .words)
+  tb_valid_id "$id" || { fmb_outcome failed "項目 id 格式不對：$id"; return; }
+  if [ "$(fmb_field "$1" .item.ref)" = hold ]; then
+    if [ "$by" = captain ]; then
+      case "$words" in 不做了 | 撤下) ;; *) fmb_outcome failed "不認得的關閉方式：$words"; return ;; esac
+      line="$id"$'\t'"$words"$'\t'"$words"$'\tdone\n'
+    else
+      line="$id"$'\t做完了\t'"$(jq -r .label <<< "$FMB_AGGREGATOR") 已驗證"$'\tdone\n'
+    fi
+    fmb_run "$line" "$SCRIPT_DIR/fm-captain-hold.sh" answers --source myshape
+    verdict=$(fmb_answer_verdict "$id" 0)
+    [ "$verdict" = closed ] || { printf '%s\n' "$verdict"; return; }
+  fi
+  if [ "$by" = captain ]; then
+    fmb_note "$(fmb_request_id "$1")" "$(fmb_field "$1" .text)"
+  else
+    fmb_outcome delivered
+  fi
+}
+
 fmb_deliver_tag() {
   local home task topic remote=0
   home=$(fmb_field "$1" .home)
@@ -295,7 +424,7 @@ cmd_deliver() {
   kind=$(fmb_field "$record" .kind)
   case "$kind" in
     message) fmb_deliver_message "$record" ;;
-    notice) fmb_note "$(fmb_request_id "$record")" "$(fmb_field "$record" .text)" ;;
+    notice) fmb_deliver_notice "$record" ;;
     direct) fmb_deliver_direct "$record" ;;
     answer) fmb_deliver_answer "$record" ;;
     tag) fmb_deliver_tag "$record" ;;

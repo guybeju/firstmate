@@ -8,6 +8,7 @@ import {
   agentRow,
   holdCard,
   liveTodos,
+  todoCard,
   needsCaptain,
   queuedRow,
   questionRow,
@@ -34,9 +35,8 @@ function topicCard(view: View, actions: Actions, id: string): Child {
   const topic = view.topics[id];
   if (topic === undefined) return null;
   const agents = view.agents.filter((agent) => agent.topic === id);
-  const live = view.holds.filter((hold) => hold.topic === id && hold.live);
-  const deciding = live.filter((hold) => hold.todo === null).length;
-  const doing = live.filter(needsCaptain).length;
+  const deciding = view.holds.filter((hold) => hold.topic === id && hold.live).length;
+  const doing = liveTodos(view, id).filter(needsCaptain).length;
   const waiting = view.queued.filter((item) => item.topic === id).length;
   const unsent = view.writes.filter(
     (write) => write.topic === id && BAD_WRITES.includes(write.state),
@@ -280,13 +280,13 @@ export function home(page: Page, view: View, actions: Actions): Child {
       ? null
       : section(
           "要你動手",
-          liveTodos(view).map((hold) => holdCard(page, view, actions, hold, true)),
+          liveTodos(view).map((todo) => todoCard(page, view, actions, todo, true)),
         ),
     section(
       "等你決定",
       closeProposals(view, actions),
       view.holds
-        .filter((hold) => hold.live && hold.todo === null)
+        .filter((hold) => hold.live)
         .map((hold) => holdCard(page, view, actions, hold, true)),
     ),
     section(

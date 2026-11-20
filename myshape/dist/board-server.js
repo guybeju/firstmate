@@ -22,9 +22,10 @@ import { boardPaths, parseConfigArgs } from "./layout.js";
 import { MAX_REQUEST_BYTES } from "./protocol.js";
 import { DispatchNotifier, fileStore } from "./notifier.js";
 import { DEFAULT_TIMINGS, Poller } from "./poller.js";
-import { loadTopicState, saveTopicState } from "./store.js";
+import { loadTodos, loadTopicState, saveTodos, saveTopicState } from "./store.js";
 import * as topics from "./topics.js";
-import { buildView, parseTags, parseTodo, placeTask } from "./view.js";
+import * as todos from "./todos.js";
+import { buildView, parseTags, placeTask } from "./view.js";
 import { findLines } from "./lineage.js";
 import { DEFAULT_WRITE_TIMINGS, WriteEngine } from "./writes.js";
 const PRIVATE_FILE = 0o600;
@@ -36,7 +37,7 @@ const TEST_MODE = process.env["MYSHAPE_TEST"] === "1";
 /** What the page and the board's texts call the agent side when its report names none. */
 const DEFAULT_LABEL = "aggregator";
 /** The captain's own presses: the page may send them, the socket may not. */
-const PAGE_ONLY_OPS = ["todo-claim", "keep"];
+const PAGE_ONLY_OPS = ["todo-claim", "todo-drop", "todo-takedown", "keep"];
 // sizeof(sun_path) minus the terminating NUL. Node silently truncates a longer
 // path instead of failing, so the length is checked before listening.
 const SOCKET_PATH_MAX = os.platform() === "darwin" ? 103 : 107;
@@ -99,38 +100,6 @@ function movePosition(args) {
         return undefined;
     return typeof before === "string" ? { before } : null;
 }
-/** The captain holds of the main home as last read; none when it was never read. */
-function mainHolds(service) {
-    const home = service.poller.snapshots().find((snapshot) => snapshot.id === MAIN_HOME);
-    return home?.report?.holds ?? [];
-}
-/** The main home's open hands-on hold on `task`, if it has one. */
-function todoHold(service, task) {
-    return mainHolds(service).find((hold) => hold.id === task && parseTodo(hold.question) !== null);
-}
-/** Marks where a hands-on item stands, and forgets the marks of items whose hold is gone. */
-function markTodo(service, args, state) {
-    const task = stringField(args, "task");
-    const reason = stringField(args, "reason");
-    if (task === null)
-        return { usage: "需要 task id。" };
-    if (state !== "claimed" && reason === null)
-        return { usage: "需要 --reason <一行>。" };
-    if (todoHold(service, task) === undefined) {
-        const line = `${task} 不是主 home 裡還開著的「要你動手」項目；剛建立的話等幾秒再試。`;
-        return { ok: false, code: "refused", line };
-    }
-    const todos = service.state.doc.todos;
-    const current = Object.hasOwn(todos, task) ? todos[task]?.state : undefined;
-    if (state === "claimed" && current === "obsolete") {
-        const line = `${task} 已經被 ${labelOf(service)} 標成不再需要，請直接撤下。`;
-        return { ok: false, code: "refused", line };
-    }
-    const open = new Set(mainHolds(service).map((hold) => hold.id));
-    const gone = Object.keys(service.state.doc.todos).filter((id) => !open.has(id));
-    const input = { task, state, gone, ...(reason === null ? {} : { reason }) };
-    return topics.markTodo(service.state, input, now());
-}
 /** The `reason` argument: absent, a string, or null when it is something else. */
 function optionalReason(args) {
     const reason = args["reason"];
@@ -139,13 +108,6 @@ function optionalReason(args) {
     return typeof reason === "string" ? reason : null;
 }
 const TOPIC_HANDLERS = {
-    "todo-claim": (service, args) => markTodo(service, args, "claimed"),
-    "todo-failed": (service, args) => markTodo(service, args, "rejected"),
-    "todo-obsolete": (service, args) => markTodo(service, args, "obsolete"),
-    "todo-clear": (service, args) => {
-        const task = stringField(args, "task");
-        return task === null ? { usage: "需要 task id。" } : topics.clearTodo(service.state, task);
-    },
     create: (service, args) => {
         const name = stringField(args, "name");
         const goal = stringField(args, "goal");
@@ -247,6 +209,136 @@ const TOPIC_HANDLERS = {
         return topics.reopen(service.state, id, queue, now());
     },
 };
+function todoUsage(line) {
+    return { ok: false, code: "usage", line };
+}
+/** What a `todo-add` request asks for, or why it is malformed. */
+function todoInput(args) {
+    const commands = args["commands"];
+    const topic = args["topic"];
+    const id = stringField(args, "id");
+    const title = stringField(args, "title");
+    const action = stringField(args, "action");
+    if (id === null || title === null || action === null)
+        return "todo add 需要 task id、標題與 --do。";
+    if (!Array.isArray(commands) || !commands.every((command) => typeof command === "string"))
+        return "--cmd 要是文字。";
+    if (topic !== null && typeof topic !== "string")
+        return "--topic 要是議題 id。";
+    return {
+        id,
+        title,
+        topic,
+        action,
+        guidance: typeof args["guidance"] === "string" ? args["guidance"] : "",
+        commands,
+        ref: typeof args["ref"] === "string" ? args["ref"] : "",
+        captainCloses: args["captain_closes"] === true,
+        adopt: args["adopt"] === true,
+    };
+}
+/** The item id and one-line reason of a verdict, or why they are missing. */
+function verdictArgs(args) {
+    const task = stringField(args, "task");
+    const reason = stringField(args, "reason");
+    if (task === null)
+        return todoUsage("需要 task id。");
+    if (reason === null)
+        return todoUsage("需要 --reason <一行>。");
+    return { task, reason };
+}
+function closeByCaptain(service, args, words) {
+    const task = stringField(args, "task");
+    if (task === null)
+        return todoUsage("需要 task id。");
+    return todos.closeByCaptain(service.todos, task, words, labelOf(service));
+}
+/** The hands-on operations: the aggregator's over the socket, the captain's on the page. */
+const TODO_HANDLERS = {
+    "todo-add": (service, args) => {
+        const input = todoInput(args);
+        if (typeof input === "string")
+            return todoUsage(input);
+        const by = service.aggregator?.name ?? DEFAULT_LABEL;
+        return todos.addItem(service.todos, service.state, input, now(), by);
+    },
+    "todo-done": (service, args) => {
+        const task = stringField(args, "task");
+        return task === null
+            ? todoUsage("需要 task id。")
+            : todos.doneItem(service.todos, task, labelOf(service));
+    },
+    "todo-failed": (service, args) => {
+        const verdict = verdictArgs(args);
+        return "task" in verdict
+            ? todos.rejectItem(service.todos, verdict.task, verdict.reason, now())
+            : verdict;
+    },
+    "todo-obsolete": (service, args) => {
+        const verdict = verdictArgs(args);
+        if (!("task" in verdict))
+            return verdict;
+        return todos.obsoleteItem(service.todos, verdict.task, verdict.reason, now(), labelOf(service));
+    },
+    "todo-adopt-done": (service, args) => {
+        const open = args["open"];
+        if (!Array.isArray(open) || !open.every((id) => typeof id === "string"))
+            return todoUsage("adopt-done 需要還開著的項目 id。");
+        return todos.adoptDone(service.todos, open, labelOf(service));
+    },
+    "todo-claim": (service, args) => {
+        const task = stringField(args, "task");
+        return task === null
+            ? todoUsage("需要 task id。")
+            : todos.claimItem(service.todos, task, now(), labelOf(service));
+    },
+    "todo-drop": (service, args) => closeByCaptain(service, args, "不做了"),
+    "todo-takedown": (service, args) => closeByCaptain(service, args, "撤下"),
+};
+/** Hands the aggregator one notice about a hands-on item. */
+function submitTodoNotice(service, notice) {
+    const topic = notice.topic === null ? null : topics.resolveTopicId(service.state.doc, notice.topic);
+    submitNotice(service, {
+        kind: "notice",
+        event: notice.event,
+        text: notice.text,
+        ...(topic === null ? {} : { topic: topicRef(service, topic) }),
+        item: { id: notice.id, title: notice.title, ref: notice.ref },
+        ...(notice.by === undefined ? {} : { by: notice.by }),
+        ...(notice.words === undefined ? {} : { words: notice.words }),
+    }, topic);
+}
+/**
+ * Persists a change to the hands-on items: todos.json first, then the marks
+ * topics.json publishes, then the records and the notices.
+ */
+function commitTodos(service, result) {
+    if (!result.ok)
+        return result.code === "usage" ? usage(result.line) : refused(result.line);
+    if (!result.changed)
+        return { ok: true, line: result.line };
+    saveTodos(service.paths, result.store);
+    service.todos = result.store;
+    const next = structuredClone(service.state);
+    next.doc.todos = todos.projectMarks(result.store);
+    saveTopicState(service.paths, service.state, next);
+    service.state = next;
+    for (const event of result.events) {
+        const topic = event.topic === null ? null : topics.resolveTopicId(next.doc, event.topic);
+        service.journal.appendBoard({
+            ts: epochSeconds(),
+            home: null,
+            task: event.task,
+            kind: event.kind,
+            topic,
+            text: event.text,
+        });
+    }
+    service.version += 1;
+    for (const notice of result.notices)
+        submitTodoNotice(service, notice);
+    return { ok: true, line: result.line };
+}
 function healthData(service) {
     return {
         pid: process.pid,
@@ -456,6 +548,7 @@ function boardView(service) {
         writes: visibleWrites(service),
         ...buildView({
             topics: service.state,
+            todos: service.todos,
             homes: service.poller.snapshots(),
             events: service.journal.events,
             summaries: service.summaries.all,
@@ -508,18 +601,7 @@ async function testIgnore(service, args) {
     const problem = service.writes.ignore(stringField(args, "write_id") ?? "");
     return problem === null ? { ok: true, line: "ok" } : refused(problem);
 }
-/**
- * The agent's verdict on a hands-on item. The main home is read afresh first:
- * nothing keeps the board current while no page is open, and the item may be
- * seconds old.
- */
-async function todoVerdict(service, op, args) {
-    await withTimeout(service.poller.readNow(MAIN_HOME), LOOKUP_WAIT_MS, false);
-    return topicOp(service, op, args);
-}
 const SERVICE_HANDLERS = {
-    "todo-failed": (service, args) => todoVerdict(service, "todo-failed", args),
-    "todo-obsolete": (service, args) => todoVerdict(service, "todo-obsolete", args),
     health: async (service) => ({ ok: true, line: "ok", data: { ...healthData(service) } }),
     status: async (service) => ({ ok: true, line: "ok", data: statusData(service) }),
     stop: async () => ({ ok: true, line: "ok stop 看板服務已停止" }),
@@ -538,6 +620,9 @@ async function handle(service, request) {
         : undefined;
     if (serviceHandler !== undefined)
         return serviceHandler(service, request.args);
+    // A hands-on op never waits for a read: the aggregator may be asking from inside one.
+    if (Object.hasOwn(TODO_HANDLERS, request.op))
+        return topicOp(service, request.op, request.args);
     // The records a command writes name the agent side; a board that never read
     // the root home asks it once, so they do not say "aggregator" for Firstmate.
     if (service.aggregator === null && Object.hasOwn(TOPIC_HANDLERS, request.op))
@@ -758,6 +843,7 @@ function loadService(boot) {
     const service = {
         ...boot,
         state: loaded.state,
+        todos: loadTodos(paths, loaded.state.doc),
         journal,
         summaries: new Summaries(paths.summaries),
         timings,
@@ -830,23 +916,6 @@ function decisionNotices(op, args, result) {
     const name = result.state.doc.topics[kept]?.name ?? kept;
     return [{ event: "topic.kept", topic: kept, line: `議題「${name}」先不關（id：${kept}）` }];
 }
-/** True when the task `args` names is already marked as done by the captain. */
-function isClaimed(service, args) {
-    const task = stringField(args, "task");
-    const todos = service.state.doc.todos;
-    return task !== null && Object.hasOwn(todos, task) && todos[task]?.state === "claimed";
-}
-/** What the agent has to check after the captain says a hands-on item is done. */
-function claimNotices(service, args, result, alreadyClaimed) {
-    const task = stringField(args, "task");
-    // A repeated claim can still change the file, by dropping the marks of items that are gone.
-    if (!result.changed || task === null || alreadyClaimed)
-        return [];
-    const title = todoHold(service, task)?.title ?? task;
-    const failed = `bin/myshape.sh todo failed ${task} --reason <一行>`;
-    const line = `「${title}」做完了（${task}）。驗證後跑 bin/myshape.sh todo done ${task}；沒成功就跑 ${failed}`;
-    return [{ event: "todo.claimed", topic: null, line, item: { id: task, title, ref: task } }];
-}
 /**
  * Tells the agent side what the captain decided on the page. The agent
  * proposes closings and then waits; without this it would learn the outcome
@@ -860,7 +929,6 @@ function notifyDecision(service, notices) {
             event: notice.event,
             text,
             ...(notice.topic === null ? {} : { topic: topicRef(service, notice.topic) }),
-            ...(notice.item === undefined ? {} : { item: notice.item }),
         }, notice.topic);
     }
 }
@@ -879,23 +947,20 @@ function withActor(result, actor) {
  * The captain's own presses are refused over the socket.
  */
 function topicOp(service, op, args, fromPage = false) {
+    if (!fromPage && PAGE_ONLY_OPS.includes(op))
+        return refused(`${op} 是使用者在頁面上按的，不能從指令送。`);
+    const todoHandler = Object.hasOwn(TODO_HANDLERS, op) ? TODO_HANDLERS[op] : undefined;
+    if (todoHandler !== undefined)
+        return commitTodos(service, todoHandler(service, args));
     const handler = Object.hasOwn(TOPIC_HANDLERS, op) ? TOPIC_HANDLERS[op] : undefined;
     if (handler === undefined)
         return usage(`不認得的 op：${op}`);
-    if (!fromPage && PAGE_ONLY_OPS.includes(op))
-        return refused(`${op} 是使用者在頁面上按的，不能從指令送。`);
-    const claimed = isClaimed(service, args);
     const recorded = service.state.doc.history.length;
     const handled = handler(service, args);
     if ("usage" in handled)
         return usage(handled.usage);
     const result = topics.stampHistory(handled, recorded, fromPage ? "page" : "command");
-    const notices = [];
-    if (fromPage && result.ok) {
-        notices.push(...(op === "todo-claim"
-            ? claimNotices(service, args, result, claimed)
-            : decisionNotices(op, args, result)));
-    }
+    const notices = fromPage && result.ok ? decisionNotices(op, args, result) : [];
     const actor = fromPage ? "在頁面上" : `${labelOf(service)} 用指令`;
     const response = commit(service, withActor(result, actor));
     notifyDecision(service, notices);
