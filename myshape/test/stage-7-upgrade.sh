@@ -418,12 +418,18 @@ test_b3_the_b2_board_keeps_a_mark_and_a_message_in_flight() {
   [ "$(api todos/claim '{"task":"h-todo"}' | jq -r '.ok')" = true ] || fail "做完了 on the B2 page failed"
   assert_equals '"claimed"' "$(jq -c '.todos["h-todo"].state' "$MAIN/data/topics.json")" "the B2 board must keep the mark in topics.json"
   assert_absent "$MAIN/data/myshape/todos.json" "the B2 board has no store of its own"
-  wait_for "the claim notice to be delivered" grep -q '"event":"todo.claimed"' "$B3_DIR/agg/received.jsonl"
+  # The stub logs a record before it reads its next outcome, so the claim's
+  # notice must be settled before the message's scripted retry is written.
+  wait_for "the claim notice to be delivered" claim_delivered
   printf '%s\n' '{"outcome":"retry","error":"later"}' > "$B3_DIR/agg/play"
   B3_MESSAGE=$(api messages '{"topic":"old-a","text":"還在路上"}' | jq -r '.write_id')
   wait_for "the message to wait for a retry" write_is "$B3_MESSAGE" retrying
   B3_OLD_PID=$(tb_board_pid "$MAIN")
   pass "the B2 board recorded the captain's claim in topics.json and left a message waiting for a retry"
+}
+
+claim_delivered() {
+  [ "$(api_state '[.writes[] | select(.kind == "notice" and .state == "delivered")] | length')" -ge 1 ]
 }
 
 is_handson() {
