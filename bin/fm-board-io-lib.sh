@@ -31,7 +31,9 @@
 # with "myshape.sh todo adopt-done <every such hold still open>"; so does an
 # adopted item the board closed whose hold is now closed too. It reads the
 # board's data/myshape/todos.json first and calls the board only when there is
-# something to do.
+# something to do. It waits while the board has not kept the main home's
+# aggregator block yet (data/myshape/aggregator.json), so that the adoption's
+# records carry this side's label; the next read then adopts.
 #
 # deliver reads one action record on stdin and prints one outcome line,
 # {"outcome":"delivered|handled_elsewhere|retry|failed"[,"error":…]}, always
@@ -100,7 +102,7 @@ FMB_TODO_MARKER='動手：'
 fmb_adopt_args() {
   jq -j --argjson items "$1" --arg marker "$FMB_TODO_MARKER" '
     def trimmed: sub("^\\s+"; "") | sub("\\s+$"; "");
-    def taglast($text): ($text // "") | split("\n") | map(select(length > 0)) | last // "" | split(" ")[0];
+    def taglast($text): ($text // "") | split("\n") | map(select(length > 0)) | (last // "") | (split(" ")[0] // "");
     .topics as $tags
     | .legacy_todos[]
     | select($items[.id] == null)
@@ -134,6 +136,12 @@ fmb_adopt() {
   local -a args=() open=()
   jq -e '.legacy_todos | arrays' <<< "$report" >/dev/null 2>&1 ||
     { printf '%s\n' "adopt：讀不到這個 home 的 backlog，沒有動看板" >&2; return 1; }
+  # Until the board has read the main home once it does not know this side's
+  # name, and the records of the adoption would say "aggregator".
+  if [ ! -f "$DATA/myshape/aggregator.json" ]; then
+    printf '%s\n' "ok adopt 看板還沒讀過主 home，下一次讀的時候再搬"
+    return 0
+  fi
   if [ -f "$file" ]; then
     items=$(jq -c '.items // {} | objects' "$file" 2>/dev/null) || items=''
     [ -n "$items" ] || { printf '%s\n' "adopt：讀不懂 ${file}，沒有動看板" >&2; return 1; }
