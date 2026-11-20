@@ -656,9 +656,9 @@ test_plain_the_captains_channel() {
 # AT7.5b: hands-on items stay in the captain's units.
 test_plain_hands_on() {
   local before
-  before=$(cat "$PH/data/myshape/todos.json")
+  before=$(cat "$PH/data/myshape/todos.json" 2>/dev/null || printf 'no file')
   expect_code 1 "$(sa_code "$PH" todo add stray x --topic nope --do x)" "todo add under an unknown topic"
-  assert_equals "$before" "$(cat "$PH/data/myshape/todos.json")" "a refused todo add must store nothing"
+  assert_equals "$before" "$(cat "$PH/data/myshape/todos.json" 2>/dev/null || printf 'no file')" "a refused todo add must store nothing"
   p todo add a-item 甲 --topic A --do "做甲" >/dev/null || fail "todo add failed"
   p todo add b-item 乙 --topic B --do "做乙" >/dev/null
   p todo add c-item 丙 --topic A --do "做丙" >/dev/null

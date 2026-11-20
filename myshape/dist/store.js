@@ -270,14 +270,18 @@ function parseTodoStore(raw) {
 }
 /**
  * Loads the hands-on items. On the first start of a board that keeps them,
- * the file does not exist yet: it is created with topics.json's marks as
- * waiting marks, so nothing an older board recorded is lost.
+ * the file does not exist yet: topics.json's marks become waiting marks, and
+ * the file is written at once when there are any, so nothing an older board
+ * recorded is lost. With none it is written at the first change, like the
+ * board's other files, so a start alone leaves the home as it was.
  */
 export function loadTodos(paths, doc) {
     const fresh = { ...emptyTodos(), marks: structuredClone(doc.todos) };
     const store = loadFile(paths.todos, parseTodoStore, null);
     if (store !== null)
         return store;
+    if (Object.keys(fresh.marks).length === 0)
+        return fresh;
     fs.mkdirSync(paths.boardDataDir, { recursive: true });
     writeFileAtomic(paths.todos, serialize(fresh), FILE_MODE);
     return fresh;

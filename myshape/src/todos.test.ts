@@ -405,6 +405,8 @@ describe("the file", () => {
     const paths = boardPaths({ state: path.join(dir, "state"), data: path.join(dir, "data") });
     const doc = emptyState().doc;
     doc.todos = { old: { state: "rejected", at: "T", reason: "沒起來" } };
+    expect(loadTodos(paths, emptyState().doc)).toEqual(todos.emptyTodos());
+    expect(fs.existsSync(paths.todos)).toBe(false);
     const first = loadTodos(paths, doc);
     expect(first).toEqual({ v: 1, items: {}, marks: doc.todos, closed: {} });
     expect(fs.statSync(paths.todos).mode & 0o777).toBe(0o644);
