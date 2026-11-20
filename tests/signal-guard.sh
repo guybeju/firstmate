@@ -49,8 +49,10 @@ ps_field() {  # <field> <pid>: one field of <pid>, empty when it is gone.
   command -p ps -o "$1=" -p "$2" 2>/dev/null | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
 }
 
-judge_pid() {  # <pid>: prints the verdict on a pid already parsed as > 1.
-  if [ "$1" = "${FM_TEST_SUITE_PID:-}" ]; then
+judge_pid() {  # <pid>: prints the verdict on a pid already parsed as digits.
+  if [ "$1" -le 1 ]; then
+    echo "refused: pid $1 is 1 or less"
+  elif [ "$1" = "${FM_TEST_SUITE_PID:-}" ]; then
     echo "refused: pid $1 is the test script itself"
   elif [ "$1" = "${FM_TEST_SUITE_PARENT:-}" ]; then
     echo "refused: pid $1 is the test script's parent"
@@ -161,11 +163,7 @@ else
       target=$1
       parent=$(ps_field ppid "$target")
       command=$(ps_field args "$target")
-      if [ "$target" -le 1 ]; then
-        verdict="refused: pid $target is 1 or less"
-      else
-        verdict=$(judge_pid "$target")
-      fi
+      verdict=$(judge_pid "$target")
       ;;
   esac
 fi

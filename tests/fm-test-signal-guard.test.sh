@@ -206,6 +206,116 @@ test_crash_point_gives_up_without_resuming() {
   pass "an unreleased crash point gives up at its bound instead of resuming"
 }
 
+# A tree the --below form is judged on: the recorded child R (a bash -c) runs
+# victim.sh M, which runs a subshell with M's own command line, which runs a
+# stand-in S that stops at crash point below. Sets BELOW_DIR, BELOW_R,
+# BELOW_STANDIN and BELOW_GLOB; release with `: > "$BELOW_DIR/below.release"`.
+start_below_tree() {  # <name>
+  local dir="$TMP_ROOT/$1" fakebin i=0
+  fakebin=$(fm_fakebin "$dir")
+  fm_fake_crash_point "$fakebin"
+  cat > "$fakebin/stand-in" <<'SH'
+#!/usr/bin/env bash
+fm-crash-point "$1" below || exit 1
+SH
+  cat > "$dir/victim.sh" <<'SH'
+#!/usr/bin/env bash
+( "$1/fakebin/stand-in" "$1"; : > "$1/subshell-went-on" )
+: > "$1/victim-went-on"
+SH
+  chmod +x "$fakebin/stand-in" "$dir/victim.sh"
+  PATH="$fakebin:$PATH" bash -c '"$0" "$1"; :' "$dir/victim.sh" "$dir" &
+  BELOW_R=$!
+  while [ ! -s "$dir/below.reached" ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+  [ -s "$dir/below.reached" ] || fail "the --below tree's stand-in never reached its crash point"
+  BELOW_DIR=$dir
+  BELOW_STANDIN=$(cut -d' ' -f1 < "$dir/below.reached")
+  BELOW_GLOB="bash $dir/victim.sh *"
+}
+
+victim_pid() {  # <dir>: the pid running victim.sh <dir> whose parent does not.
+  ps -ww -eo pid=,ppid=,args= | VICTIM="bash $1/victim.sh $1" awk '
+    { pid = $1; ppid = $2; $1 = ""; $2 = ""; sub(/^  /, ""); args[pid] = $0; parent[pid] = ppid }
+    END { for (p in args) if (args[p] == ENVIRON["VICTIM"] && args[parent[p]] != ENVIRON["VICTIM"]) print p }'
+}
+
+test_below_accepts_only_the_one_matching_process_under_the_recorded_child() {
+  local self verdict victim other
+  self=$THIS_SHELL
+  start_below_tree below-verdicts
+  victim=$(victim_pid "$BELOW_DIR")
+  [ -n "$victim" ] || fail "the --below tree has no victim.sh process"
+  verdict=$(FM_TEST_RECORDED_CHILDREN=" $BELOW_R" guard "$self" KILL --below "$BELOW_R" "$BELOW_GLOB" "$BELOW_STANDIN")
+  [ "$verdict" = "accepted $victim" ] \
+    || fail "--below did not pick victim.sh $victim over its own subshell: $verdict"
+  verdict=$(guard "$self" KILL --below "$BELOW_R" "$BELOW_GLOB" "$BELOW_STANDIN")
+  assert_contains "$verdict" "the recorded child: pid $BELOW_R is not a recorded child" \
+    "--below accepted a child that was never recorded"
+  verdict=$(FM_TEST_RECORDED_CHILDREN=" $BELOW_R" guard "$self" KILL --below "$BELOW_R" "bash -c *" "$BELOW_STANDIN")
+  assert_contains "$verdict" "refused: 0 processes" "--below accepted the recorded child itself, whose command line matched"
+  verdict=$(FM_TEST_RECORDED_CHILDREN=" $BELOW_R" guard "$self" KILL --below "$BELOW_R" "bash $BELOW_DIR/no-such.sh *" "$BELOW_STANDIN")
+  assert_contains "$verdict" "refused: 0 processes" "--below accepted a process under the child that does not match"
+  verdict=$(FM_TEST_RECORDED_CHILDREN=" $BELOW_R" guard "$self" KILL --below "$BELOW_R" "*victim.sh*" "$BELOW_STANDIN")
+  assert_contains "$verdict" "starts with *" "--below accepted a glob that starts with *"
+  for other in "$$" "$PPID" 1; do
+    verdict=$(FM_TEST_RECORDED_CHILDREN=" $other" guard "$self" KILL --below "$other" "$BELOW_GLOB" "$BELOW_STANDIN")
+    expect_refused "$verdict" "--below with pid $other as the recorded child"
+  done
+  other=$(user_manager_pid)
+  if [ -n "$other" ]; then
+    verdict=$(FM_TEST_RECORDED_CHILDREN=" $BELOW_R $other" guard "$self" KILL --below "$other" "$BELOW_GLOB" "$BELOW_STANDIN")
+    expect_refused "$verdict" "--below with the user manager $other as the recorded child"
+    verdict=$(FM_TEST_RECORDED_CHILDREN=" $BELOW_R" guard "$self" KILL --below "$BELOW_R" "$BELOW_GLOB" "$other")
+    expect_refused "$verdict" "--below with the user manager $other as the stand-in"
+  fi
+  : > "$BELOW_DIR/below.release"
+  wait "$BELOW_R" || fail "the --below tree did not end by itself"
+  pass "--below accepts only the one process under the recorded child that matches, never the child, the test or the manager"
+}
+
+test_below_refuses_a_matching_process_outside_the_recorded_child() {
+  local self verdict outside i
+  self=$THIS_SHELL
+  start_below_tree below-outside
+  # A second copy of the same tree that this shell starts but never records:
+  # its victim.sh matches the glob too, but it is not under the recorded child.
+  mkdir -p "$TMP_ROOT/below-outside-2"
+  cp -R "$BELOW_DIR/fakebin" "$TMP_ROOT/below-outside-2/"
+  PATH="$BELOW_DIR/fakebin:$PATH" bash -c '"$0" "$1"; :' "$BELOW_DIR/victim.sh" "$TMP_ROOT/below-outside-2" &
+  outside=$!
+  i=0
+  while [ ! -s "$TMP_ROOT/below-outside-2/below.reached" ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+  verdict=$(FM_TEST_RECORDED_CHILDREN=" $BELOW_R" guard "$self" KILL --below "$BELOW_R" \
+    "bash $BELOW_DIR/victim.sh *" "$(cut -d' ' -f1 < "$TMP_ROOT/below-outside-2/below.reached")")
+  assert_contains "$verdict" "is not below the recorded child $BELOW_R" \
+    "--below accepted a matching process that is not under the recorded child"
+  : > "$TMP_ROOT/below-outside-2/below.release"
+  : > "$BELOW_DIR/below.release"
+  wait "$outside" || fail "the unrecorded tree did not end by itself"
+  wait "$BELOW_R" || fail "the --below tree did not end by itself"
+  pass "--below refuses a matching process that is not under the recorded child"
+}
+
+test_crash_at_below_signals_the_process_under_the_child() {
+  local rc=0 victim i
+  start_below_tree below-crash
+  fm_test_record_child "$BELOW_R"
+  victim=$(victim_pid "$BELOW_DIR")
+  fm_test_crash_at "$BELOW_DIR" below KILL "$BELOW_R" "$BELOW_GLOB"
+  wait "$BELOW_R" || rc=$?
+  [ "$rc" -eq 0 ] || fail "the recorded child did not go on after its own child (status $rc)"
+  if fm_test_signal_dry_run; then
+    assert_contains "$(tail -n 1 "$FM_TEST_SIGNAL_LOG")" "accepted $victim" \
+      "the log-only --below call did not log victim.sh as accepted"
+  else
+    assert_absent "$BELOW_DIR/victim-went-on" "victim.sh went on past the crash point"
+  fi
+  i=0
+  while running_under "$BELOW_DIR/" && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
+  ! running_under "$BELOW_DIR/" || fail "the --below tree is still running"
+  pass "fm_test_crash_at with a command line signals the one process under the recorded child"
+}
+
 fm_test_run \
   test_forms_without_one_explicit_pid_are_refused \
   test_the_suite_its_parent_and_the_user_manager_are_refused \
@@ -214,4 +324,7 @@ fm_test_run \
   test_fm_test_signal_refuses_without_sending \
   test_fm_test_signal_ends_its_own_recorded_child \
   test_crash_point_holds_the_stand_in_until_its_victim_is_gone \
-  test_crash_point_gives_up_without_resuming
+  test_crash_point_gives_up_without_resuming \
+  test_below_accepts_only_the_one_matching_process_under_the_recorded_child \
+  test_below_refuses_a_matching_process_outside_the_recorded_child \
+  test_crash_at_below_signals_the_process_under_the_child
