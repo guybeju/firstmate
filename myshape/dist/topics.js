@@ -404,7 +404,7 @@ export function keepOpen(state, rawId) {
 }
 /** Marks the history entries a change just added with where the change was made. */
 export function stampHistory(result, before, by) {
-    if (!result.ok || !result.changed || result.state.doc.history.length <= before)
+    if (result.state.doc.history.length <= before)
         return result;
     const state = clone(result.state);
     for (const entry of state.doc.history.slice(before))

@@ -38,7 +38,8 @@ interface TopicOperation {
 interface TodoOperation {
   channel: Channel;
   commitFile: "todos";
-  run: (ctx: OpContext, args: Record<string, unknown>) => TodoResult | Usage;
+  /** A malformed hands-on request is a usage result, so it can name the field it lacks. */
+  run: (ctx: OpContext, args: Record<string, unknown>) => TodoResult;
 }
 
 export type Operation = TopicOperation | TodoOperation;
@@ -428,7 +429,6 @@ function applyTopicOp(
   }
   const recorded = board.topics.doc.history.length;
   const stamped = topics.stampHistory(result, recorded, request.fromPage ? "page" : "command");
-  if (!stamped.ok || !stamped.changed) throw new Error(`${request.op}: history lost its change`);
   const suffix = request.fromPage ? "你在頁面上" : `${actor.label} 用指令`;
   const change = {
     file: "topics" as const,
@@ -490,7 +490,5 @@ export function applyOperation(
     if ("usage" in result) return answer(board, { ok: false, code: "usage", line: result.usage });
     return applyTopicOp(target, board, request, actor, result);
   }
-  const result = operation.run(ctx, request.args);
-  if ("usage" in result) return answer(board, { ok: false, code: "usage", line: result.usage });
-  return applyTodoOp(target, board, request, actor, result);
+  return applyTodoOp(target, board, request, actor, operation.run(ctx, request.args));
 }

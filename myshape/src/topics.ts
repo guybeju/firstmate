@@ -607,9 +607,12 @@ export function keepOpen(state: Frozen<TopicState>, rawId: string): TopicResult 
   ]);
 }
 
+/** A topic change that was made. */
+export type TopicChange = Extract<TopicResult, { changed: true }>;
+
 /** Marks the history entries a change just added with where the change was made. */
-export function stampHistory(result: TopicResult, before: number, by: HistoryActor): TopicResult {
-  if (!result.ok || !result.changed || result.state.doc.history.length <= before) return result;
+export function stampHistory(result: TopicChange, before: number, by: HistoryActor): TopicChange {
+  if (result.state.doc.history.length <= before) return result;
   const state = clone(result.state);
   for (const entry of state.doc.history.slice(before)) entry.by = by;
   return { ...result, state };

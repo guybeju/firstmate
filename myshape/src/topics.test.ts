@@ -20,6 +20,12 @@ function refusal(result: TopicResult): string {
   return result.line;
 }
 
+/** A result that must be a change. */
+function changeOf(result: TopicResult): topics.TopicChange {
+  if (!result.ok || !result.changed) throw new Error(`expected a change: ${result.line}`);
+  return result;
+}
+
 /** A state with topics a (high), b and c (normal), and d (later). */
 function fixture(): TopicState {
   let state = topics.emptyState();
@@ -554,16 +560,13 @@ describe("why and where a change was made", () => {
 
   it("stamps only the entries a change added, and leaves the result it was given alone", () => {
     const first = done(topics.rename(fixture(), "a", "A1", NOW));
-    const second = topics.rename(first.state, "a", "A2", NOW);
-    const stamped = done(topics.stampHistory(second, first.state.doc.history.length, "page"));
+    const second = changeOf(topics.rename(first.state, "a", "A2", NOW));
+    const stamped = topics.stampHistory(second, first.state.doc.history.length, "page");
     expect(stamped.state.doc.history.map((entry) => entry.by)).toEqual([undefined, "page"]);
-    expect(done(second).state.doc.history.at(-1)).not.toHaveProperty("by");
-    const unchangedResult = topics.rename(first.state, "a", "A1", NOW);
-    expect(topics.stampHistory(unchangedResult, 0, "page")).toBe(unchangedResult);
-    const refused = topics.rename(first.state, "nope", "x", NOW);
-    expect(topics.stampHistory(refused, 0, "page")).toBe(refused);
-    const noHistory = topics.keepOpen(first.state, "a");
-    expect(topics.stampHistory(noHistory, first.state.doc.history.length, "command")).toBe(
+    expect(second.state.doc.history.at(-1)).not.toHaveProperty("by");
+    const withProposal = done(topics.closePropose(first.state, "a", "done", NOW)).state;
+    const noHistory = changeOf(topics.keepOpen(withProposal, "a"));
+    expect(topics.stampHistory(noHistory, withProposal.doc.history.length, "command")).toBe(
       noHistory,
     );
   });

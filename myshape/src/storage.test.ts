@@ -958,7 +958,54 @@ describe("a change and its record survive a crash between them", () => {
     expect(fs.readFileSync(paths.events, "utf8")).toBe(lines);
   });
 
-  it("refuses to start when a waiting record cannot be commit", () => {
+  it("replays only whole records from an outbox, with every field they carry", () => {
+    const record = {
+      src: "board",
+      rid: "r-x",
+      ts: 7,
+      kind: "todo.done",
+      topic: "a",
+      home: null,
+      task: null,
+      item: "i",
+      by: "aggregator",
+      label: "plain",
+      outcome: "done",
+      reason: "r",
+      text: "t",
+    };
+    const junk = [
+      5,
+      { ...record, rid: "r-ledger", src: "ledger" },
+      { ...record, rid: undefined },
+      { ...record, rid: "r-kind", kind: undefined },
+      { ...record, rid: "r-by", by: undefined },
+      { ...record, rid: "r-ts", ts: "7" },
+    ];
+    fs.writeFileSync(
+      paths.topics,
+      JSON.stringify({ ...emptyState().doc, outbox: [...junk, record] }),
+    );
+    restart();
+    expect(boardLines()).toEqual([record]);
+  });
+
+  it("starts with the start's own records waiting when they cannot be appended", () => {
+    const raw = { v: 1, queues: {}, topics: { p: { name: "P", goal: "g", status: "proposed" } } };
+    fs.writeFileSync(paths.topics, JSON.stringify(raw));
+    failing = true;
+    journal = new Journal(paths.events);
+    const loaded = loadBoard(target, "plain");
+    expect(loaded.appendErrors).toEqual(["disk full"]);
+    expect(boardLines()).toEqual([]);
+    failing = false;
+    restart();
+    expect(boardLines().map((line) => [line.kind, line.by])).toEqual([
+      ["topic.confirmed", "board"],
+    ]);
+  });
+
+  it("refuses to start when a waiting record cannot be saved", () => {
     const board = liveBoard();
     failing = true;
     commitTopic(board, archive(board.topics, "a", "T2"));

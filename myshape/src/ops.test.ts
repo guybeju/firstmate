@@ -269,13 +269,14 @@ describe("each operation's arguments", () => {
     usage("create", { goal: "g" });
     usage("create", { name: "N", goal: "g", queue: "soon" });
     usage("create", { name: "N", goal: "g", id: 5 });
-    expect(reply("create", { name: "N", goal: "g", id: "n", queue: "later" }).response.line).toBe(
-      "ok n 已建立，排在「待辦」最後",
+    expect(reply("create", { name: "N", goal: "g", id: "own", queue: "later" }).response.line).toBe(
+      "ok own 已建立，排在「待辦」最後",
     );
   });
 
   it("move takes a queue and at most one of first, last and before", () => {
     usage("move", { id: "c" }, true);
+    usage("move", { queue: "normal" }, true);
     usage("move", { id: "c", queue: "normal", first: true, before: "b" }, true);
     usage("move", { id: "c", queue: "normal", last: true, before: "b" }, true);
     usage("move", { id: "c", queue: "normal", before: 3 }, true);
@@ -290,6 +291,8 @@ describe("each operation's arguments", () => {
   it("merge, split and reopen check their optional reason, id and queue", () => {
     usage("merge", { from: "b", into: "a", reason: 3 }, true);
     usage("split", { from: "a", name: "P" });
+    usage("split", { name: "P", goal: "g" });
+    usage("split", { from: "a", goal: "g" });
     usage("split", { from: "a", name: "P", goal: "g", id: 3 });
     usage("split", { from: "a", name: "P", goal: "g", reason: 3 });
     usage("reopen", { id: "z", queue: "soon" });
@@ -297,8 +300,9 @@ describe("each operation's arguments", () => {
     usage("rename", { id: "a" }, true);
     usage("archive", {}, true);
     usage("keep", {}, true);
-    const split = reply("split", { from: "a", name: "P", goal: "g", id: "p", reason: "太寬" });
-    expect(split.records[0]).toMatchObject({ kind: "topic.split", topic: "p" });
+    const split = reply("split", { from: "a", name: "P", goal: "g", id: "piece", reason: "太寬" });
+    expect(split.records[0]).toMatchObject({ kind: "topic.split", topic: "piece" });
+    expect(split.board.topics.doc.history.at(-1)).toMatchObject({ topic: "piece", reason: "太寬" });
   });
 
   it("split --dry answers what it would do and changes nothing", () => {
@@ -311,6 +315,9 @@ describe("each operation's arguments", () => {
 
   it("todo-add reads every part of the item it is given", () => {
     usage("todo-add", { id: "x", title: "T", action: "a", commands: "c" });
+    usage("todo-add", { title: "T", action: "a", commands: [], topic: "a" });
+    usage("todo-add", { id: "x", action: "a", commands: [], topic: "a" });
+    usage("todo-add", { id: "x", title: "T", commands: [], topic: "a" });
     usage("todo-add", { id: "x", title: "T", action: "a", commands: [1] });
     usage("todo-add", { id: "x", title: "T", action: "a", commands: [], topic: 3 });
     const added = reply("todo-add", {
@@ -348,5 +355,10 @@ describe("each operation's arguments", () => {
     usage("todo-drop", {}, true);
     const refused = reply("todo-done", { task: "nope" });
     expect(refused.response).toMatchObject({ ok: false, code: "refused" });
+    reply("todo-claim", { task: "open" }, true);
+    expect(reply("todo-claim", { task: "open" }, true)).toMatchObject({
+      response: { ok: true, line: "ok open 本來就已記下做完了，等驗證" },
+      committed: null,
+    });
   });
 });
