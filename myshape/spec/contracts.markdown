@@ -23,7 +23,7 @@
 - **燈號**：待你決定、卡住、進行中、完成、未知，共五種。
 - **直送**：從看板把訊息送給某一個 agent，不經主 first mate。
 - **里程碑**：`ready`、`report`、`failed`、`landed` 四種結果。**里程碑摘要**是 first mate 在里程碑發生時寫的一到三句。
-- **系統紀錄**：看板自己寫的一行紀錄（議題確認、歸併、在看板作答、提議關閉），不經模型。
+- **系統紀錄**：看板自己寫的一行紀錄，不經模型。看板的每一個改動都寫至少一筆，和改動存在同一次存檔裡（第 3.3 節）；在看板作答、歸併送到之後也各寫一筆。每筆記下誰做的：使用者（頁面）、aggregator（指令）或看板自己（啟動時）。
 - **結果不明**：寫入已送出、不知道有沒有生效、重送可能重複。**未送達**：可以安全重送，但重試次數用完。**失敗**：確定沒生效。
 
 ## 2. fork 裡新增的檔案
@@ -115,6 +115,7 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
 - `merged` 是「舊 id → 新 id」，可以串接；讀到舊 id 的地方一律走到底。各 home 的標記檔不重寫。
 - `history` 是來歷紀錄，舊的在前，和議題的變動寫在同一次存檔裡。`kind` 是 `merged`、`renamed`、`split`、`archived`、`reopened`、`moved`、`goal`；`moved` 另記移到的 `queue` 與從 1 起算的 `position`，`goal` 另記新的 `goal`，這兩種 `find` 只在 `--all` 時印；`topic` 與 `name` 是變動之後留下來的議題，合併另記被併掉的 `from` 與 `from_name`，改名另記舊名字 `from_name`，拆分的 `topic` 是新議題、`from` 是它拆出來的來源。另有兩個可省略的欄位：`reason` 是原因（`merge`、`split` 帶的 `--reason`，或封存之前的關閉提議），`by` 是在哪裡做的，`page` 或 `command`（C50）。搬了哪些 task 不記在這裡，各 task 的標記檔本來就有每次標記的時間。沒有這個欄位的舊檔當成空的；讀不懂的項目略過。`myshape.sh find` 讀它。
 - `todos` 記要你動手的項目在「還沒做」之外的狀態，鍵是項目 id：`claimed`（使用者按了做完了，等 aggregator 驗證）、`rejected`（驗證沒過，附 `reason`）、`obsolete`（不再需要，附 `reason`，等使用者撤下）。項目本身在 `data/myshape/todos.json`（第 3.6 節）；看板每次改項目都在同一次把這一欄改寫成那裡每個不是「還沒做」的項目的狀態，加上還在等搬上看板的舊狀態，所以讀這個檔的程式（與退回之前的舊版看板）照樣讀得到。沒有這個欄位的舊檔當成空的；讀不懂的項目略過。
+- `outbox` 是最後一次經這個檔存的議題改動寫的系統紀錄（第 3.3 節），和改動在同一次改名裡存下；看板每次改動前與每次啟動時，把 `events.jsonl` 還沒有的補寫進去。要你動手的改動只改寫這個檔的 `todos`，`outbox` 照舊留著。沒有這個欄位的舊檔當成空的；舊版程式存檔時會丟掉它，已經寫進 `events.jsonl` 的紀錄不受影響。
 - `close_proposal` 沒有就省略。
 - `next_seq` 是 `t<流水號>` 的下一個號碼，只增不減（採建議 C14）。
 - `data/topics-archive.json`：`{"v":1,"topics":{<id>:{…同上…,"archived_at":…}}}`。
@@ -130,13 +131,20 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
 每行一個 JSON：
 
 - 帳本事件：`{"src":"ledger","home":"<home>","raw":"<上游帳本的那一行，原樣的字串>"}`。存原始字串而不是解析後的物件，重啟後才能用同樣的位元組去重。上游的事件有 `v`、`ts`（epoch 秒）、`event`、`task`，五種 `event`：`task.dispatched`、`task.status`、`task.pr_ready`、`task.merged`、`task.cleaned_up`。
-- 系統紀錄（`ts` 也是 epoch 秒）：`{"src":"board","ts":…,"kind":"topic.created|topic.confirmed|topic.merged|topic.split|topic.moved|topic.renamed|topic.goal_changed|agent.tagged|hold.answered|topic.close_proposed|topic.archived|topic.reopened","topic":"<id>","home":…,"task":…,"text":"<顯示用的一行>"}`。議題層級的紀錄沒有 `home` 與 `task`。
-- 要你動手的項目每一步都寫一筆系統紀錄，在項目的議題底下（沒有議題的項目 `topic` 是 `null`），`home` 與 `task` 都是 `null`，標題寫在 `text` 裡。另帶 `item`（項目 id）、`by`（`captain` 是頁面上按的，`aggregator` 是指令做的）、`label`（當時 aggregator 的名稱），關掉的另帶 `outcome`（`done`、`dropped`、`taken_down`、`elsewhere`），帶原因的另帶 `reason`。
+- 系統紀錄（`ts` 也是 epoch 秒）：`{"src":"board","rid":"r-<boot_id>-<n>","ts":…,"kind":"…","topic":"<id>","home":…,"task":…,"by":"captain|aggregator|board","label":"<當時 aggregator 的名稱>","text":"<顯示用的一行>"}`。議題層級的紀錄沒有 `home` 與 `task`。
+  `rid` 是這筆紀錄的 id，補寫時用它去重；`by` 是看板能證明的做的人：`captain` 是頁面上拿著 token 的人做的，`aggregator` 是經 socket 的指令做的，`board` 是看板啟動時自己做的。這兩個欄位之前寫下的紀錄沒有。
+  議題的 `kind`：`topic.created`、`topic.confirmed`、`topic.merged`、`topic.split`、`topic.close_proposed`、`topic.kept`（使用者按了先不關）、`topic.archived`、`topic.reopened`、`topic.moved`、`topic.renamed`、`topic.goal_changed`。頁面上做的 `text` 結尾是「（你在頁面上）」，指令做的是「（<aggregator 的名稱> 用指令）」。
+  頁面上的寫入送到之後：`agent.tagged`（歸併）、`hold.answered`（在看板作答，`outcome` 是答案的選項）；作答時那個待決事項已經在別處結束（結果是 `handled_elsewhere`）寫 `hold.closed`，`outcome` 是 `elsewhere`。
+- 要你動手的項目每一步都寫一筆系統紀錄，在項目的議題底下（沒有議題的項目 `topic` 是 `null`），`home` 與 `task` 都是 `null`，標題寫在 `text` 裡。另帶 `item`（項目 id），關掉的另帶 `outcome`（`done`、`dropped`、`taken_down`、`elsewhere`），帶原因的另帶 `reason`。
   `kind`：`todo.opened`（放上看板）、`todo.rewritten`（內容改寫，回到還沒做）、`todo.adopted`（從看板存項目之前的紀錄搬上來）、`todo.claimed`（使用者按了做完了）、`todo.rejected`（驗證沒過）、`todo.obsolete`（不再需要，等使用者撤下）、`todo.done`（做完了，驗證過）、`todo.dropped`（使用者按了不做了）、`todo.taken_down`（撤下：aggregator 撤下不再需要的、使用者按了好，撤下，或搬上來的項目的 hold 已在別處關掉，`outcome` 是 `elsewhere`）。
+  另有三種沒有議題的紀錄：`todo.forgotten`（`todo adopt-done` 清掉一個沒搬上看板、hold 已在別處關掉的舊狀態，帶它的 `reason`）、`todo.settled`（看板上關掉的搬上來的項目，它的 hold 也關了，之後可以再放上看板）、`todo.marks_carried`（看板第一次自己存項目時，從 `topics.json` 帶過來舊狀態）。
   `text` 例：「要你動手「登入 VPN」已關：做完了，first mate 已驗證（first mate 用指令）」、「要你動手「登入 VPN」：你按了做完了（你在頁面上）」。
-  `topic.confirmed` 只在看板啟動時確認舊版留下的提議時寫（第 3.1 節）；更早寫下的照樣顯示。
+  `topic.confirmed` 只在看板啟動時確認舊版留下的提議時寫，封存檔裡的也寫（第 3.1 節）；更早寫下的照樣顯示。
+- 每一個改動都有一個存它的檔：議題的改動是 `topics.json`，要你動手的改動是 `data/myshape/todos.json`。看板先把兩個檔 `outbox` 裡 `events.jsonl` 還沒有的紀錄補寫進去（寫不進去就拒絕這次改動，回「看板寫不進紀錄（原因），這次的修改沒有做」），再把改動和它的紀錄一起寫進那個檔的 `outbox`、用同一次改名存下，然後把紀錄追加到這裡並 fsync。追加失敗時改動已經生效，紀錄留在 `outbox`，下一次改動或下一次啟動補寫；啟動時補寫不進去，看板就不啟動。
+  封存時封存檔先寫、`topics.json` 後寫，重開時反過來，所以中途當掉時議題留在 `topics.json`、沒有紀錄，或兩邊都有、`topics.json` 為準、紀錄由 `outbox` 補寫。要你動手的改動先寫 `topics.json` 的 `todos`，再寫 `todos.json`；看板啟動時從 `todos.json` 重算 `todos`。
 
-去重的鍵是 (home, 帳本那一行的原始位元組)。啟動時讀完整個檔重建去重集合；最後一行沒有換行字元就截掉。
+帳本事件去重的鍵是 (home, 帳本那一行的原始位元組)，系統紀錄的是 `rid`。啟動時讀完整個檔重建兩個去重集合；最後一行沒有換行字元就截掉。
+看板保留每一筆系統紀錄；帳本事件每個議題留最新的 500 筆、沒有議題的另留 500 筆。
 
 ### 3.4 `data/myshape/summaries.jsonl`
 
@@ -178,9 +186,10 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
 - `items` 是還在看板上的項目，鍵是項目 id（議題 id 的文法，最長 128 字元，由放上看板的一方選）。`title`（一行，最多 200 字）、`action`（一行，最多 1000 字）、`commands`（最多 50 個）一定有，一行的欄位不能有控制字元或改變文字方向的字元；`guidance` 可以是空字串，`commands` 可以是空陣列，每個指令原樣保存。`topic` 是放上看板時的議題 id（合併後顯示時跟到新的 id），只有搬上來、原本沒有議題的項目是 `null`。`state` 是 `open`、`claimed`、`rejected`、`obsolete`；`reason` 是 `rejected` 與 `obsolete` 的一行原因。`by` 是放上看板時 aggregator 的名字。`ref` 是 aggregator 自己選的不透明文字，最長 128 字元，看板只在通知裡原樣交回。`captain_closes` 是 `true` 的項目不再需要時要等使用者按「好，撤下」，不會直接撤下。`adopted` 是 `true` 的項目是用 `--adopt` 放上來的，也就是 aggregator 在看板存項目之前就有的。
 - 項目關掉就從 `items` 拿掉；它的每一步都在 `events.jsonl` 有紀錄（第 3.3 節）。
 - `marks` 是看板第一次以這個格式啟動時，從 `topics.json` 的 `todos` 帶過來、還沒有項目的狀態；同一個 id 的項目用 `--adopt` 搬上看板時接手那個狀態。
-- `todo adopt-done <id>…` 結束一輪搬移，給的是 aggregator 那邊還開著的舊項目：不在其中的等著的狀態清掉，不在其中的搬上來的項目離開看板，留一筆 `outcome` 是 `elsewhere` 的紀錄、不發通知。
-- `closed` 是搬上來的項目（`adopted`）在看板上關掉、而 aggregator 那邊還報它開著的時間；在那之前同一個 id 的 `--adopt` 不會把它放回看板，`todo adopt-done` 不再列它時就忘掉。
-- `v` 是 1 的期間，上面列的欄位意思不變；讀的一方略過不認得的欄位。沒有這個檔的看板第一次啟動時，`topics.json` 有狀態就立刻建立它；沒有的話第一次改項目時才建立，和看板其他的檔一樣，只是啟動不會在 home 裡多出檔。
+- `todo adopt-done <id>…` 結束一輪搬移，給的是 aggregator 那邊還開著的舊項目：不在其中的等著的狀態清掉（`todo.forgotten`），不在其中的搬上來的項目離開看板，留一筆 `outcome` 是 `elsewhere` 的紀錄、不發通知。
+- `closed` 是搬上來的項目（`adopted`）在看板上關掉、而 aggregator 那邊還報它開著的時間；在那之前同一個 id 的 `--adopt` 不會把它放回看板，`todo adopt-done` 不再列它時就忘掉（`todo.settled`）。
+- `outbox` 是最後一次要你動手的改動寫的系統紀錄，和 `topics.json` 的 `outbox` 一樣（第 3.1、3.3 節）。
+- `v` 是 1 的期間，上面列的欄位意思不變；讀的一方略過不認得的欄位。沒有這個檔的看板第一次啟動時，`topics.json` 有狀態就立刻建立它，寫一筆 `todo.marks_carried`；沒有的話第一次改項目時才建立，和看板其他的檔一樣，只是啟動不會在 home 裡多出檔。
 
 ## 4. 讀取契約（feed）
 
@@ -257,9 +266,10 @@ first mate 這一側怎麼產生這份回報（`fm-topic-board-read.sh` 讀 back
 `state/myshape/board.sock`，0600，不帶 token。一條連線一個要求：client 送一行 JSON `{"v":1,"op":"<名稱>","args":{…}}`，服務回一行 JSON `{"ok":true,"line":"<要印的那一行>",…}` 或 `{"ok":false,"code":"refused|usage|…","line":"<原因與修法>"}`，然後關閉連線。
 
 `op` 的清單：`health`、`status`、`stop`、`create`、`merge`、`close-propose`、`move`、`rename`、`split`、`goal`、`archive`、`reopen`、`summary`、`which`、`find`、`todo-add`、`todo-done`、`todo-failed`、`todo-obsolete`、`todo-adopt-done`、`reset-token`。
+改動看板的操作全部列在一張表裡（`myshape/src/ops.ts` 的 `OPERATIONS`）：哪條通道可以用、經哪個檔存（第 3.3 節）。socket 與頁面都只經這張表改看板，每一個改動都至少寫一筆系統紀錄，沒有紀錄的改動編譯不過。
 `keep`（頁面的「先不關」）、`todo-claim`（「做完了」）、`todo-drop`（「不做了」）與 `todo-takedown`（「好，撤下」）是使用者自己按的，socket 收到就拒絕，什麼都不改；它們只在頁面的 API 上。
 `todo-*` 的操作不等讀取：aggregator 可能正是在看板讀它的時候送來的。
-socket 上改議題的操作寫進議題更新的紀錄都註明「<aggregator 的名稱> 用指令」，頁面做的註明「在頁面上」；`move`、`rename`、`goal` 也寫紀錄，`move` 與 `goal` 另記進來歷（第 3.1 節）。`open` 與 `restart` 由 client 用 `health` 與 `stop` 組出來。另有只給測試用的 `dump`、`test-write`、`test-resend`、`test-ignore`，只在服務的環境變數 `MYSHAPE_TEST=1` 時註冊，平常送這些 `op` 會得到「不認得的 op」。
+socket 上改議題的操作寫進議題更新的紀錄都註明「<aggregator 的名稱> 用指令」，頁面做的註明「你在頁面上」；`move`、`rename`、`goal` 也寫紀錄，`move` 與 `goal` 另記進來歷（第 3.1 節）。`open` 與 `restart` 由 client 用 `health` 與 `stop` 組出來。另有只給測試用的 `dump`、`test-write`、`test-resend`、`test-ignore`，只在服務的環境變數 `MYSHAPE_TEST=1` 時註冊，平常送這些 `op` 會得到「不認得的 op」。
 
 `health` 回 `{"ok":true,"pid":…,"port":…,"code_commit":…,"boot_id":…,"started_at":…}`。
 
@@ -333,7 +343,7 @@ API 的路徑與 body 由第五段定；這裡只定兩件事：
 | `outcome` | 看板記成 |
 | --- | --- |
 | `delivered` | 已送達；`answer` 另記一筆「在看板作答」、`tag` 另記一筆「歸併」的系統紀錄，並重讀那個 home |
-| `handled_elsewhere` | 已由別處處理 |
+| `handled_elsewhere` | 已由別處處理；`answer` 另記一筆 `hold.closed`（待決事項已在別處結束），並重讀那個 home |
 | `retry`（帶 `error`） | 重試中，間隔照第 10 節；次數用完是未送達 |
 | `failed`（帶 `error`） | 失敗 |
 
