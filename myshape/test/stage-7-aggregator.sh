@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The board with an aggregator on the other side, from a board-only root in
 # the hardened environment of stage-7-standalone.sh (AT2, AT6, AT7 of the
-# board-interface test plan, as they stand for B2). Two stubs sit in the root
+# board-interface test plan, as they stand for B3). Two stubs sit in the root
 # under the one name the board runs, bin/fm-board.sh: stub-fm, Firstmate-shaped,
 # feeds the shared fixtures of myshape/test/contract/ for home main and its
 # further homes sm1 and far1; stub-plain, written only from the contract,
@@ -283,6 +283,71 @@ test_fm_notices() {
   wait_for "the reopen notice" is 1 received_count "$AGG_FM"
   assert_contains "$(received "$AGG_FM" '.[0].text')" "議題「封存」重開，排在「高」" "a reopening must send a dispatchable notice"
   pass "merges, archives, keeps and reopenings notify the aggregator, and a dispatchable notice waits and dictates nothing (AT2.6, AT2.7)"
+}
+
+# records_of <home> <item>: kind|by|label|outcome|reason|task of every record about that item, oldest first.
+records_of() {
+  jq -r -s --arg item "$2" '[.[] | select(.src == "board" and .item == $item)
+    | "\(.kind)|\(.by)|\(.label)|\(.outcome // "-")|\(.reason // "-")|\(.task)"] | join(" ")' "$1/data/myshape/events.jsonl"
+}
+
+todo_view() {  # <home> <task>: the item as the page gets it, or nothing
+  state_of "$1" --arg id "$2" '.todos[] | select(.task == $id) | {topic, what, guidance, commands, state, reason}'
+}
+
+# AT2.15: the whole life of a hands-on item, with a record for every step.
+test_fm_hands_on() {
+  local commands
+  : > "$AGG_FM/received.jsonl"
+  f todo add vpn-login 登入VPN --topic solo --do "用公司帳號登入 VPN" --note "只在公司網路外" \
+    --cmd "sudo openconnect vpn.example.com" --cmd "$(printf 'ping -c1 intra\n  && echo ok')" >/dev/null ||
+    fail "todo add failed"
+  commands=$(jq -cn --arg b "$(printf 'ping -c1 intra\n  && echo ok')" '["sudo openconnect vpn.example.com", $b]')
+  assert_equals "$(jq -cn --argjson c "$commands" '{topic: "solo", what: "用公司帳號登入 VPN", guidance: "只在公司網路外", commands: $c, state: "open", reason: null}')" \
+    "$(todo_view "$FMH" vpn-login)" "the page must show the item with its guidance and both commands"
+  assert_equals "$commands" "$(jq -c '.items["vpn-login"].commands' "$FMH/data/myshape/todos.json")" "todos.json must hold the item"
+  assert_equals true "$(post "$FMH" todos/claim '{"task":"vpn-login"}' | jq -r '.ok')" "做完了 on the page failed"
+  wait_for "the claim notice" is 1 received_count "$AGG_FM"
+  assert_equals "todo.claimed|vpn-login|登入VPN|solo" "$(received "$AGG_FM" '.[0] | "\(.event)|\(.item.id)|\(.item.title)|\(.topic.id)"')" \
+    "做完了 must send todo.claimed"
+  f todo failed vpn-login --reason "連不上" >/dev/null || fail "todo failed failed"
+  assert_equals '"rejected"|"連不上"' "$(todo_view "$FMH" vpn-login | jq -r '"\(.state | tojson)|\(.reason | tojson)"')" \
+    "a failed check must put the item back with its reason"
+  post "$FMH" todos/claim '{"task":"vpn-login"}' >/dev/null
+  wait_for "the second claim" is 2 received_count "$AGG_FM"
+  f todo 'done' vpn-login >/dev/null || fail "todo done failed"
+  assert_equals "" "$(todo_view "$FMH" vpn-login)" "todo done must take the item off"
+  wait_for "the close notice" is 3 received_count "$AGG_FM"
+  assert_equals "todo.closed|aggregator|做完了" "$(received "$AGG_FM" '.[2] | "\(.event)|\(.by)|\(.words)"')" "todo done must send todo.closed by the aggregator"
+  assert_equals "todo.opened|aggregator|first mate|-|-|null todo.claimed|captain|first mate|-|-|null todo.rejected|aggregator|first mate|-|連不上|null todo.claimed|captain|first mate|-|-|null todo.done|aggregator|first mate|done|-|null" \
+    "$(records_of "$FMH" vpn-login)" "every step must leave a record saying who made it"
+  assert_contains "$(grep '"item":"vpn-login"' "$FMH/data/myshape/events.jsonl" | tail -n 1)" '"topic":"solo"' "the records must be under the item's topic"
+
+  f todo add drop-me 不要了 --topic solo --do "x" >/dev/null
+  two_step "$FMH" todos/drop '{"task":"drop-me"}' >/dev/null
+  wait_for "the drop notice" is 4 received_count "$AGG_FM"
+  assert_equals "todo.closed|captain|不做了" "$(received "$AGG_FM" '.[3] | "\(.event)|\(.by)|\(.words)"')" "不做了 must send todo.closed by the captain with its words"
+  assert_equals "todo.opened|aggregator|first mate|-|-|null todo.dropped|captain|first mate|dropped|-|null" "$(records_of "$FMH" drop-me)" \
+    "不做了 must leave the captain's record"
+
+  f todo add gone-now 用不到 --topic solo --do "x" >/dev/null
+  f todo obsolete gone-now --reason "改用別的" >/dev/null
+  assert_equals "" "$(todo_view "$FMH" gone-now)" "an item made after B3 is taken down at once"
+  wait_for "the takedown notice" is 5 received_count "$AGG_FM"
+  assert_equals "todo.closed|aggregator|撤下" "$(received "$AGG_FM" '.[4] | "\(.event)|\(.by)|\(.words)"')" "the takedown must send todo.closed by the aggregator"
+  assert_contains "$(state_of "$FMH" '[.updates[].text] | join("\n")')" "要你動手「用不到」已撤下：不再需要，改用別的（first mate 用指令）" \
+    "the reason must be in the topic's updates"
+
+  f todo add old-one 舊的 --topic solo --do "x" --captain-closes --ref hold >/dev/null
+  f todo obsolete old-one --reason "不需要了" >/dev/null
+  assert_equals '"obsolete"' "$(todo_view "$FMH" old-one | jq -c '.state')" "an item only the captain closes waits for 好，撤下"
+  two_step "$FMH" todos/takedown '{"task":"old-one"}' >/dev/null
+  wait_for "the captain's takedown notice" is 6 received_count "$AGG_FM"
+  assert_equals "todo.closed|captain|撤下|hold" "$(received "$AGG_FM" '.[5] | "\(.event)|\(.by)|\(.words)|\(.item.ref)"')" \
+    "好，撤下 must send todo.closed by the captain, with the item's ref"
+  assert_equals "todo.opened|aggregator|first mate|-|-|null todo.obsolete|aggregator|first mate|-|不需要了|null todo.taken_down|captain|first mate|taken_down|-|null" \
+    "$(records_of "$FMH" old-one)" "every step of an item only the captain closes must be recorded"
+  pass "a hands-on item lives on the board from add to every way out, each step recorded (AT2.15)"
 }
 
 # AT2.8 and AT2.9: direct messages.
@@ -588,6 +653,39 @@ test_plain_the_captains_channel() {
   pass "answers, 先不關 and 做完了 can only come from the page (AT7.4, AT7.5a)"
 }
 
+# AT7.5b: hands-on items stay in the captain's units.
+test_plain_hands_on() {
+  local before
+  before=$(cat "$PH/data/myshape/todos.json" 2>/dev/null || printf 'no file')
+  expect_code 1 "$(sa_code "$PH" todo add stray x --topic nope --do x)" "todo add under an unknown topic"
+  assert_equals "$before" "$(cat "$PH/data/myshape/todos.json" 2>/dev/null || printf 'no file')" "a refused todo add must store nothing"
+  p todo add a-item 甲 --topic A --do "做甲" >/dev/null || fail "todo add failed"
+  p todo add b-item 乙 --topic B --do "做乙" >/dev/null
+  p todo add c-item 丙 --topic A --do "做丙" >/dev/null
+  p todo add d-item 丁 --topic A --do "做丁" --captain-closes --ref legacy >/dev/null
+  assert_equals "a-item:A b-item:B c-item:A d-item:A" "$(state_of "$PH" '[.todos[] | "\(.task):\(.topic)"] | sort | join(" ")')" \
+    "each item must show only under its topic"
+  for op in todo-drop todo-takedown todo-claim; do
+    tb_op "$PH" "$op" '{"task":"a-item"}' >/dev/null 2>&1 && fail "the socket must refuse $op"
+  done
+  assert_equals '"open"' "$(jq -c '.items["a-item"].state' "$PH/data/myshape/todos.json")" "a refused press must change nothing"
+  p todo 'done' a-item >/dev/null
+  two_step "$PH" todos/drop '{"task":"b-item"}' >/dev/null
+  p todo obsolete c-item --reason "用不到" >/dev/null
+  p todo obsolete d-item --reason "舊的" >/dev/null
+  two_step "$PH" todos/takedown '{"task":"d-item"}' >/dev/null
+  assert_equals "[]" "$(state_of "$PH" '[.todos[].task]')" "every item must have left the page"
+  assert_equals "todo.opened|aggregator|plain|-|-|null todo.done|aggregator|plain|done|-|null" "$(records_of "$PH" a-item)" "done is the agent's"
+  assert_equals "todo.opened|aggregator|plain|-|-|null todo.dropped|captain|plain|dropped|-|null" "$(records_of "$PH" b-item)" "不做了 is the captain's"
+  assert_equals "todo.opened|aggregator|plain|-|-|null todo.taken_down|aggregator|plain|taken_down|用不到|null" "$(records_of "$PH" c-item)" \
+    "a takedown by the agent carries its reason"
+  assert_equals "todo.opened|aggregator|plain|-|-|null todo.obsolete|aggregator|plain|-|舊的|null todo.taken_down|captain|plain|taken_down|-|null" \
+    "$(records_of "$PH" d-item)" "an item only the captain closes is taken down by the captain"
+  assert_equals "A B A A A B A A A" "$(jq -r -s '[.[] | select(.src == "board" and (.item // "") != "") | .topic] | join(" ")' "$PH/data/myshape/events.jsonl")" \
+    "every record must be on the item's topic"
+  pass "hands-on items stay under the captain's topics, the captain's presses are the page's, and every step leaves a record (AT7.5b)"
+}
+
 # AT7.6: command-made changes are marked as the agent's.
 test_plain_changes_are_marked() {
   local events
@@ -633,9 +731,9 @@ test_nothing_is_left() {
 }
 
 fm_test_run test_fm_setup test_fm_work_reaches_the_page test_fm_every_home_is_read_with_its_own_cursor \
-  test_fm_message test_fm_answers test_fm_filing test_fm_notices test_fm_direct test_fm_delivery_states \
+  test_fm_message test_fm_answers test_fm_filing test_fm_notices test_fm_hands_on test_fm_direct test_fm_delivery_states \
   test_fm_resend_after_a_restart \
   test_fm_a_crash_mid_write test_fm_whole_page_states test_fm_refresh test_fm_summaries \
   test_plain_setup test_plain_work test_plain_ledger test_plain_second_home test_plain_banners \
-  test_plain_work_only_under_topics test_plain_topics_and_order test_plain_the_captains_channel \
+  test_plain_work_only_under_topics test_plain_topics_and_order test_plain_the_captains_channel test_plain_hands_on \
   test_plain_changes_are_marked test_plain_texts_name_no_firstmate test_nothing_is_left

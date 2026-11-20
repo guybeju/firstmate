@@ -399,7 +399,7 @@ describe("answer", () => {
     expect(loose.topic).toBeNull();
   });
 
-  it("closes or releases as the hold recorded; unrecorded, only a main-home hands-on item closes", async () => {
+  it("closes or releases as the hold recorded; unrecorded, every hold releases", async () => {
     const h = harness();
     const modeOf = async (home: string, task: string): Promise<unknown> => {
       const write = sent(actions.answer(h.context, input({ home, task }), "browser"));
@@ -409,7 +409,7 @@ describe("answer", () => {
     expect(await modeOf("main", "call-1")).toBe("release");
     expect(await modeOf("w2", "call-w2")).toBe("done");
     expect(await modeOf("main", "call-old")).toBe("release");
-    expect(await modeOf("main", "todo-old")).toBe("done");
+    expect(await modeOf("main", "todo-old")).toBe("release");
     expect(await modeOf("main", "todo-kept")).toBe("release");
     expect(await modeOf("w2", "todo-w2")).toBe("release");
   });

@@ -94,7 +94,8 @@ export default async function run(page) {
   const todoButtons = todo(`[...card.querySelectorAll("button")].map((button) => button.textContent).join("|")`);
   const cardOf = (name) =>
     `[...document.querySelectorAll(".topic")].find((card) => card.innerText.includes(${JSON.stringify(name)})).innerText`;
-  await page.waitFor("the hands-on section", has("要你動手"));
+  // The items reach the page once firstmate's side has adopted them, at the board's second read.
+  await page.waitFor("the hands-on card", `document.querySelector('[data-todo="todo-1"]') !== null`, 15000);
   const blocks = await page.evaluate(todo(`JSON.stringify([...card.querySelectorAll("pre.cmd")].map((pre) => pre.textContent))`));
   if (blocks !== JSON.stringify([COMMAND, SECOND])) throw new Error(`each command must be its own block, exactly as written, got ${blocks}`);
   if ((await page.evaluate(todo(`card.querySelectorAll(".cmd-row button").length`))) !== 2)
@@ -137,7 +138,8 @@ export default async function run(page) {
   await page.click('[data-todo="todo-1"] button', "好，撤下");
   await page.waitFor("the confirmation", todo(`card.innerText.includes("會記成你的答覆「撤下」")`));
   await page.click('[data-todo="todo-1"] .confirm button', "確定");
-  await page.waitFor("the confirmation gone", todo(`!card.innerText.includes("會記成你的答覆")`));
+  // The board takes the item off at once; the hold behind it closes through the deliverer.
+  await page.waitFor("the item taken off the page", `document.querySelector('[data-todo="todo-1"]') === null`, 15000);
   const closed = () => fs.readFileSync(process.env.TB_LOG, "utf8").includes("stdin=todo-1\t撤下\t撤下\tdone");
   for (let tries = 0; tries < 60 && !closed(); tries += 1) await new Promise((resolve) => setTimeout(resolve, 150));
   if (!closed()) throw new Error("taking the item down must close it as the captain's answer");

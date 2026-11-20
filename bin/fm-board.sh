@@ -15,6 +15,7 @@
 #   fm-board.sh migrate-myshape [--check | --undo]
 #   fm-board.sh feed <home> <ledger-offset> <prefix-sha256>
 #   fm-board.sh deliver        (one action record on stdin)
+#   fm-board.sh adopt
 #
 # The board itself is bin/myshape.sh; this command is what firstmate adds
 # around it. None of these subcommands needs the board service.
@@ -68,6 +69,13 @@
 # feed and deliver are the two programs the board service runs (its feed and
 # action contracts); bin/fm-board-io-lib.sh holds them and says what each
 # runs. The board sets MYSHAPE_HOME to its home, which they use as FM_HOME.
+#
+# adopt puts the main home's hands-on holds from before the board kept
+# hands-on items on the board, once each, and takes off adopted items whose
+# hold is gone; feed main runs the same step before every read, and the
+# session-start hook once per session. It prints one line; it exits 1 when the
+# backlog could not be read (nothing is changed then) or an item could not be
+# adopted. Main home only. bin/fm-board-io-lib.sh says what it runs.
 #
 # --in-home runs tag, answers, or setup inside a LOCAL registered secondmate
 # home. answers forwards stdin to that home's
@@ -587,6 +595,7 @@ main() {
     migrate-myshape) cmd_migrate_myshape "$@" ;;
     feed) cmd_feed "$@" ;;
     deliver) cmd_deliver "$@" ;;
+    adopt) cmd_adopt "$@" ;;
     *) usage_error "不認得的子命令：$sub" ;;
   esac
 }

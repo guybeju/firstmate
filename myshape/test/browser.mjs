@@ -40,20 +40,39 @@ const profile = fs.mkdtempSync(path.join(os.homedir(), `${PROFILE_PREFIX}${proce
 const port = 20000 + Math.floor(Math.random() * 20000);
 const firefoxArgs = ["--headless", "--no-remote", "--profile", profile];
 firefoxArgs.push(`--remote-debugging-port=${port}`, "about:blank");
-const firefox = spawn("firefox", firefoxArgs, { stdio: "ignore" });
+// Firefox's stderr goes to a file beside the profile, so a failure to start can say why.
+const stderrFile = `${profile}.stderr`;
+const stderrFd = fs.openSync(stderrFile, "w");
+const firefox = spawn("firefox", firefoxArgs, { stdio: ["ignore", "ignore", stderrFd] });
+fs.closeSync(stderrFd);
+const STDERR_TAIL = 4000;
+
+/** The last part of what Firefox wrote on stderr, for a failure message. */
+function firefoxStderr() {
+  try {
+    const text = fs.readFileSync(stderrFile, "utf8").trim();
+    return text === "" ? "(Firefox wrote nothing on stderr)" : text.slice(-STDERR_TAIL);
+  } catch {
+    return "(Firefox's stderr could not be read)";
+  }
+}
 
 async function cleanUp() {
   firefox.kill("SIGKILL");
   await sleep(300);
   fs.rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  fs.rmSync(stderrFile, { force: true });
 }
 
 for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129]]) {
   process.once(signal, () => void cleanUp().finally(() => process.exit(code)));
 }
 
+// A loaded machine can take well over 20 seconds to start a headless Firefox.
+const CONNECT_ATTEMPTS = 300;
+
 async function connect() {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < CONNECT_ATTEMPTS; attempt += 1) {
     try {
       const socket = new WebSocket(`ws://127.0.0.1:${port}/session`);
       await new Promise((resolve, reject) => {
@@ -65,7 +84,7 @@ async function connect() {
       await sleep(200);
     }
   }
-  throw new Error("firefox did not open its BiDi port");
+  throw new Error(`firefox did not open its BiDi port within 60 s; its stderr:\n${firefoxStderr()}`);
 }
 
 let exitCode = 0;

@@ -114,6 +114,7 @@ describe("layout", () => {
       summaries: "/d/myshape/summaries.jsonl",
       notifyPending: "/d/myshape/notify-pending.json",
       aggregator: "/d/myshape/aggregator.json",
+      todos: "/d/myshape/todos.json",
     });
   });
 
@@ -536,6 +537,25 @@ describe("journal", () => {
       { src: "board", ts: 3, kind: "k", topic: null, home: null, task: null, text: "" },
     ]);
     expect(mode(paths.events)).toBe(0o644);
+  });
+
+  it("reads back a hands-on record's item, actor, label, outcome and reason", () => {
+    const journal = new Journal(paths.events);
+    const event = {
+      ts: 9,
+      kind: "todo.taken_down",
+      topic: null,
+      home: null,
+      task: null,
+      item: "vpn-login",
+      by: "aggregator",
+      label: "plain",
+      outcome: "taken_down",
+      reason: "不用了",
+      text: "要你動手「登入 VPN」已撤下：不再需要，不用了（plain 用指令）",
+    };
+    journal.appendBoard(event);
+    expect(new Journal(paths.events).events).toEqual([{ src: "board", ...event }]);
   });
 
   it("stores a summary once and reloads valid ones", () => {

@@ -16,10 +16,12 @@
 #   myshape.sh retract [--home <secondmate-id>] <task-id> <ready|report|failed|landed> -
 #   myshape.sh which [--home <secondmate-id>] <task-id>
 #   myshape.sh find [--all] <keyword>
-#   myshape.sh todo add <task-id> <title> --topic <topic-id> --do <one line> [--note <text>] [--cmd <command>]...
+#   myshape.sh todo add <task-id> <title> --topic <topic-id> --do <one line> [--note <text>] [--cmd <command>]... [--ref <text>] [--captain-closes]
+#   myshape.sh todo add <task-id> <title> [--topic <topic-id>] --do <one line> ... --adopt [--since <time>]
 #   myshape.sh todo done <task-id>
 #   myshape.sh todo failed <task-id> --reason <one line>
 #   myshape.sh todo obsolete <task-id> --reason <one line>
+#   myshape.sh todo adopt-done [<task-id>]...
 #   myshape.sh open | status | stop | restart | reset-token
 #
 # Every subcommand except open runs only in a home where the board has run:
@@ -61,23 +63,39 @@
 # wrong with a topic.
 #
 # todo keeps the things the captain has to do by hand (a sudo command, a
-# login) on the board. add holds <task-id> for the captain, creating it when it
-# does not exist, and tags it with the topic. --do says what to do, in one
-# line; --note is optional guidance shown as plain text; each --cmd is one
-# command, shown exactly as written in its own block with its own copy button.
-# A command of several lines (a here-document, a line continuation) is one
-# --cmd, for example --cmd "$(cat <<'EOF' ... EOF)". An item with no --cmd
-# shows no command. add reads no stdin: the old "-" form is refused. In the
-# hold reason every line after the action carries a label (說明：, 指令：, or
-# 續： for a further line of a command); a reason with an unlabelled line was
-# written before the labels and is shown as it always was, everything after
-# its first line in one block. The page offers 做完了 and 不做了. 做完了 does not
-# close the item: the board tells firstmate, who checks and then runs done
+# login) on the board, which stores each item itself in data/myshape/todos.json.
+# add puts <task-id> on the board under a live topic, or rewrites it; a
+# rewrite of different text starts it over as still to do. --do says what to
+# do, in one line; --note is optional guidance shown as plain text; each --cmd
+# is one command, shown exactly as written in its own block with its own copy
+# button. A command of several lines (a here-document, a line continuation) is
+# one --cmd, for example --cmd "$(cat <<'EOF' ... EOF)". An item with no --cmd
+# shows no command. add reads no stdin: the old "-" form is refused. --ref is
+# opaque text of at most 128 characters that the board hands back in its
+# notices about the item. The title is one line of at most 200 characters and
+# --do one of at most 1000, neither with control or direction characters;
+# there are at most 50 --cmd. The page offers 做完了 and 不做了. 做完了 does not close
+# the item: the board tells the aggregator, who checks and then runs done
 # (which closes it) or failed (which puts it back in front of the captain with
-# the reason). obsolete marks an item firstmate no longer needs; the captain
-# takes it down with one click, so the closing record stays the captain's own
-# word. Main home only. Repeating add, failed, or obsolete unchanged is safe;
-# done on an item that is already closed changes nothing and says so.
+# the reason). obsolete takes an item the aggregator no longer needs off the
+# page at once, with the reason in its topic's updates; an item added with
+# --captain-closes waits instead for the captain's 好，撤下.
+#
+# --adopt is for items an aggregator kept before the board kept them: it
+# accepts an archived topic, an unknown one or none, keeps the mark such an
+# item already had, and changes nothing for an item already on the board or
+# one closed on the board that the aggregator still reports open; --since is when the item
+# was first opened, an ISO 8601 time. adopt-done ends such a pass: given every
+# such item still open on the aggregator's side, it drops the marks of the
+# others and takes adopted items that are no longer open there off the
+# page, with a record and no notice.
+#
+# Every step of an item (put on, rewritten, adopted, claimed, failed, marked no
+# longer needed, closed) writes a record on its topic's updates saying who made
+# it: the captain on the page, or the aggregator by its label.
+#
+# Repeating add, failed, or obsolete unchanged is safe; done on an item that
+# is already closed changes nothing and says so.
 #
 # retract takes the task's latest summary of that kind off the board when it
 # turned out to be wrong; stdin is the reason. The line stays in the file.
@@ -96,7 +114,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SELF="$SCRIPT_DIR/myshape.sh"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
@@ -107,7 +124,6 @@ DEFAULT_PORT=47819
 EXIT_UNAVAILABLE=69
 TOPICS_FILE="$DATA/topics.json"
 ARCHIVE_FILE="$DATA/topics-archive.json"
-TODO_MARKER='動手：'
 
 # shellcheck source=bin/myshape-lib.sh
 . "$SCRIPT_DIR/myshape-lib.sh"
@@ -187,41 +203,6 @@ cmd_list() {
   ' 2>/dev/null || tb_die 1 "讀不懂 $TOPICS_FILE 或 ${ARCHIVE_FILE}。"
 }
 
-# What <task-id> is in this home: "todo" for an open hands-on item, "other"
-# for any other open captain hold, "task" for a task that is not held for the
-# captain, "none" when the backlog and the fleet know no such task.
-todo_kind() {
-  local report
-  report=$("$SCRIPT_DIR/fm-topic-board-read.sh" 0 -) || tb_die 1 "讀不到這個 home 的 backlog，沒有改任何東西。"
-  printf '%s' "$report" | jq -r --arg id "$1" --arg marker "$TODO_MARKER" '
-    ([.holds[] | select(.id == $id)][0]) as $hold
-    | if $hold != null then (if ($hold.question | startswith($marker)) then "todo" else "other" end)
-      elif ([.queued[], .tasks[] | select(.id == $id)] | length) > 0 then "task"
-      else "none" end'
-}
-
-# todo_lines <first-label> <next-label> <text>: <text> one label per line,
-# <first-label> on its first line and <next-label> on the rest, each line
-# after a newline. Line contents are kept byte for byte.
-todo_lines() {
-  local label=$1 next=$2 rest=$3 nl=$'\n' out="" line
-  while :; do
-    case "$rest" in
-      *"$nl"*)
-        line=${rest%%"$nl"*}
-        out+="$nl$label$line"
-        rest=${rest#*"$nl"}
-        ;;
-      *)
-        out+="$nl$label$rest"
-        break
-        ;;
-    esac
-    label=$next
-  done
-  printf '%s' "$out"
-}
-
 # todo_part <flag> <value>: <value> with carriage returns and trailing newlines
 # removed. A value with nothing else in it is a usage error.
 todo_part() {
@@ -234,14 +215,14 @@ todo_part() {
 TODO_ADD_USAGE='todo add 的用法是 <task-id> <標題> --topic <議題 id> --do <要做什麼> [--note <說明>] [--cmd <指令>]…：每個要使用者跑的指令一個 --cmd（多行的指令整段放進同一個 --cmd），不是指令的說明放 --note'
 
 # todo add <task-id> <title> --topic <topic-id> --do <action> [--note <text>]
-# [--cmd <command>]...: put a hands-on item for the captain on the board. The
-# topic is checked before anything is written.
+# [--cmd <command>]... [--ref <text>] [--captain-closes] [--adopt]: put a
+# hands-on item for the captain on the board. The board checks the topic.
 todo_add() {
-  local topic="" action="" note="" text kind command
+  local topic="" action="" note="" ref="" since="" captain_closes=false adopt=false item
   local -a words=() commands=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --topic | --do | --note | --cmd)
+      --topic | --do | --note | --cmd | --ref | --since)
         [ "$#" -ge 2 ] || usage_error "$1 後面要有值。$TODO_ADD_USAGE"
         case "$1" in
           --topic) topic=$2 ;;
@@ -254,9 +235,13 @@ todo_add() {
             note=$(todo_part --note "$2")
             ;;
           --cmd) commands+=("$(todo_part --cmd "$2")") ;;
+          --ref) ref=$2 ;;
+          --since) since=$2 ;;
         esac
         shift 2
         ;;
+      --captain-closes) captain_closes=true && shift ;;
+      --adopt) adopt=true && shift ;;
       -) usage_error "todo add 不再從 stdin 讀內容；要做什麼放 --do，說明放 --note，指令放 --cmd。$TODO_ADD_USAGE" ;;
       --*) usage_error "todo add 不認得 ${1}。$TODO_ADD_USAGE" ;;
       *)
@@ -265,82 +250,37 @@ todo_add() {
         ;;
     esac
   done
-  if [ "${#words[@]}" -ne 2 ] || [ -z "$topic" ] || [ -z "$action" ]; then
+  if [ "${#words[@]}" -ne 2 ] || { [ -z "$topic" ] && [ "$adopt" = false ]; } || [ -z "$action" ]; then
     usage_error "$TODO_ADD_USAGE"
   fi
   case "$action" in
     *$'\n'*) usage_error "--do 只寫一行；其餘的說明放 --note，指令放 --cmd。$TODO_ADD_USAGE" ;;
   esac
   tb_valid_id "${words[0]}" || usage_error "task id 格式不對：${words[0]}"
-  tb_valid_id "$topic" || usage_error "議題 id 格式不對：$topic"
-  # The labels are what the board reads the parts by (TODO_LABELS in myshape/src/view.ts).
-  text="$TODO_MARKER$action"
-  [ -z "$note" ] || text+=$(todo_lines '說明：' '說明：' "$note")
-  for command in ${commands[@]+"${commands[@]}"}; do
-    text+=$(todo_lines '指令：' '續：' "$command")
-  done
-  topic=$(tb_topic_for_tag "$TOPICS_FILE" "$topic")
-  kind=$(todo_kind "${words[0]}")
-  [ "$kind" != other ] ||
-    tb_die 1 "${words[0]} 已經是等使用者決定的項目，不能改成要使用者動手的項目。"
-  [ "$kind" != task ] ||
-    tb_die 1 "${words[0]} 已經是一件工作，不能改成要使用者動手的項目；換一個 task id。"
-  # Bring the board onto this code before the item is written, so a board still
-  # running older code never shows the labelled text as one command.
-  "$SELF" open >/dev/null || exit $?
-  # A hands-on item holds only the captain's own action, so answering it closes it.
-  # todo add reads no stdin, so the caller's stdin is not handed on either.
-  "$SCRIPT_DIR/fm-captain-hold.sh" hold "${words[0]}" --title "${words[1]}" --reason "$text" \
-    --on-answer close </dev/null >/dev/null || tb_die 1 "沒有建立 ${words[0]}；修好上面的問題後原樣再跑一次。"
-  "$SCRIPT_DIR/fm-board.sh" tag "${words[0]}" "$topic" >/dev/null ||
-    tb_die 1 "${words[0]} 已建立但沒有標上議題；原樣再跑一次同一個指令。"
-  # A rewritten item starts over: what the captain or firstmate said about the old text no longer holds.
-  if [ -f "$TOPICS_FILE" ] && jq -e --arg id "${words[0]}" '(.todos // {}) | objects | has($id)' "$TOPICS_FILE" >/dev/null 2>&1; then
-    "$SELF" todo-clear "${words[0]}" >/dev/null ||
-      tb_die 1 "${words[0]} 已更新，但看板上舊的狀態沒有清掉；原樣再跑一次同一個指令。"
-  fi
-  printf '%s\n' "ok ${words[0]} 已放上看板的「要你動手」（議題 ${topic}）"
-}
-
-# agent_label: the name the board's texts use for the agent side, the label
-# of the last root report the service kept, else "aggregator".
-agent_label() {
-  local label=""
-  label=$(jq -r '.label // empty' "$DATA/myshape/aggregator.json" 2>/dev/null) || label=""
-  printf '%s\n' "${label:-aggregator}"
-}
-
-# todo done <task-id>: the agent checked that the captain did it; close the item.
-todo_done() {
-  local id=${1:-} kind out label
-  [ "$#" -eq 1 ] || usage_error "todo done 的用法是 <task-id>"
-  tb_valid_id "$id" || usage_error "task id 格式不對：$id"
-  kind=$(todo_kind "$id")
-  # Only an open hands-on item is fed to the intake: it would close any captain hold it is given.
-  [ "$kind" = todo ] ||
-    tb_die 1 "$id 不是開著的「要你動手」項目，沒有關任何東西（已經關過的話不用再跑）。"
-  label=$(agent_label)
-  out=$(printf '%s\t做完了\t%s 已驗證\tdone\n' "$id" "$label" |
-    "$SCRIPT_DIR/fm-captain-hold.sh" answers --source myshape) ||
-    tb_die 1 "$id 沒有關：$(printf '%s' "$out" | head -n 1)"
-  printf '%s\n' "ok $id 已關（做完了，$label 已驗證）"
+  [ -z "$topic" ] || tb_valid_id "$topic" || usage_error "議題 id 格式不對：$topic"
+  [ -z "$since" ] || [ "$adopt" = true ] || usage_error "--since 只給 --adopt 用。$TODO_ADD_USAGE"
+  item=$(jq -cn --arg id "${words[0]}" --arg title "${words[1]}" --arg topic "$topic" \
+    --arg action "$action" --arg guidance "$note" --arg ref "$ref" --arg since "$since" \
+    --argjson captain_closes "$captain_closes" --argjson adopt "$adopt" \
+    '{id: $id, title: $title, topic: (if $topic == "" then null else $topic end), action: $action,
+      guidance: $guidance, commands: $ARGS.positional, ref: $ref,
+      captain_closes: $captain_closes, adopt: $adopt}
+     + (if $since == "" then {} else {since: $since} end)' \
+    --args ${commands[@]+"${commands[@]}"}) || tb_die 1 "組不出項目的內容，沒有放上任何東西。"
+  printf '%s' "$item" | cmd_service todo-add -
 }
 
 cmd_todo() {
   local sub=${1:-}
-  [ "$#" -gt 0 ] || usage_error "todo 的用法是 add、done、failed、obsolete 其中之一"
+  [ "$#" -gt 0 ] || usage_error "todo 的用法是 add、done、failed、obsolete、adopt-done 其中之一"
   shift
   case "$sub" in
     add)
       require_jq "todo add"
       todo_add "$@"
       ;;
-    done)
-      require_jq "todo done"
-      todo_done "$@"
-      ;;
-    failed | obsolete) cmd_service "todo-$sub" "$@" ;;
-    *) usage_error "todo 不認得 ${sub}；可用的是 add、done、failed、obsolete" ;;
+    done | failed | obsolete | adopt-done) cmd_service "todo-$sub" "$@" ;;
+    *) usage_error "todo 不認得 ${sub}；可用的是 add、done、failed、obsolete、adopt-done" ;;
   esac
 }
 
@@ -443,8 +383,7 @@ main() {
       usage
       return 0
       ;;
-    # todo-clear is internal: it forgets a hands-on item's mark after its text was rewritten.
-    open | list | todo | todo-clear | split | create | merge | close-propose | move | rename | \
+    open | list | todo | split | create | merge | close-propose | move | rename | \
       goal | archive | reopen | summary | retract | which | find | status | stop | restart | reset-token) ;;
     *) usage_error "不認得的子命令：$sub" ;;
   esac

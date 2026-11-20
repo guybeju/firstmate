@@ -21,6 +21,14 @@
 # id, the direct message is marked uncertain and not sent again, and the
 # settled writes stay in the history.
 #
+# Hands-on items stored by the board, B2 to B3 (AT5.4): the B2 board, fed a
+# 動手： hold by stub-plain, records the captain's 做完了 as a mark in
+# topics.json and is left with a message waiting for a retry; then this
+# working tree's board files are committed on top. The next command replaces
+# the service; its first start writes data/myshape/todos.json with that mark
+# waiting for adoption, topics.json still carries the mark for an older
+# reader, and the message reaches the stub once more and is delivered.
+#
 # Each base is pinned to carry's commit before its change, not computed as a
 # merge base: once the change is merged, the merge base is the change itself
 # and the step would test nothing. In both steps the new side runs with a stub
@@ -39,12 +47,13 @@ set -u
 
 BASE=5324261c
 BASE_B2=990ffb88
+BASE_B3=c5a54085
 # The board's files at the base, under the names they had before the rename.
 BASE_BOARD_FILES="bin/fm-topic.sh bin/fm-topic-lib.sh topic-board/dist topic-board/public topic-board/package.json"
 for tool in jq node curl git; do
   command -v "$tool" >/dev/null 2>&1 || { echo "skip: $tool not found"; exit 0; }
 done
-for rev in "$BASE" "$BASE_B2"; do
+for rev in "$BASE" "$BASE_B2" "$BASE_B3"; do
   git -C "$ROOT" cat-file -e "$rev^{commit}" 2>/dev/null || { echo "not ok - base $rev is not in this checkout" >&2; exit 1; }
 done
 TMP_ROOT=$(fm_test_tmproot tb-s7u)
@@ -384,7 +393,91 @@ test_b2_the_new_side_reaches_no_firstmate_file() {
   pass "the B2 board ran in the hardened environment and reached no Firstmate file"
 }
 
+# --- B2 to B3 -------------------------------------------------------------------
+
+B3_DIR=""
+B3_MESSAGE=""
+B3_OLD_PID=""
+
+test_b3_the_b2_board_keeps_a_mark_and_a_message_in_flight() {
+  B3_DIR=$TMP_ROOT/b3
+  SA_ROOT=$TMP_ROOT/root/b3-board
+  tb_make_board_root "$SA_ROOT" "$BASE_B3" >/dev/null
+  SA_ENV=(MYSHAPE_TEST=1 MYSHAPE_RETRY_MS=600000 MYSHAPE_READ_MS=300)
+  sa_install_stub plain "$B3_DIR/agg"
+  jq -n '{holds: [{id: "h-todo", title: "Log in", question: "動手：登入 VPN", hold_bucket: "live", hold_until: null,
+           unresolved_blocker_ids: [], hold_age_days: 0, origin: "", on_answer: "close"}],
+          topics: {"h-todo": "old-a 2026-11-19T00:00:00Z"}}' > "$B3_DIR/agg/plain/main.json"
+  MAIN=$(sa_home b3-main)
+  RUNTIME=$MAIN/state/myshape
+  sa_decoys "$MAIN"
+  sa "$MAIN" open >/dev/null || fail "the B2 board did not start"
+  sa "$MAIN" create "Old A" --goal "a" --id old-a >/dev/null
+  api refresh '{}' >/dev/null
+  wait_for "the B2 page to show the hands-on hold" is_handson
+  [ "$(api todos/claim '{"task":"h-todo"}' | jq -r '.ok')" = true ] || fail "做完了 on the B2 page failed"
+  assert_equals '"claimed"' "$(jq -c '.todos["h-todo"].state' "$MAIN/data/topics.json")" "the B2 board must keep the mark in topics.json"
+  assert_absent "$MAIN/data/myshape/todos.json" "the B2 board has no store of its own"
+  # The stub logs a record before it reads its next outcome, so the claim's
+  # notice must be settled before the message's scripted retry is written.
+  wait_for "the claim notice to be delivered" claim_delivered
+  printf '%s\n' '{"outcome":"retry","error":"later"}' > "$B3_DIR/agg/play"
+  B3_MESSAGE=$(api messages '{"topic":"old-a","text":"還在路上"}' | jq -r '.write_id')
+  wait_for "the message to wait for a retry" write_is "$B3_MESSAGE" retrying
+  B3_OLD_PID=$(tb_board_pid "$MAIN")
+  pass "the B2 board recorded the captain's claim in topics.json and left a message waiting for a retry"
+}
+
+claim_delivered() {
+  [ "$(api_state '[.writes[] | select(.kind == "notice" and .state == "delivered")] | length')" -ge 1 ]
+}
+
+is_handson() {
+  [ "$(api_state '[.holds[] | select(.task == "h-todo" and .todo != null)] | length')" = 1 ]
+}
+
+test_b3_the_first_start_keeps_the_mark() {
+  local path
+  for path in $TB_BOARD_FILES; do
+    rm -rf "${SA_ROOT:?}/$path"
+    mkdir -p "$SA_ROOT/$(dirname "$path")"
+    cp -R "$ROOT/$path" "$SA_ROOT/$path"
+  done
+  sa_install_stub plain "$B3_DIR/agg"
+  printf '{}\n' > "$B3_DIR/agg/plain/main.json"
+  sa_trip_root "$SA_ROOT"
+  ps -p "$B3_OLD_PID" >/dev/null 2>&1 || fail "the B2 board must still be running when B3 lands"
+  sa "$MAIN" open >/dev/null || fail "the next command after B3 landed failed"
+  : > "$SA_TRIP_LOG"
+  assert_not_equals "$B3_OLD_PID" "$(tb_board_pid "$MAIN")" "the next command must replace the B2 service"
+  assert_contains "$(sa "$MAIN" status)" "程式版本：$ROOT_COMMIT" "status must name the new commit"
+  assert_equals '{"h-todo":"claimed"}' "$(jq -c '.marks | map_values(.state)' "$MAIN/data/myshape/todos.json")" \
+    "the first start must keep the mark, waiting for its item"
+  assert_equals '{}' "$(jq -c '.items' "$MAIN/data/myshape/todos.json")" "no item is made from a mark alone"
+  assert_equals '"claimed"' "$(jq -c '.todos["h-todo"].state' "$MAIN/data/topics.json")" \
+    "topics.json must still carry the mark for an older reader"
+  pass "the first start of B3 keeps the B2 board's marks in todos.json and in topics.json"
+}
+
+test_b3_the_message_in_flight_arrives_once() {
+  wait_for "the message to be delivered" write_is "$B3_MESSAGE" delivered
+  # Installing the stub on the new side started a fresh log, so it holds only what B3 sent.
+  assert_equals 1 "$(jq -r -s --arg id "$B3_MESSAGE" '[.[] | select(.id == $id)] | length' "$B3_DIR/agg/received.jsonl")" \
+    "the message must reach the stub once from B3"
+  sa "$MAIN" restart >/dev/null
+  sleep 1
+  assert_equals 1 "$(jq -r -s --arg id "$B3_MESSAGE" '[.[] | select(.id == $id)] | length' "$B3_DIR/agg/received.jsonl")" \
+    "a delivered message must not be sent again"
+  sa "$MAIN" stop >/dev/null
+  sa_check_decoys "$MAIN"
+  sa_assert_no_boards
+  sa_assert_no_trips
+  pass "the message in flight across B2 to B3 is delivered once, and the new side reaches no Firstmate file"
+}
+
 fm_test_run test_the_old_board_makes_its_data test_the_new_code_refuses_until_the_move \
   test_the_next_command_after_the_move_replaces_the_board test_the_note_in_flight_arrives_once test_the_new_side_reaches_no_firstmate_file \
   test_b2_the_b1_board_leaves_writes_settled_and_in_flight test_b2_the_next_command_replaces_the_board \
-  test_b2_unfinished_writes_resume_or_show_once test_b2_the_new_side_reaches_no_firstmate_file
+  test_b2_unfinished_writes_resume_or_show_once test_b2_the_new_side_reaches_no_firstmate_file \
+  test_b3_the_b2_board_keeps_a_mark_and_a_message_in_flight test_b3_the_first_start_keeps_the_mark \
+  test_b3_the_message_in_flight_arrives_once

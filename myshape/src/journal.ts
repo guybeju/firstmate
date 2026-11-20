@@ -34,7 +34,15 @@ export interface BoardEvent {
   home: string | null;
   task: string | null;
   text: string;
+  /** A hands-on item's records: the item, who made the step, and how it ended or why. */
+  item?: string;
+  by?: string;
+  label?: string;
+  outcome?: string;
+  reason?: string;
 }
+
+const OPTIONAL_BOARD_FIELDS = ["item", "by", "label", "outcome", "reason"] as const;
 
 export type JournalEvent = LedgerEvent | BoardEvent;
 
@@ -75,6 +83,12 @@ function parseStoredBoard(stored: Record<string, unknown>): BoardEvent | null {
     home: stringField(stored, "home"),
     task: stringField(stored, "task"),
     text: textField(stored, "text"),
+    ...Object.fromEntries(
+      OPTIONAL_BOARD_FIELDS.flatMap((name) => {
+        const value = stringField(stored, name);
+        return value === null ? [] : [[name, value]];
+      }),
+    ),
   };
 }
 

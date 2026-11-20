@@ -37,6 +37,8 @@ export interface BoardPaths {
   notifyPending: string;
   /** The aggregator block of the last root report, for texts written while no report is at hand. */
   aggregator: string;
+  /** The hands-on items the board keeps for the captain. */
+  todos: string;
 }
 
 export function boardPaths(config: Pick<BoardConfig, "state" | "data">): BoardPaths {
@@ -59,6 +61,7 @@ export function boardPaths(config: Pick<BoardConfig, "state" | "data">): BoardPa
     summaries: path.join(boardDataDir, "summaries.jsonl"),
     notifyPending: path.join(boardDataDir, "notify-pending.json"),
     aggregator: path.join(boardDataDir, "aggregator.json"),
+    todos: path.join(boardDataDir, "todos.json"),
   };
 }
 

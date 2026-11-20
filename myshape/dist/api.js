@@ -75,9 +75,19 @@ const answer = (host, body) => {
     const hold = actions.findHold(context, home, task);
     if (hold === undefined)
         return fail(409, "refused", "這個待決事項已經不在了（可能已經有人答了）。");
-    const binding = bindingOf("answer", home, task, hold.question, text, actions.answerMode(home, hold));
+    const binding = bindingOf("answer", home, task, hold.question, text, actions.answerMode(hold));
     return twoStep(host, body, binding, () => fromAction(actions.answer(context, { home, task, answer: text, label: field(body, "label") }, "browser")));
 };
+/**
+ * The captain's 不做了 and 好，撤下: the item leaves the page and cannot be put
+ * back by the captain, so both take two steps, bound to the item.
+ */
+function todoClose(op) {
+    return (host, body) => {
+        const task = field(body, "task");
+        return twoStep(host, body, bindingOf(op, task), () => fromTopicOp(host.topicOp(op, { task })));
+    };
+}
 /** Resending a write whose outcome is unknown may duplicate it, so that case takes two steps. */
 const resend = (host, body) => {
     const id = field(body, "write_id");
@@ -101,6 +111,8 @@ const ROUTES = {
     "POST direct": (host, body) => fromAction(actions.direct(host.actionContext(), field(body, "home"), field(body, "task"), field(body, "text"), "browser")),
     "POST holds/answer": answer,
     "POST todos/claim": (host, body) => fromTopicOp(host.topicOp("todo-claim", { task: field(body, "task") })),
+    "POST todos/drop": todoClose("todo-drop"),
+    "POST todos/takedown": todoClose("todo-takedown"),
     "POST writes/resend": resend,
     "POST writes/ignore": (host, body) => fromProblem(host.writes.ignore(field(body, "write_id"))),
 };

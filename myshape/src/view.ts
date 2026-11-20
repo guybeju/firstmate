@@ -1,11 +1,12 @@
 // Computes what the board shows from what the service knows. Pure: the same
 // inputs always give the same view.
-import { MAIN_HOME } from "./journal.js";
 import type { JournalEvent, LedgerEvent, Summary } from "./journal.js";
 import type { HomeReport, OnAnswer, ReportHold, ReportQueued, ReportTask } from "./report.js";
 import { orNull } from "./files.js";
 import { QUEUES, resolveTopicId } from "./topics.js";
-import type { Queue, TodoMark, TodoState, TopicState } from "./topics.js";
+import type { Queue, TopicState } from "./topics.js";
+import { itemTopic } from "./todos.js";
+import type { ItemState, TodoStore } from "./todos.js";
 
 export type Light = "decide" | "stuck" | "working" | "done" | "unknown";
 export type HomeVersion = "same" | "different" | "incompatible" | "unreported" | "unknown";
@@ -22,6 +23,7 @@ export interface HomeSnapshot {
 
 export interface ViewInput {
   topics: TopicState;
+  todos: TodoStore;
   homes: HomeSnapshot[];
   events: JournalEvent[];
   summaries: Summary[];
@@ -73,19 +75,19 @@ export interface QueuedView {
 }
 
 /**
- * What a hands-on hold asks for: the action (one line), guidance that is not
- * a command (empty when there is none), and the commands to copy, each kept
- * exactly as written. An item with nothing to run has no commands.
+ * A hands-on item as the page shows it: the action (one line), guidance that
+ * is not a command (empty when there is none), the commands to copy, each
+ * kept exactly as written, and where it stands. "open" is still to do.
  */
-export interface TodoText {
+export interface TodoView {
+  task: string;
+  title: string;
+  /** Its topic now (merges followed), or null for an adopted item that had none. */
+  topic: string | null;
   what: string;
   guidance: string;
   commands: string[];
-}
-
-/** A hands-on hold as the page shows it, with where it stands. "open" is still to do. */
-export interface TodoView extends TodoText {
-  state: "open" | TodoState;
+  state: ItemState;
   reason: string | null;
 }
 
@@ -95,8 +97,6 @@ export interface HoldView {
   title: string;
   question: string;
   options: string[];
-  /** Set when the hold is a hands-on item, which only the main home can have. */
-  todo: TodoView | null;
   /** What sending an answer does to the item; see answerOutcome. */
   on_answer: OnAnswer;
   /** False when the hold recorded no outcome and on_answer is the default. */
@@ -152,6 +152,8 @@ export interface BoardView {
   agents: AgentView[];
   queued: QueuedView[];
   holds: HoldView[];
+  /** The hands-on items, in their topics' queue order, oldest first within a topic. */
+  todos: TodoView[];
   questions: QuestionView[];
   updates: UpdateView[];
   summaries: SummaryView[];
@@ -163,80 +165,15 @@ const MAX_UPDATES = 2000;
 // accepted anywhere in the last line, not only at its start.
 const OPTION_MARKER = "選項：";
 
-/** A hold reason that starts with this asks the captain to do something by hand. */
-export const TODO_MARKER = "動手：";
-
-/**
- * Labels `myshape.sh todo add` puts on every line after the action: a line of
- * guidance, the first line of a command, and each further line of that command.
- */
-export const TODO_LABELS = { guidance: "說明：", command: "指令：", more: "續：" } as const;
-
-/**
- * Reads the lines after the action of a record `todo add` wrote, where every
- * line carries a label. Null when any line does not, which is how a record
- * written before the labels is told apart.
- */
-function labelledTodo(what: string, lines: string[]): TodoText | null {
-  const guidance: string[] = [];
-  const commands: string[][] = [];
-  for (const line of lines) {
-    const last = commands[commands.length - 1];
-    if (line.startsWith(TODO_LABELS.guidance))
-      guidance.push(line.slice(TODO_LABELS.guidance.length));
-    else if (line.startsWith(TODO_LABELS.command))
-      commands.push([line.slice(TODO_LABELS.command.length)]);
-    else if (line.startsWith(TODO_LABELS.more) && last !== undefined)
-      last.push(line.slice(TODO_LABELS.more.length));
-    else return null;
-  }
-  return {
-    what,
-    guidance: guidance.join("\n"),
-    commands: commands.map((command) => command.join("\n")),
-  };
-}
-
-/**
- * Splits a hands-on hold's reason into its action (the first line), guidance,
- * and commands. A record from before the labels has no guidance and shows
- * everything after its first line as one command, as it always did.
- */
-export function parseTodo(question: string): TodoText | null {
-  if (!question.startsWith(TODO_MARKER)) return null;
-  const [first = "", ...rest] = question.slice(TODO_MARKER.length).replace(/\n+$/, "").split("\n");
-  const what = first.trim();
-  const labelled = labelledTodo(what, rest);
-  if (labelled !== null) return labelled;
-  const block = rest.join("\n").replace(/\s+$/, "");
-  return { what, guidance: "", commands: block === "" ? [] : [block] };
-}
-
 /**
  * What answering `hold` does: what whoever opened it recorded, else a default
  * that cannot finish unfinished work. A decision without a record is released,
  * so an item that still gates work (a merge approval) goes back to the queue
- * instead of being marked done. A main-home hands-on item without a record is
- * closed, as it always was: it carries only the captain's own action.
+ * instead of being marked done.
  */
-export function answerOutcome(
-  home: string,
-  hold: ReportHold,
-): { on_answer: OnAnswer; recorded: boolean } {
+export function answerOutcome(hold: ReportHold): { on_answer: OnAnswer; recorded: boolean } {
   if (hold.on_answer !== null) return { on_answer: hold.on_answer, recorded: true };
-  const handsOn = home === MAIN_HOME && parseTodo(hold.question) !== null;
-  return { on_answer: handsOn ? "close" : "release", recorded: false };
-}
-
-function todoView(
-  home: string,
-  hold: ReportHold,
-  marks: Record<string, TodoMark>,
-): TodoView | null {
-  const text = home === MAIN_HOME ? parseTodo(hold.question) : null;
-  if (text === null) return null;
-  const mark = Object.hasOwn(marks, hold.id) ? marks[hold.id] : undefined;
-  return { ...text, state: mark?.state ?? "open", reason: mark?.reason ?? null };
+  return { on_answer: "release", recorded: false };
 }
 
 interface Tag {
@@ -298,9 +235,8 @@ function deferredReason(hold: ReportHold): string | null {
   }
 }
 
-function waitingFor(home: string, item: ReportQueued): string | null {
-  const todo = home === MAIN_HOME && item.hold !== null && parseTodo(item.hold) !== null;
-  if (item.captain) return todo ? "要你動手" : "等你決定";
+function waitingFor(item: ReportQueued): string | null {
+  if (item.captain) return "等你決定";
   if (item.hold !== null) return `停著：${item.hold}`;
   if (item.blockers.length > 0) return `等 ${item.blockers.join("、")} 完成`;
   return null;
@@ -509,12 +445,7 @@ function agentsOf(
 }
 
 /** Whether a hold is due now, and if not, why it waits. */
-function holdTiming(
-  hold: ReportHold,
-  todo: TodoView | null,
-): { live: boolean; deferred_reason: string | null } {
-  // Something to do by hand does not become less due by sitting there.
-  if (todo !== null && hold.hold_bucket === "aged") return { live: true, deferred_reason: null };
+function holdTiming(hold: ReportHold): { live: boolean; deferred_reason: string | null } {
   return { live: hold.hold_bucket === "live", deferred_reason: deferredReason(hold) };
 }
 
@@ -524,16 +455,10 @@ interface RankedHold {
   ageDays: number;
 }
 
-function holdsOf(
-  home: HomeSnapshot,
-  stale: boolean,
-  placer: Placer,
-  marks: Record<string, TodoMark>,
-): RankedHold[] {
+function holdsOf(home: HomeSnapshot, stale: boolean, placer: Placer): RankedHold[] {
   if (home.report === null) return [];
   return home.report.holds.map((hold) => {
-    const todo = todoView(home.id, hold, marks);
-    const outcome = answerOutcome(home.id, hold);
+    const outcome = answerOutcome(hold);
     const own = placer.current(home.id, hold.id);
     const placement =
       own.topic === null && hold.origin !== "" ? placer.current(home.id, hold.origin) : own;
@@ -544,11 +469,10 @@ function holdsOf(
         task: hold.id,
         title: hold.title,
         question: hold.question,
-        options: todo === null ? parseOptions(hold.question) : [],
-        todo,
+        options: parseOptions(hold.question),
         on_answer: outcome.on_answer,
         on_answer_recorded: outcome.recorded,
-        ...holdTiming(hold, todo),
+        ...holdTiming(hold),
         topic: placement.topic,
         stale,
       },
@@ -691,6 +615,7 @@ export function buildView(input: ViewInput): BoardView {
     agents: [],
     queued: [],
     holds: [],
+    todos: [],
     questions: [],
     updates: updatesOf(input, placer),
     summaries: input.summaries
@@ -705,7 +630,7 @@ export function buildView(input: ViewInput): BoardView {
   input.homes.forEach((home, index) => {
     const stale = (homes[index] as HomeView).stale;
     view.agents.push(...agentsOf(home, stale, placer, last, runs));
-    ranked.push(...holdsOf(home, stale, placer, input.topics.doc.todos));
+    ranked.push(...holdsOf(home, stale, placer));
     if (home.report === null) return;
     for (const item of home.report.queued) {
       view.queued.push({
@@ -714,11 +639,43 @@ export function buildView(input: ViewInput): BoardView {
         kind: item.kind,
         title: item.title,
         topic: placer.queued(home.id, item).topic,
-        waiting: waitingFor(home.id, item),
+        waiting: waitingFor(item),
       });
     }
     view.questions.push(...questionsOf(home.id, home.report, placer));
   });
   view.holds = ranked.toSorted(holdOrder(view)).map((entry) => entry.view);
+  view.todos = todoViews(input, view);
   return view;
+}
+
+/** Sort key for an item: its topic's queue and place (no topic and archived last), then age. */
+function itemRank(view: BoardView, item: TodoView): number[] {
+  const queue = item.topic === null ? null : (view.topics[item.topic]?.queue ?? null);
+  if (item.topic === null || queue === null) return [QUEUES.length, QUEUES.length];
+  return [QUEUES.indexOf(queue), view.queues[queue].indexOf(item.topic)];
+}
+
+function todoViews(input: ViewInput, view: BoardView): TodoView[] {
+  const entries = Object.entries(input.todos.items).map(([task, item]) => ({
+    created: item.created_at,
+    view: {
+      task,
+      title: item.title,
+      topic: itemTopic(input.topics, item),
+      what: item.action,
+      guidance: item.guidance,
+      commands: item.commands,
+      state: item.state,
+      reason: item.reason,
+    },
+  }));
+  return entries
+    .toSorted(
+      (a, b) =>
+        compareRanks(itemRank(view, a.view), itemRank(view, b.view)) ||
+        a.created.localeCompare(b.created) ||
+        a.view.task.localeCompare(b.view.task),
+    )
+    .map((entry) => entry.view);
 }

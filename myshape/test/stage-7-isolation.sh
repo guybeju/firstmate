@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The board tree loads no Firstmate file, holds no Firstmate words, knows no
 # machine, and tells the dispatcher nothing (AT3 of the board-interface test
-# plan, as it stands for B2):
+# plan, as it stands for B3):
 #   - a static scan of the board's own files for Firstmate script and data
 #     names, each allowed only on a line pinned below by file and exact text;
 #   - a word scan of the string literals of myshape/src and the code lines of
@@ -56,17 +56,13 @@ scan() {
   done <<< "$(board_files)"
 }
 
-# The lines allowed to name a Firstmate file: the old-path refusal, which names
-# Firstmate's move to the new names until that move is gone; the split line
-# naming the command that moves tasks; the four calls todo add and todo done
-# keep until the board stores hands-on items (design 4.2); and the one program
-# the service runs, for its feed and its deliverer.
+# The lines allowed to name a Firstmate file (the revised plan's B3 column):
+# the old-path refusal, which names Firstmate's move to the new names until
+# that move is gone; the split line naming the command that moves tasks; and
+# the one program the service runs, for its feed and its deliverer. The board
+# stores hands-on items itself, so todo add and todo done call nothing.
 pinned() {
   cat <<'PINS'
-bin/myshape.sh	report=$("$SCRIPT_DIR/fm-topic-board-read.sh" 0 -) || tb_die 1 "讀不到這個 home 的 backlog，沒有改任何東西。"
-bin/myshape.sh	"$SCRIPT_DIR/fm-captain-hold.sh" hold "${words[0]}" --title "${words[1]}" --reason "$text" \
-bin/myshape.sh	"$SCRIPT_DIR/fm-board.sh" tag "${words[0]}" "$topic" >/dev/null ||
-bin/myshape.sh	"$SCRIPT_DIR/fm-captain-hold.sh" answers --source myshape) ||
 bin/myshape.sh	service_unavailable "這個 home 還有改名前的 $1" "先跑 bin/fm-board.sh migrate-myshape 搬到新名字"
 bin/myshape.sh	usage_error "split 只建議題；要一起搬 task，改用 bin/fm-board.sh split <議題 id> <新名稱> --goal <一行> <task…>"
 myshape/dist/commands.js	export const AGGREGATOR_PROGRAM = path.join("bin", "fm-board.sh");

@@ -8,7 +8,8 @@
 #
 # order  Prints which queued backlog items to dispatch, hold, and release, in
 #        the board's queue order, and under 等你驗證 the hands-on items the
-#        captain says are done. Read-only: it never changes the backlog, and
+#        captain says are done (state claimed in the board's
+#        data/myshape/todos.json, in the main home only). Read-only: it never changes the backlog, and
 #        when the queues or the backlog cannot be read it says so and lets
 #        dispatch proceed. An item under 該解除 is also listed under 可派, marked
 #        as still held, so its place in the order is visible before the hold is
@@ -93,7 +94,6 @@ OWN_HOLD_PREFIX='看板佇列：'
 # still starts with it is not the board's to order any more; order only warns
 # until bin/fm-board.sh migrate-myshape has rewritten it.
 OLD_HOLD_PREFIX='topic-board：'
-TODO_MARKER='動手：'
 COPY_MAX_BYTES=262144
 # queues-push sends an unchanged copy again once its last delivery is this old,
 # so the age the far side prints means "when the main home last reached it".
@@ -214,7 +214,7 @@ order_source_root() {
 }
 
 cmd_order() {
-  local snapshot tags sm=0
+  local snapshot tags sm=0 todos=/dev/null
   [ "$#" -eq 0 ] || usage_error "order 不收參數"
   require_jq order
   ! in_secondmate_home || sm=1
@@ -224,9 +224,12 @@ cmd_order() {
     return 0
   fi
   tags=$(order_tags)
-  printf '%s' "$snapshot" | jq -r --arg note "$ORDER_NOTE" --arg tags "$tags" --arg own "$OWN_HOLD_PREFIX" --arg marker "$TODO_MARKER" \
+  if [ "$sm" -eq 0 ] && jq -e '.items | objects' "$DATA/myshape/todos.json" >/dev/null 2>&1; then
+    todos=$DATA/myshape/todos.json
+  fi
+  printf '%s' "$snapshot" | jq -r --arg note "$ORDER_NOTE" --arg tags "$tags" --arg own "$OWN_HOLD_PREFIX" \
     --arg old "$OLD_HOLD_PREFIX" --argjson sm "$sm" \
-    --slurpfile live "$ORDER_TOPICS" --slurpfile gone "$ORDER_ARCHIVE" '
+    --slurpfile live "$ORDER_TOPICS" --slurpfile gone "$ORDER_ARCHIVE" --slurpfile todos "$todos" '
     ($live[0] // null) as $doc
     | ($gone[0].topics // $doc.archived // {}) as $archived
     | ($tags | split("\n") | map(select(length > 0) | split("\t") | {key: .[0], value: .[1]})
@@ -254,8 +257,6 @@ cmd_order() {
         | {id: $r.id, index: $index, topic: $topic, queue: $p.queue, at: ($p.at // 0),
            name: ($p.name // "（未分類）"),
            decision: ($r.kind == "captain"),
-           claimed: ($sm == 0 and (($r.hold_reason // "") | startswith($marker))
-                     and ((($doc.todos // {}) | objects | .[$r.id] | objects | .state) == "claimed")),
            own_hold: (($r.hold_reason // "") | startswith($own)),
            other_hold: ($r.hold_reason != null and ((($r.hold_reason // "") | startswith($own)) | not)),
            blocked: (($r.unresolved_blocker_ids // []) | length > 0),
@@ -282,7 +283,10 @@ cmd_order() {
       ($to_release[] | line + "\t→ bin/fm-tasks-axi.sh unhold \(.id)"),
       "停著：",
       ($parked[] | line),
-      ($items | map(select(.claimed)) as $claimed
+      ([ ($todos[0].items // {}) | to_entries[] | select(.value.state == "claimed")
+         | (.value.topic | if . == null then null else resolve end) as $topic
+         | place($topic) as $p
+         | {id: .key, name: ($p.name // "（未分類）"), queue: $p.queue} ] as $claimed
        | if ($claimed | length) == 0 then empty
          else "等你驗證：",
               ($claimed[] | line + "\t← 使用者說做完了；驗證後跑 bin/myshape.sh todo done \(.id)，沒成功就跑 bin/myshape.sh todo failed \(.id) --reason <一行>")
