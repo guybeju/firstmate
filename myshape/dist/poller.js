@@ -8,6 +8,8 @@ export const DEFAULT_TIMINGS = {
 };
 /** The feed's exit code for "this home's code cannot produce a report". */
 export const FEED_CANNOT_REPORT = 4;
+/** The feed's exit code for arguments it does not take. */
+const FEED_USAGE = 2;
 const TICK_MS = 250;
 const MAX_CATCH_UP_READS = 50;
 const ERROR_MAX = 400;
@@ -115,10 +117,11 @@ export class Poller {
         const eventsBefore = this.journal.events.length;
         for (let reads = 0; reads < MAX_CATCH_UP_READS; reads += 1) {
             const { offset, sha } = this.offsets.get(home.id);
-            const result = await this.run({ kind: "feed", home: home.id, offset, sha }, home.timeoutMs ?? this.timings.timeoutMs);
+            const closed = this.host.closedCursor(home.id);
+            const result = await this.run({ kind: "feed", home: home.id, offset, sha, ...(closed === null ? {} : { closed }) }, home.timeoutMs ?? this.timings.timeoutMs);
             const more = result.code === 0
                 ? this.accept(home, result.stdout)
-                : this.reject(home, result.code, result.stderr);
+                : this.reject(home, result.code, result.stderr, closed !== null);
             if (!more)
                 break;
         }
@@ -131,10 +134,14 @@ export class Poller {
     /**
      * A failed read. Exit 4 says the home cannot report at all: its data is
      * dropped and the feed's one line becomes its banner. Any other failure keeps
-     * the last report until it goes stale.
+     * the last report until it goes stale. A usage error to a read that passed
+     * the closed decisions' cursor makes the host forget that cursor.
      */
-    reject(home, code, stderr) {
+    reject(home, code, stderr, cursorSent) {
         const text = stderr.trim();
+        // A home whose code went back to before the cursor refuses it; read it without one next time.
+        if (code === FEED_USAGE && cursorSent)
+            this.host.onCursorRefused(home.id);
         if (code === FEED_CANNOT_REPORT) {
             home.version = "unreported";
             home.report = null;
@@ -167,7 +174,8 @@ export class Poller {
             this.host.onAggregator(report.aggregator);
         }
         this.refreshVersions();
-        return rewind || report.ledger.more;
+        this.host.onReport(home.id, report);
+        return rewind || report.ledger.more || report.closed_cursor?.more === true;
     }
     /** Stores a read's ledger lines and cursor; returns true when the ledger must be re-read from the start. */
     storeLedger(home, report) {
@@ -210,7 +218,7 @@ export class Poller {
 /** Everything about a home that a viewer could see, apart from when it was last read. */
 function fingerprint(home) {
     const { report } = home;
-    const shown = report === null ? null : { ...report, ledger: null };
+    const shown = report === null ? null : { ...report, ledger: null, closed_holds: null, closed_cursor: null };
     return JSON.stringify([home.error, home.version, shown]);
 }
 function versionOf(home, commit, mainCommit) {

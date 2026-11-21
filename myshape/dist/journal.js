@@ -5,7 +5,17 @@ import { appendLine, appendLineDurable, isRecord, readCompleteLines, readJsonFil
 import path from "node:path";
 const FILE_MODE = 0o644;
 export const MAIN_HOME = "main";
-const OPTIONAL_BOARD_FIELDS = ["rid", "item", "by", "label", "outcome", "reason"];
+const OPTIONAL_BOARD_FIELDS = [
+    "rid",
+    "item",
+    "by",
+    "label",
+    "outcome",
+    "reason",
+    "key",
+    "answer",
+    "source",
+];
 function parseLedgerLine(home, raw) {
     let line;
     try {
@@ -69,21 +79,33 @@ export class Journal {
     events = [];
     seen = new Set();
     rids = new Set();
+    keys = new Set();
     constructor(file) {
         this.file = file;
         for (const line of readCompleteLines(file)) {
             const { event, key } = parseStored(line);
             if (key !== null)
                 this.seen.add(key);
-            if (event?.src === "board" && event.rid !== undefined)
-                this.rids.add(event.rid);
+            if (event?.src === "board")
+                this.index(event);
             if (event !== null)
                 this.events.push(event);
         }
     }
+    /** Remembers a saved record's id and what it is about, for replay and for decisions. */
+    index(record) {
+        if (record.rid !== undefined)
+            this.rids.add(record.rid);
+        if (record.key !== undefined)
+            this.keys.add(record.key);
+    }
     /** True when the record with this id is already saved. */
     hasRecord(rid) {
         return this.rids.has(rid);
+    }
+    /** True when a record about `key` (a decision's opening or close) is already saved. */
+    hasKey(key) {
+        return this.keys.has(key);
     }
     /** Stores the ledger lines not seen before for `home`; returns how many were new. */
     appendLedger(home, rawLines) {
@@ -104,7 +126,7 @@ export class Journal {
     /** Saves one system record, on disk before it returns; only store.ts commitChange calls it. */
     appendRecord(record) {
         appendLineDurable(this.file, JSON.stringify(record), FILE_MODE);
-        this.rids.add(record.rid);
+        this.index(record);
         this.events.push(record);
     }
 }

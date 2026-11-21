@@ -44,9 +44,23 @@ export interface BoardEvent {
   label?: string;
   outcome?: string;
   reason?: string;
+  /** A decision's records: what the record is about, the answer, and where it was answered. */
+  key?: string;
+  answer?: string;
+  source?: string;
 }
 
-const OPTIONAL_BOARD_FIELDS = ["rid", "item", "by", "label", "outcome", "reason"] as const;
+const OPTIONAL_BOARD_FIELDS = [
+  "rid",
+  "item",
+  "by",
+  "label",
+  "outcome",
+  "reason",
+  "key",
+  "answer",
+  "source",
+] as const;
 
 export type JournalEvent = LedgerEvent | BoardEvent;
 
@@ -113,19 +127,31 @@ export class Journal {
   readonly events: JournalEvent[] = [];
   private readonly seen = new Set<string>();
   private readonly rids = new Set<string>();
+  private readonly keys = new Set<string>();
 
   constructor(private readonly file: string) {
     for (const line of readCompleteLines(file)) {
       const { event, key } = parseStored(line);
       if (key !== null) this.seen.add(key);
-      if (event?.src === "board" && event.rid !== undefined) this.rids.add(event.rid);
+      if (event?.src === "board") this.index(event);
       if (event !== null) this.events.push(event);
     }
+  }
+
+  /** Remembers a saved record's id and what it is about, for replay and for decisions. */
+  private index(record: { rid?: string; key?: string }): void {
+    if (record.rid !== undefined) this.rids.add(record.rid);
+    if (record.key !== undefined) this.keys.add(record.key);
   }
 
   /** True when the record with this id is already saved. */
   hasRecord(rid: string): boolean {
     return this.rids.has(rid);
+  }
+
+  /** True when a record about `key` (a decision's opening or close) is already saved. */
+  hasKey(key: string): boolean {
+    return this.keys.has(key);
   }
 
   /** Stores the ledger lines not seen before for `home`; returns how many were new. */
@@ -146,7 +172,7 @@ export class Journal {
   /** Saves one system record, on disk before it returns; only store.ts commitChange calls it. */
   appendRecord(record: StoredRecord): void {
     appendLineDurable(this.file, JSON.stringify(record), FILE_MODE);
-    this.rids.add(record.rid);
+    this.index(record);
     this.events.push(record);
   }
 }

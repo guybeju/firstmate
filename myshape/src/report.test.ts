@@ -21,6 +21,7 @@ const FULL = {
       hold_age_days: 4,
       origin: "t1",
       on_answer: "close",
+      hold_set: "2026-11-20T06:10:00Z",
     },
     { id: "h2", hold_bucket: "weird" },
     { hold_bucket: "live" },
@@ -43,6 +44,24 @@ const FULL = {
     { id: "edge", read_every_s: 0.2, read_timeout_s: 99_999 },
     { id: "word", read_every_s: "10" },
   ],
+  closed_holds: [
+    {
+      id: "c1",
+      title: "NAS",
+      origin: "t1",
+      mode: "answered",
+      answer: "要",
+      label: "",
+      source: "",
+      digest: "d1",
+      occurrence: 1,
+      opened_at: 100,
+      closed_at: "soon",
+    },
+    { id: "no digest", occurrence: 1 },
+    { id: "no occurrence", digest: "d" },
+  ],
+  closed_cursor: { status: "delta", to_offset: 7, to_prefix_sha256: "s2", more: true },
 };
 
 function ok(raw: unknown) {
@@ -144,6 +163,7 @@ describe("parseReport", () => {
           hold_age_days: 4,
           origin: "t1",
           on_answer: "close",
+          hold_set: "2026-11-20T06:10:00Z",
         },
       ],
       status_decisions: [{ id: "t1", key: "default", summary: "which?" }],
@@ -163,7 +183,37 @@ describe("parseReport", () => {
         { id: "edge", read_every_s: 1, read_timeout_s: 3600 },
         { id: "word", read_every_s: null, read_timeout_s: null },
       ],
+      closed_holds: [
+        {
+          id: "c1",
+          title: "NAS",
+          origin: "t1",
+          mode: "answered",
+          answer: "要",
+          label: "",
+          source: "",
+          digest: "d1",
+          occurrence: 1,
+          opened_at: 100,
+          closed_at: null,
+        },
+      ],
+      closed_cursor: { status: "delta", to_offset: 7, to_prefix_sha256: "s2", more: true },
     });
+  });
+
+  it("drops a closed decisions' cursor it cannot read", () => {
+    for (const cursor of [
+      { status: "later", to_offset: 0, to_prefix_sha256: "-" },
+      { status: "start" },
+      3,
+    ])
+      expect(ok({ ...FULL, closed_cursor: cursor }).closed_cursor).toBeNull();
+    for (const status of ["start", "delta", "continuity-broken", "absent"])
+      expect(
+        ok({ ...FULL, closed_cursor: { status, to_offset: 0, to_prefix_sha256: "-" } })
+          .closed_cursor,
+      ).toEqual({ status, to_offset: 0, to_prefix_sha256: "-", more: false });
   });
 
   it("reads a hold with no bucket as due now, and drops one with a word it does not know", () => {
@@ -209,6 +259,7 @@ describe("parseReport", () => {
           hold_age_days: null,
           origin: "",
           on_answer: null,
+          hold_set: null,
         },
       ],
       status_decisions: [{ id: "q", key: "", summary: "" }],
@@ -217,6 +268,8 @@ describe("parseReport", () => {
       ledger_hint: null,
       aggregator: null,
       secondmates: [],
+      closed_holds: [],
+      closed_cursor: null,
     });
   });
 

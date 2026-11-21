@@ -23,12 +23,12 @@
 - **燈號**：待你決定、卡住、進行中、完成、未知，共五種。
 - **直送**：從看板把訊息送給某一個 agent，不經主 first mate。
 - **里程碑**：`ready`、`report`、`failed`、`landed` 四種結果。**里程碑摘要**是 first mate 在里程碑發生時寫的一到三句。
-- **系統紀錄**：看板自己寫的一行紀錄，不經模型。看板的每一個改動都寫至少一筆，和改動存在同一次存檔裡（第 3.3 節）；在看板作答、歸併送到之後也各寫一筆。每筆記下誰做的：使用者（頁面）、aggregator（指令）或看板自己（啟動時）。
+- **系統紀錄**：看板自己寫的一行紀錄，不經模型。看板的每一個改動都寫至少一筆，和改動存在同一次存檔裡（第 3.3 節）；在看板作答、歸併送到之後也各寫一筆；讀到一個 home 的待決事項開了、關了，也各寫一筆。每筆記下誰做的：使用者（頁面）、aggregator（指令）或看板自己（啟動時與讀取時）。
 - **結果不明**：寫入已送出、不知道有沒有生效、重送可能重複。**未送達**：可以安全重送，但重試次數用完。**失敗**：確定沒生效。
 
 ## 2. fork 裡新增的檔案
 
-看板只新增檔案，不改上游既有的檔案；例外有兩處：`bin/fm-session-start.sh` 裡的呼叫點（第 11.3 節），以及 [open-issues](open-issues.markdown) C19 的 `bin/fm-captain-hold.sh` `hold --on-answer` 與它在既有的 `tests/fm-captain-hold-lifecycle.test.sh` 裡的測試（第 11.2 節）。
+看板只新增檔案，不改上游既有的檔案；例外有三處：`bin/fm-session-start.sh` 裡的呼叫點（第 11.3 節）；[open-issues](open-issues.markdown) C19 的 `bin/fm-captain-hold.sh` `hold --on-answer` 與它在既有的 `tests/fm-captain-hold-lifecycle.test.sh` 裡的測試（第 11.2 節）；以及 C59 的 `bin/fm-captain-hold.sh` `record_hold_line`，每次 hold、作答、放行在 `state/captain-hold-events.jsonl` 寫一行確切的時間（第 4 節，[adapter](../../fm-board/spec/adapter.markdown) 第 5 節）。
 上游合併進 `carry` 時這些檔可能衝突，衝突時保留這幾行。
 
 | 路徑 | 內容 | 哪一段加入 |
@@ -67,6 +67,7 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
 | `data/myshape/notify-pending.json` | 0644 | 等著發「議題變成可派」通知的議題與到期時間（第 7 節） | 只有看板服務 |
 | `data/myshape/aggregator.json` | 0644 | 最近一次根 home 回報裡的 `aggregator`，讓看板在下一次讀到之前寫的字也用對名字 | 只有看板服務 |
 | `data/myshape/todos.json` | 0644 | 要你動手的項目（第 3.6 節） | 只有看板服務 |
+| `data/myshape/decisions.json` | 0644 | 每個 home 上一次讀到的待決事項與已關的待決事項的游標（第 3.7 節） | 只有看板服務 |
 | `data/<task-id>/topic` | 0644 | 議題標記，每個 home 各自一份 | `fm-board.sh tag`（first mate 這一側；看板經 feed 讀） |
 | `state/myshape/` | 0700 | 下面這些檔的目錄 | 服務 |
 | `state/myshape/board.sock` | 0600 | Unix socket | 服務 |
@@ -79,7 +80,7 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
 | `config/myshape-port` | — | 選用，一行埠號 | 使用者 |
 | `config/fleet-ledger` | — | 上游的帳本旗標，每個 home 各一 | `fm-board.sh setup`（first mate 這一側） |
 
-每次改寫整個檔（`topics.json`、`topics-archive.json`、`offsets.json`、`notify-pending.json`、`aggregator.json`、`todos.json`、`token`、`port`、`pid`）都用同目錄的暫存檔 `<檔名>.tmp-<pid>` 加 rename。
+每次改寫整個檔（`topics.json`、`topics-archive.json`、`offsets.json`、`notify-pending.json`、`aggregator.json`、`todos.json`、`decisions.json`、`token`、`port`、`pid`）都用同目錄的暫存檔 `<檔名>.tmp-<pid>` 加 rename。
 
 ### 3.1 `data/topics.json`
 
@@ -140,6 +141,12 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
   另有三種沒有議題的紀錄：`todo.forgotten`（`todo adopt-done` 清掉一個沒搬上看板、hold 已在別處關掉的舊狀態，帶它的 `reason`）、`todo.settled`（看板上關掉的搬上來的項目，它的 hold 也關了，之後可以再放上看板）、`todo.marks_carried`（看板第一次自己存項目時，從 `topics.json` 帶過來舊狀態）。
   `text` 例：「要你動手「登入 VPN」已關：做完了，first mate 已驗證（first mate 用指令）」、「要你動手「登入 VPN」：你按了做完了（你在頁面上）」。
   `topic.confirmed` 只在看板啟動時確認舊版留下的提議時寫，封存檔裡的也寫（第 3.1 節）；更早寫下的照樣顯示。
+- 待決事項從讀取資料記下的開與關（C59），`by` 是 `board`，在待決事項的議題底下（它自己的標記，沒有就是來源 task 的），帶 `home` 與 `task`：
+  - `hold.opened`：一次讀取的 `holds[]` 裡有、上一次讀取沒有的 hold。`ts` 是它的 `hold_set`；`hold_set` 只有日期或沒有時是這次讀取的時間，`text` 結尾加「（最晚 MM-DD HH:mm）」。`closed_holds[]` 裡一個上一次讀取時還沒開的、帶 `opened_at` 的待決事項，也先寫一筆，`ts` 是 `opened_at`。
+  - `hold.closed`：`closed_holds[]` 裡上一次讀取沒有的一筆。`ts` 是它的 `closed_at`，沒有時是這次讀取的時間，加「（最晚 …）」。`outcome` 是 Resolution mode（`answered`、`released`、`repaired`、`reconciled`、`forge-closed`、`forge-released`，空的記成 `answered`），`answer` 是答案，`source` 是經哪裡（`chat` 是 first mate 直接記下的話）。在看板作答的（`source` 是 `myshape`）有看板自己的 `hold.answered`（`outcome` 是那個答案或它顯示的字）時不另寫，那一筆就是它的關閉；看板的那個作答還在送出中、等待或重試時先不寫，也不記成看過，游標留在原處，下一次讀再看；兩者都不是（送出的結果不是已送達，或有人用同一個入口手動作答）時照一般的關閉寫，「經看板」。
+  - 兩種都帶 `key`：`hold.opened\t<home>\t<task>\t<hold_set>`（從 `closed_holds[]` 先寫的是 `…\t#<digest>`）與 `hold.closed\t<home>\t<task>\t<digest>`。看板啟動時從這個檔重建 key 的集合，同一個 key 只寫一次。
+  - 從什麼時候開始看：看板第一次讀到一個 home、或那個 home 的 `code_commit` 換了的那一次（每一次更新程式都是），不寫開啟；那個 home 的回報還沒給過 `closed_cursor`，或看板還沒交給它游標的那一次，不寫關閉。那時已經開著、已經關掉的都不補記。
+  `text` 例：「待決事項「NAS 兩步驗證」已開：NAS 要不要開兩步驗證？」、「待決事項「NAS 兩步驗證」已回答：要（經聊天）」、「待決事項「X」已回答並放行，工作繼續：好（經聊天）」、「待決事項「X」已對帳結束，不必再答：…」、「待決事項「X」隨 PR 結束而關閉」。
 - 每一個改動都有一個存它的檔：議題的改動是 `topics.json`，要你動手的改動是 `data/myshape/todos.json`。看板先把兩個檔 `outbox` 裡 `events.jsonl` 還沒有的紀錄補寫進去（寫不進去就拒絕這次改動，回「看板寫不進紀錄（原因），這次的修改沒有做」），再把改動和它的紀錄一起寫進那個檔的 `outbox`、用同一次改名存下，然後把紀錄追加到這裡並 fsync。追加失敗時改動已經生效，紀錄留在 `outbox`，下一次改動或下一次啟動補寫；啟動時補寫不進去，看板就不啟動。
   封存時封存檔先寫、`topics.json` 後寫，重開時反過來，所以中途當掉時議題留在 `topics.json`、沒有紀錄，或兩邊都有、`topics.json` 為準、紀錄由 `outbox` 補寫。要你動手的改動先寫 `topics.json` 的 `todos`，再寫 `todos.json`；看板啟動時從 `todos.json` 重算 `todos`。
 
@@ -191,11 +198,23 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
 - `outbox` 是最後一次要你動手的改動寫的系統紀錄，和 `topics.json` 的 `outbox` 一樣（第 3.1、3.3 節）。
 - `v` 是 1 的期間，上面列的欄位意思不變；讀的一方略過不認得的欄位。沒有這個檔的看板第一次啟動時，`topics.json` 有狀態就立刻建立它，寫一筆 `todo.marks_carried`；沒有的話第一次改項目時才建立，和看板其他的檔一樣，只是啟動不會在 home 裡多出檔。
 
+### 3.7 `data/myshape/decisions.json`
+
+```json
+{"v": 1, "homes": {"main": {"code_commit": "…", "cursor": {"offset": 4096, "sha": "<64 位十六進位>"},
+  "open_seen": ["nas-2fa\t2026-11-20T06:10:00Z"], "closed_seen": ["call-1\t<digest>"]}}}
+```
+
+- 每個 home 上一次讀取成功時看到的：回報的 `code_commit`、`closed_cursor` 的 `to_offset` 與 `to_prefix_sha256`（回報沒有時是 `null`）、每個開著的 hold（`<task>\t<hold_set>`）、每個已關的待決事項（`<task>\t<digest>`）。
+- 看板寫完一次讀取的紀錄之後才寫這個檔，中途當掉時下一次讀同一段，紀錄的 `key` 讓它只記一次（第 3.3 節）。讀取失敗、回報不合法時不動它。
+- 沒有這個檔、讀不懂，就當成每個 home 都還沒看過；一個 home 用帶游標的讀取回 2（不認得這些參數）時，看板忘掉那個 home 的這一筆，下一次不帶游標讀。
+
 ## 4. 讀取契約（feed）
 
-看板讀每一個 home 都用同一個程式、同一種形狀（第 7 節）：`<code root>/bin/fm-board.sh feed <home> <offset> <prefix-sha256>`。
+看板讀每一個 home 都用同一個程式、同一種形狀（第 7 節）：`<code root>/bin/fm-board.sh feed <home> <offset> <prefix-sha256> [<closed-offset> <closed-sha256>]`。
 `<home>` 是 `main`（根 home），或根 home 的回報在 `secondmates[]` 裡列出的 id；home 只是 aggregator 給的名字，看板不分本機或遠端，怎麼到那個 home 是 aggregator 的事。
 `<offset>` 與 `<prefix-sha256>` 是看板替那個 home 存在 `data/myshape/offsets.json` 的帳本游標，第一次是 `0 -`。
+後兩個是已關的待決事項的游標（C13），存在 `data/myshape/decisions.json`；只有那個 home 上一次的回報帶了 `closed_cursor` 才給，所以還在舊程式上的 home 永遠只收到三個參數。
 
 | exit code | 意思 | 看板怎麼做 |
 | --- | --- | --- |
@@ -215,14 +234,20 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
                 "captain": false, "blockers": [], "topic_hint": "<議題 id 或 null>" } ],
   "holds": [ { "id": "…", "title": "…", "question": "<問題全文>", "hold_bucket": "live",
                "hold_until": null, "unresolved_blocker_ids": [], "hold_age_days": 0,
-               "origin": "<來源 task id 或空字串>", "on_answer": "close|release|null" } ],
+               "origin": "<來源 task id 或空字串>", "on_answer": "close|release|null",
+               "hold_set": "<UTC ISO 時間、日期或 null>" } ],
   "status_decisions": [ { "id": "…", "key": "…", "summary": "…" } ],
   "topics": { "<task-id>": "<議題標記的原文>" },
   "ledger": { "status": "delta|continuity-broken|absent",
               "to_offset": 0, "to_prefix_sha256": "-", "more": false, "lines": ["<一行事件>"] },
   "ledger_hint": "<選用：帳本沒開時要顯示的一行>",
   "aggregator": { "name": "…", "label": "<頁面怎麼稱呼它>", "update_hint": "<選用：版本橫幅後面的一句>" },
-  "secondmates": [ { "id": "…", "read_every_s": 60, "read_timeout_s": 400 } ]
+  "secondmates": [ { "id": "…", "read_every_s": 60, "read_timeout_s": 400 } ],
+  "closed_holds": [ { "id": "…", "title": "…", "origin": "…", "mode": "answered", "answer": "…", "label": "…",
+                     "source": "<經哪裡，直接記下的話是空字串>", "digest": "…", "occurrence": 1,
+                     "opened_at": 1795400000, "closed_at": 1795400600 } ],
+  "closed_cursor": { "status": "start|delta|continuity-broken|absent", "to_offset": 0,
+                     "to_prefix_sha256": "-", "more": false }
 }
 ```
 
@@ -240,6 +265,10 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
 - **C9** 其他 home 的 `code_commit` 和根 home 不同時，看板顯示「版本和主 home 不同」，它的資料照用。
 - **C10** 根 home 回報裡的 `aggregator{name, label, update_hint}` 與每個 home 的 `ledger_hint` 都可以省略。沒有 `label` 時頁面稱它「aggregator」；`ledger_enabled` 是 `false` 而且有 `ledger_hint` 時，頁面把那一行當成橫幅，沒有就不顯示。
 - **C11** exit 0 印一份回報；exit 4 是這個 home 無法回報，stderr 一行當它的橫幅；其他 exit 保留上一份回報直到過期。
+- **C12** `holds[].hold_set` 是 hold 開始的時間，看板用它當 `hold.opened` 的時間（第 3.3 節）；沒有或只有日期時看板用讀到的時間。
+- **C13** `closed_holds[]` 是這個 home 已關的待決事項：backlog 裡還在的每一筆，加上上一次給的游標之後才搬進封存的。每一筆用 (`id`, `digest`) 認；`mode`、`answer`、`label`、`source` 是怎麼關的，`occurrence` 是那個 task 的第幾次 hold，`opened_at`、`closed_at` 是 epoch 秒，不知道時是 `null`。
+  `closed_cursor` 是下一次要原樣交回的游標：`start` 是沒給游標時從現在開始、不報封存裡的；`delta` 是游標之後的；`continuity-broken` 是對不上，從現在重新開始；`absent` 是沒有封存可讀。`more` 是 `true` 時還有沒讀完的，看板立刻再讀一次。
+  兩個欄位都沒有，就是這個 home 不報已關的待決事項：看板不記它們的關閉，也不給它游標。只有其中一個讀不懂時那一個當成沒有。
 - `secondmates[]` 的 `read_every_s` 是多久讀一次，`read_timeout_s` 是一次讀取最多等多久，單位是秒，都可以省略（第 10 節的預設值），範圍是 1 到 3600，超出就用最接近的邊界，不是數字就用預設。
 
 欄位的穩定：`schema` 是 1 的期間，上面列的欄位意思不變；讀的一方略過不認得的欄位；改了意思或拿掉欄位就升成 2。
@@ -303,7 +332,7 @@ API 的路徑與 body 由第五段定；這裡只定兩件事：
 
 | # | argv | stdin | 用在 |
 | --- | --- | --- | --- |
-| F | `fm-board.sh feed <home> <offset> <sha>` | — | 讀一個 home（第 4 節） |
+| F | `fm-board.sh feed <home> <offset> <sha> [<closed-offset> <closed-sha>]` | — | 讀一個 home（第 4 節） |
 | D | `fm-board.sh deliver` | 一行動作紀錄 | 把使用者在頁面上的動作與看板的通知交給 aggregator（7.1） |
 
 參數的檢查：`<home>` 符合 `[A-Za-z0-9._-]`、不以 `.` 或 `-` 開頭；`<offset>` 是非負整數；`<sha>` 是 64 位十六進位或 `-`；動作紀錄只能是一行。

@@ -39,6 +39,20 @@
 # board's lines with the new close. Going back to B3 code, its board reads
 # the new lines, shows them, and its next change drops the outbox.
 #
+# Decisions recorded from the feed, the record guarantee to decision records:
+# the board at carry's commit before this change runs with a Firstmate-shaped
+# stub whose report has no hold_set and no closed decisions, as an older
+# reader prints it; then this working tree's board files are committed on top
+# and the stub's report turns into one of a home full of past decisions: an
+# open hold set long ago, answered and released ones, and one the page
+# answered. The next command replaces the service; its first reads write no
+# decision record and leave events.jsonl byte-identical, even when a past
+# decision is reported again after it moved into the archive. Then a new hold
+# writes one opening and its chat answer one close at the time the home gave;
+# a stub that refuses the closed decisions' cursor, as an older reader would,
+# is read again without it. Going back to the earlier code, its board shows
+# the new lines as text and keeps changing the board.
+#
 # Each base is pinned to carry's commit before its change, not computed as a
 # merge base: once the change is merged, the merge base is the change itself
 # and the step would test nothing. In both steps the new side runs with a stub
@@ -59,12 +73,13 @@ BASE=5324261c
 BASE_B2=990ffb88
 BASE_B3=c5a54085
 BASE_RECORDS=0c320a14
+BASE_DECISIONS=18f63f43
 # The board's files at the base, under the names they had before the rename.
 BASE_BOARD_FILES="bin/fm-topic.sh bin/fm-topic-lib.sh topic-board/dist topic-board/public topic-board/package.json"
 for tool in jq node curl git; do
   command -v "$tool" >/dev/null 2>&1 || { echo "skip: $tool not found"; exit 0; }
 done
-for rev in "$BASE" "$BASE_B2" "$BASE_B3" "$BASE_RECORDS"; do
+for rev in "$BASE" "$BASE_B2" "$BASE_B3" "$BASE_RECORDS" "$BASE_DECISIONS"; do
   git -C "$ROOT" cat-file -e "$rev^{commit}" 2>/dev/null || { echo "not ok - base $rev is not in this checkout" >&2; exit 1; }
 done
 TMP_ROOT=$(fm_test_tmproot tb-s7u)
@@ -491,9 +506,11 @@ test_b3_the_message_in_flight_arrives_once() {
 R_DIR=""
 R_OLD_PID=""
 
-# install_board_files <revision or empty for this tree>: the board's files in SA_ROOT, committed.
+# install_board_files <revision or empty for this tree> [stub] [agg-dir]: the
+# board's files in SA_ROOT, with the stub aggregator (plain in R_DIR/agg unless
+# named), committed.
 install_board_files() {
-  local path
+  local path stub=${2:-plain} agg=${3:-$R_DIR/agg}
   for path in $TB_BOARD_FILES; do
     rm -rf "${SA_ROOT:?}/$path"
     mkdir -p "$SA_ROOT/$(dirname "$path")"
@@ -504,8 +521,8 @@ install_board_files() {
       git -C "$ROOT" archive "$1" $path | tar -x -C "$SA_ROOT"
     fi
   done
-  sa_install_stub plain "$R_DIR/agg"
-  printf '{}\n' > "$R_DIR/agg/plain/main.json"
+  sa_install_stub "$stub" "$agg"
+  [ -f "$agg/plain/main.json" ] || printf '{}\n' > "$agg/plain/main.json"
   sa_trip_root "$SA_ROOT"
 }
 
@@ -580,6 +597,142 @@ test_r_going_back_drops_only_the_outbox() {
   pass "going back to B3 code keeps every record and drops only the outbox"
 }
 
+# --- the record guarantee to decision records ------------------------------------
+
+D_DIR=""
+D_OLD_PID=""
+
+# d_report <jq filter>: the stub's main report, an edit of the one before.
+d_report() {
+  local file=$D_DIR/agg/fm/main.json
+  jq "$1" "$file" > "$file.next" && mv "$file.next" "$file"
+}
+
+# d_board_lines: the board's own lines in events.jsonl.
+d_board_lines() {
+  grep -c '"src":"board"' "$MAIN/data/myshape/events.jsonl" || true
+}
+
+# d_last_feed: the arguments of the stub's last feed call, without its time.
+d_last_feed() {
+  awk '$1 == "feed" && $2 == "main" { line = $0 } END { print line }' "$D_DIR/agg/calls.log" | sed 's/ [0-9.]*$//'
+}
+
+# d_read: one read of every home, as the page's refresh asks for.
+d_read() {
+  [ "$(api refresh '{}' | jq -r '.ok')" = true ] || fail "a refresh failed"
+}
+
+test_d_the_earlier_board_runs_with_an_older_reader() {
+  D_DIR=$TMP_ROOT/decisions
+  SA_ROOT=$TMP_ROOT/root/decisions-board
+  tb_make_board_root "$SA_ROOT" "$BASE_DECISIONS" >/dev/null
+  SA_ENV=(MYSHAPE_TEST=1 MYSHAPE_READ_MS=600000)
+  sa_install_stub fm "$D_DIR/agg"
+  MAIN=$(sa_home decisions-main)
+  RUNTIME=$MAIN/state/myshape
+  sa_decoys "$MAIN"
+  jq -n '{schema: 1, code_commit: "older-reader", ledger_enabled: false, tasks: [], queued: [],
+    holds: [{id: "old-open", title: "舊的", question: "還沒答的舊問題", hold_bucket: "live", hold_until: null,
+      unresolved_blocker_ids: [], hold_age_days: 30, origin: "", on_answer: "close"}],
+    status_decisions: [], topics: {"old-open": "nas 2026-10-01T00:00:00Z", "new-1": "nas 2026-11-20T00:00:00Z"},
+    aggregator: {name: "firstmate", label: "first mate"}}' > "$D_DIR/agg/fm/main.json"
+  sa "$MAIN" open >/dev/null || fail "the earlier board did not start"
+  sa "$MAIN" create "NAS" --goal "n" --id nas >/dev/null
+  d_read
+  assert_equals 'feed main 0 -' "$(d_last_feed)" "the earlier board reads with the ledger cursor only"
+  cp "$MAIN/data/myshape/events.jsonl" "$TMP_ROOT/decisions-events.before"
+  D_OLD_PID=$(tb_board_pid "$MAIN")
+  pass "the earlier board runs on a report with no hold times and no closed decisions"
+}
+
+test_d_the_first_reads_record_no_past_decision() {
+  install_board_files "" fm "$D_DIR/agg"
+  d_report '.code_commit = "newer-reader"
+    | .holds[0].hold_set = "2026-10-01T00:00:00Z"
+    | .closed_holds = [
+        {id: "past-1", title: "早就答了", origin: "", mode: "answered", answer: "要", label: "", source: "",
+         digest: "d-past-1", occurrence: 1, opened_at: 1790000000, closed_at: 1790000600},
+        {id: "past-2", title: "放行過的", origin: "", mode: "released", answer: "繼續", label: "", source: "",
+         digest: "d-past-2", occurrence: 1, opened_at: null, closed_at: null},
+        {id: "past-3", title: "在頁面答的", origin: "", mode: "answered", answer: "好", label: "好", source: "myshape",
+         digest: "d-past-3", occurrence: 1, opened_at: 1790000000, closed_at: 1790000100}]
+    | .closed_cursor = {status: "start", to_offset: 4096, to_prefix_sha256: "'"$(printf 'a%.0s' $(seq 64))"'", more: false}'
+  ps -p "$D_OLD_PID" >/dev/null 2>&1 || fail "the earlier board must still be running when the change lands"
+  sa "$MAIN" open >/dev/null || fail "the next command after the change landed failed"
+  : > "$SA_TRIP_LOG"
+  assert_not_equals "$D_OLD_PID" "$(tb_board_pid "$MAIN")" "the next command must replace the earlier service"
+  d_read
+  assert_equals 'feed main 0 -' "$(d_last_feed)" "the first read has no closed decisions' cursor to pass"
+  # The home's past decisions are read again, one moved into the archive, the
+  # released one's work finished: still nothing is new.
+  d_report '.closed_cursor.status = "delta"'
+  d_read
+  d_read
+  assert_equals "feed main 0 - 4096 $(printf 'a%.0s' $(seq 64))" "$(d_last_feed)" \
+    "a later read passes the cursor the home reported"
+  cmp -s "$TMP_ROOT/decisions-events.before" "$MAIN/data/myshape/events.jsonl" ||
+    fail "the first reads of a home full of past decisions must write no record: $(tail -n 3 "$MAIN/data/myshape/events.jsonl")"
+  assert_equals "newer-reader old-open	2026-10-01T00:00:00Z past-1	d-past-1" \
+    "$(jq -r '.homes.main | "\(.code_commit) \(.open_seen[0]) \(.closed_seen[0])"' "$MAIN/data/myshape/decisions.json")" \
+    "the board must remember what it saw, so later reads record only what is new"
+  pass "the first reads after the upgrade record none of the home's past decisions"
+}
+
+test_d_new_decisions_open_and_close_once() {
+  local before set_s
+  before=$(d_board_lines)
+  set_s=$(date -u -d 2026-11-20T06:10:00Z +%s 2>/dev/null || date -j -u -f %Y-%m-%dT%H:%M:%SZ 2026-11-20T06:10:00Z +%s)
+  d_report '.holds += [{id: "new-1", title: "NAS 兩步驗證", question: "NAS 要不要開兩步驗證？\n選項：要 | 不要",
+    hold_bucket: "live", hold_until: null, unresolved_blocker_ids: [], hold_age_days: 0, origin: "",
+    on_answer: "close", hold_set: "2026-11-20T06:10:00Z"}]'
+  d_read
+  d_read
+  assert_equals "hold.opened new-1 $set_s nas board" \
+    "$(tail -n +$((before + 1)) "$MAIN/data/myshape/events.jsonl" | jq -r 'select(.src == "board") | "\(.kind) \(.task) \(.ts) \(.topic) \(.by)"')" \
+    "a new hold must leave one opening, at its set time, under its topic"
+  before=$(d_board_lines)
+  d_report '.holds |= map(select(.id != "new-1"))
+    | .closed_holds += [{id: "new-1", title: "NAS 兩步驗證", origin: "", mode: "answered", answer: "要", label: "",
+        source: "", digest: "d-new-1", occurrence: 1, opened_at: '"$set_s"', closed_at: '"$((set_s + 120))"'}]'
+  d_read
+  d_read
+  assert_equals "hold.closed new-1 $((set_s + 120)) 待決事項「NAS 兩步驗證」已回答：要（經聊天）" \
+    "$(tail -n +$((before + 1)) "$MAIN/data/myshape/events.jsonl" | jq -r 'select(.src == "board") | "\(.kind) \(.task) \(.ts) \(.text)"')" \
+    "its chat answer must leave one close, at the time the home gave"
+  pass "after the upgrade a new decision leaves one opening and one close"
+}
+
+test_d_a_reader_that_refuses_the_cursor_is_read_without_it() {
+  printf 'usage feed takes three arguments\n' > "$D_DIR/agg/control/main"
+  api refresh '{}' >/dev/null
+  rm -f "$D_DIR/agg/control/main"
+  d_report 'del(.closed_holds, .closed_cursor)'
+  d_read
+  assert_equals 'feed main 0 -' "$(d_last_feed)" "a home that refused the cursor must be read without it"
+  d_read
+  assert_equals 'feed main 0 -' "$(d_last_feed)" "a home that reports no closed decisions is never given a cursor"
+  pass "a home on older code that refuses the cursor is read again as before"
+}
+
+test_d_going_back_shows_the_lines_as_text() {
+  local pid
+  pid=$(tb_board_pid "$MAIN")
+  install_board_files "$BASE_DECISIONS" fm "$D_DIR/agg"
+  sa "$MAIN" open >/dev/null || fail "the next command after going back failed"
+  : > "$SA_TRIP_LOG"
+  assert_not_equals "$pid" "$(tb_board_pid "$MAIN")" "the next command must replace the new service with the earlier one"
+  assert_contains "$(api_state '[.updates[].text] | join("\n")')" "待決事項「NAS 兩步驗證」已回答：要（經聊天）" \
+    "the earlier board must show the new records as text"
+  sa "$MAIN" goal nas "n2" >/dev/null || fail "a change on the earlier board after going back failed"
+  assert_equals 1 "$(grep -c '"kind":"hold.closed"' "$MAIN/data/myshape/events.jsonl")" "the saved records stay, once"
+  sa "$MAIN" stop >/dev/null
+  sa_check_decoys "$MAIN"
+  sa_assert_no_boards
+  sa_assert_no_trips
+  pass "going back keeps every decision record and the earlier board goes on changing"
+}
+
 fm_test_run test_the_old_board_makes_its_data test_the_new_code_refuses_until_the_move \
   test_the_next_command_after_the_move_replaces_the_board test_the_note_in_flight_arrives_once test_the_new_side_reaches_no_firstmate_file \
   test_b2_the_b1_board_leaves_writes_settled_and_in_flight test_b2_the_next_command_replaces_the_board \
@@ -587,4 +740,7 @@ fm_test_run test_the_old_board_makes_its_data test_the_new_code_refuses_until_th
   test_b3_the_b2_board_keeps_a_mark_and_a_message_in_flight test_b3_the_first_start_keeps_the_mark \
   test_b3_the_message_in_flight_arrives_once \
   test_r_the_b3_board_leaves_lines_without_ids test_r_the_first_start_replays_nothing \
-  test_r_changes_now_save_their_records test_r_going_back_drops_only_the_outbox
+  test_r_changes_now_save_their_records test_r_going_back_drops_only_the_outbox \
+  test_d_the_earlier_board_runs_with_an_older_reader test_d_the_first_reads_record_no_past_decision \
+  test_d_new_decisions_open_and_close_once test_d_a_reader_that_refuses_the_cursor_is_read_without_it \
+  test_d_going_back_shows_the_lines_as_text

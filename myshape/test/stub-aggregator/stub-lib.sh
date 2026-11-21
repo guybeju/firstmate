@@ -11,7 +11,8 @@
 #                            an empty file answers {"outcome":"delivered"}
 #   $TB_AGG/control/<home>   how the feed for <home> misbehaves until removed:
 #                            "sleep <seconds>", "exit4 <line>", "fail <line>",
-#                            "garbage", "schema2"
+#                            "usage <line>" (exit 2, as a reader refusing its
+#                            arguments), "garbage", "schema2"
 #   $TB_AGG/env.<home>       written on every feed call when $TB_AGG/env-probe exists:
 #                            the names of the environment the program got
 
@@ -35,6 +36,7 @@ stub_control() {
     sleep) sleep "$rest" ;;
     exit4) printf '%s\n' "$rest" >&2; exit 4 ;;
     fail) printf '%s\n' "$rest" >&2; exit 1 ;;
+    usage) printf '%s\n' "$rest" >&2; exit 2 ;;
     garbage) printf 'this is not json\n'; exit 0 ;;
     schema2) printf '{"schema":2}\n'; exit 0 ;;
   esac

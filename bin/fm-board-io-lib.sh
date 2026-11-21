@@ -7,10 +7,14 @@
 # The caller must already have sourced fm-secondmate-registry-lib.sh and
 # myshape-lib.sh, and set SCRIPT_DIR, SELF, DATA and FM_HOME (exported).
 #
-# feed <home> <offset> <prefix-sha256> runs this home's reader for <home>:
+# feed <home> <offset> <prefix-sha256> [<closed-offset> <closed-sha256>] runs
+# this home's reader for <home>:
 #   main                      fm-topic-board-read.sh <offset> <sha>
 #   a local secondmate        fm-topic-board-read.sh --in-home <id> <offset> <sha>
 #   a remote secondmate       fm-on.sh <id> fm-topic-board-read.sh <offset> <sha>
+# with "--closed-since <closed-offset> <closed-sha256>" before <offset> when the
+# board passed that cursor, which it does only for a home whose last report
+# carried closed_cursor, so a home on older code never gets the extra arguments.
 # and adds what the board asks of an aggregator: the aggregator block (main
 # only), a ledger_hint for a home whose ledger is off, and read hints of 60 s
 # and 400 s for remote secondmates. Exit 0 prints the report; 4 says the remote
@@ -193,11 +197,16 @@ cmd_adopt() {
 
 cmd_feed() {
   local home=${1:-} offset=${2:-} sha=${3:-} remote out err rc=0
-  [ "$#" -eq 3 ] || usage_error "feed 的用法是 <home> <offset> <prefix-sha256>"
-  case "$offset" in '' | *[!0-9]*) usage_error "offset 要是非負整數：$offset" ;; esac
-  [ "$sha" = - ] || [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || usage_error "prefix-sha256 要是 64 位十六進位或 -"
+  local -a closed=()
+  [ "$#" -eq 3 ] || [ "$#" -eq 5 ] ||
+    usage_error "feed 的用法是 <home> <offset> <prefix-sha256> [<closed-offset> <closed-sha256>]"
+  fmb_check_cursor "$offset" "$sha"
+  if [ "$#" -eq 5 ]; then
+    fmb_check_cursor "$4" "$5"
+    closed=(--closed-since "$4" "$5")
+  fi
   if [ "$home" = main ]; then
-    out=$("$SCRIPT_DIR/fm-topic-board-read.sh" --legacy-todos "$offset" "$sha") || exit $?
+    out=$("$SCRIPT_DIR/fm-topic-board-read.sh" --legacy-todos ${closed[@]+"${closed[@]}"} "$offset" "$sha") || exit $?
     fmb_adopt "$out" >/dev/null || true
     printf '%s\n' "$out" | jq -c 'del(.legacy_todos)' | fmb_decorate main 0
     return
@@ -207,10 +216,10 @@ cmd_feed() {
     exit 2
   }
   if [ "$remote" = 0 ]; then
-    out=$("$SCRIPT_DIR/fm-topic-board-read.sh" --in-home "$home" "$offset" "$sha") || exit $?
+    out=$("$SCRIPT_DIR/fm-topic-board-read.sh" --in-home "$home" ${closed[@]+"${closed[@]}"} "$offset" "$sha") || exit $?
   else
     err=$(mktemp "${TMPDIR:-/tmp}/fm-board-feed.XXXXXX")
-    out=$("$SCRIPT_DIR/fm-on.sh" "$home" fm-topic-board-read.sh "$offset" "$sha" 2>"$err") || rc=$?
+    out=$("$SCRIPT_DIR/fm-on.sh" "$home" fm-topic-board-read.sh ${closed[@]+"${closed[@]}"} "$offset" "$sha" 2>"$err") || rc=$?
     if [ "$rc" -ne 0 ]; then
       if grep -qF -e "${FMB_NOT_ON_FORK[0]}" -e "${FMB_NOT_ON_FORK[1]}" "$err"; then
         rm -f "$err"
@@ -224,6 +233,12 @@ cmd_feed() {
     rm -f "$err"
   fi
   printf '%s\n' "$out" | fmb_decorate "$home" "$remote"
+}
+
+# fmb_check_cursor <offset> <sha>: refuses a cursor the reader would refuse.
+fmb_check_cursor() {
+  case "$1" in '' | *[!0-9]*) usage_error "offset 要是非負整數：$1" ;; esac
+  [ "$2" = - ] || [[ "$2" =~ ^[0-9a-f]{64}$ ]] || usage_error "prefix-sha256 要是 64 位十六進位或 -"
 }
 
 # fmb_outcome <outcome> [error]: the one outcome line.

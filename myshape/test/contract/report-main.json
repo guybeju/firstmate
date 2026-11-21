@@ -71,7 +71,8 @@
       "unresolved_blocker_ids": [],
       "hold_age_days": 1,
       "origin": "t1",
-      "on_answer": "close"
+      "on_answer": "close",
+      "hold_set": "2026-11-18T00:00:00Z"
     },
     {
       "id": "call-release",
@@ -82,7 +83,8 @@
       "unresolved_blocker_ids": [],
       "hold_age_days": 1,
       "origin": "t1",
-      "on_answer": "release"
+      "on_answer": "release",
+      "hold_set": "2026-11-18T00:00:00Z"
     },
     {
       "id": "call-none",
@@ -93,7 +95,8 @@
       "unresolved_blocker_ids": [],
       "hold_age_days": 1,
       "origin": "",
-      "on_answer": null
+      "on_answer": null,
+      "hold_set": "2026-11-18T00:00:00Z"
     }
   ],
   "status_decisions": [
@@ -115,6 +118,27 @@
     "to_prefix_sha256": "-",
     "more": false,
     "lines": []
+  },
+  "closed_holds": [
+    {
+      "id": "call-done",
+      "title": "Ship it?",
+      "origin": "t1",
+      "mode": "answered",
+      "answer": "要",
+      "label": "",
+      "source": "",
+      "digest": "8f65270ef990764ffcbd99fbec01964542f09bffdb2d1daa22e580c12210341f",
+      "occurrence": 1,
+      "opened_at": 1795400000,
+      "closed_at": 1795400600
+    }
+  ],
+  "closed_cursor": {
+    "status": "delta",
+    "to_offset": 0,
+    "to_prefix_sha256": "-",
+    "more": false
   },
   "secondmates": [
     {

@@ -401,6 +401,73 @@ test_every_change_leaves_a_record() {
   pass "every socket operation and page route saves exactly its records, each with an id and who made it"
 }
 
+# hold <args...>: the real fm-captain-hold.sh against the scratch main home, as
+# first mate runs it there (the fake root's copy is a stand-in for the deliverer).
+captain_hold() {
+  env -u FM_ROOT_OVERRIDE FM_HOME="$MAIN" "$ROOT/bin/fm-captain-hold.sh" "$@"
+}
+
+# answer_both: the page's answer reaches the backlog through the real intake, as
+# the deliverer runs it; an answer goes through the same intake by hand, which
+# the page never sent; and first mate records an answer the captain gave in
+# chat; then the board reads the home.
+answer_both() {
+  printf 'dec-page\t要\t要\tdone\n' | captain_hold answers --source myshape >/dev/null || return 1
+  printf 'dec-hand\t好\t\tdone\n' | captain_hold answers --source myshape >/dev/null || return 1
+  printf '不要，先不加密\n' > "$TMP_ROOT/chat-decision"
+  captain_hold answer dec-chat --decision-file "$TMP_ROOT/chat-decision" >/dev/null || return 1
+  api refresh '{}'
+}
+
+# The decisions of a home, opened and closed outside the page, leave one
+# opening and one closing each on their topic's page: one answered on the page
+# (its close is the page's own hold.answered) and one answered in chat (its
+# close comes from the home's backlog, at the time fm-captain-hold.sh logged).
+test_decisions_open_and_close_once() {
+  local lines chat_at
+  if ! command -v tasks-axi >/dev/null 2>&1; then
+    pass "skip: tasks-axi not found"
+    return
+  fi
+  api refresh '{}' >/dev/null
+  captain_hold hold dec-page --title "NAS 兩步驗證" --reason "NAS 要不要開兩步驗證？ 選項：要 | 不要" --on-answer close \
+    >/dev/null || fail "holding dec-page failed"
+  captain_hold hold dec-chat --title "備份加密" --reason "備份要不要加密？ 選項：要 | 不要" --on-answer close \
+    >/dev/null || fail "holding dec-chat failed"
+  captain_hold hold dec-hand --title "換路由器" --reason "要換路由器嗎？ 選項：好 | 不要" --on-answer close \
+    >/dev/null || fail "holding dec-hand failed"
+  mkdir -p "$MAIN/data/dec-page" "$MAIN/data/dec-chat" "$MAIN/data/dec-hand"
+  printf 'billing %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" |
+    tee "$MAIN/data/dec-page/topic" "$MAIN/data/dec-hand/topic" > "$MAIN/data/dec-chat/topic"
+  records_after "hold.opened hold.opened hold.opened" "three decisions opened outside the page" api refresh '{}'
+  records_after - "a read that finds them again" api refresh '{}'
+  records_after hold.answered "the page's answer" two_step holds/answer \
+    '{"home":"main","task":"dec-page","answer":"要","label":"要"}'
+  records_after "hold.closed hold.closed" "the answers reaching the backlog" answer_both
+  records_after - "a read that finds nothing new" api refresh '{}'
+  lines=$(state '[.updates[] | select((.task // "" | startswith("dec-")) and (.event | startswith("hold.")))] | reverse | .[]
+    | "\(.task) \(.event)"' | sort | tr '\n' ' ')
+  assert_equals "dec-chat hold.closed dec-chat hold.opened dec-hand hold.closed dec-hand hold.opened dec-page hold.answered dec-page hold.opened " "$lines" \
+    "each decision must have exactly one opening and one closing"
+  assert_equals "billing billing billing billing billing billing" \
+    "$(state '[.updates[] | select((.task // "" | startswith("dec-")) and (.event | startswith("hold.")))] | map(.topic) | join(" ")')" \
+    "every line of both decisions must be on their topic's page"
+  chat_at=$(jq -r 'select(.task == "dec-chat" and .event == "resolved") | .ts' "$MAIN/state/captain-hold-events.jsonl" | head -n 1)
+  assert_equals "$chat_at" "$(state '.updates[] | select(.task == "dec-chat" and .event == "hold.closed") | .ts')" \
+    "the chat answer's close must carry the time fm-captain-hold.sh logged"
+  assert_equals "待決事項「備份加密」已回答：不要，先不加密（經聊天）" \
+    "$(state '.updates[] | select(.task == "dec-chat" and .event == "hold.closed") | .text')" \
+    "the chat answer's close must say what was answered and through where, with no 'at the latest'"
+  assert_equals "待決事項「換路由器」已回答：好（經看板）" \
+    "$(state '.updates[] | select(.task == "dec-hand" and .event == "hold.closed") | .text')" \
+    "an answer through the page's intake that the page never sent still closes, through the board"
+  # The page's lines for the decisions, as the topic page prints them, when asked for.
+  [ -z "${FM_TEST_DECISION_LINES:-}" ] ||
+    state '.updates[] | select((.task // "" | startswith("dec-")) and (.event | startswith("hold.")))
+      | "\(.ts | strflocaltime("%m-%d %H:%M"))  \(.home)/\(.task) \(.text)"' > "$FM_TEST_DECISION_LINES"
+  pass "a decision answered on the page, one through its intake by hand and one in chat each leave one opening and one closing"
+}
+
 test_reset_token() {
   t reset-token >/dev/null
   assert_equals 401 "$(status -H "$AUTH" "$BASE/api/state")" "the old token must stop working after a reset"
@@ -410,5 +477,5 @@ test_reset_token() {
 
 fm_test_run test_request_checks test_response_headers_and_exposure test_topic_routes test_merge_takes_two_steps \
   test_answer_takes_two_steps test_messages_and_writes test_quiet_polling_is_not_a_change \
-  test_every_change_leaves_a_record test_reset_token
+  test_every_change_leaves_a_record test_decisions_open_and_close_once test_reset_token
 t stop >/dev/null

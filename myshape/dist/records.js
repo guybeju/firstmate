@@ -27,16 +27,19 @@ export const RECORD_KINDS = [
     "todo.forgotten",
     "todo.settled",
     "todo.marks_carried",
+    "hold.opened",
     "hold.answered",
     "hold.closed",
     "agent.tagged",
 ];
+/** The optional text fields a record may carry, in the order they are saved. */
+export const OPTIONAL_TEXT_FIELDS = ["outcome", "reason", "key", "answer", "source"];
 /** Turns a draft into the record saved for it. */
 export function stampRecord(draft, actor, rid, ts) {
     return {
         src: "board",
         rid,
-        ts,
+        ts: draft.at ?? ts,
         kind: draft.kind,
         topic: draft.topic,
         home: draft.home ?? null,
@@ -44,8 +47,7 @@ export function stampRecord(draft, actor, rid, ts) {
         ...(draft.item === undefined ? {} : { item: draft.item }),
         by: actor.by,
         label: actor.label,
-        ...(draft.outcome === undefined ? {} : { outcome: draft.outcome }),
-        ...(draft.reason === undefined ? {} : { reason: draft.reason }),
+        ...Object.fromEntries(OPTIONAL_TEXT_FIELDS.flatMap((name) => draft[name] === undefined ? [] : [[name, draft[name]]])),
         text: draft.text,
     };
 }

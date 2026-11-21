@@ -28,6 +28,7 @@ export const RECORD_KINDS = [
   "todo.forgotten",
   "todo.settled",
   "todo.marks_carried",
+  "hold.opened",
   "hold.answered",
   "hold.closed",
   "agent.tagged",
@@ -38,6 +39,9 @@ export type RecordKind = (typeof RECORD_KINDS)[number];
  * A record before it is saved. `text` is the line the page shows, with its
  * actor suffix when it has one; `item` names a hands-on item; `home` and
  * `task` name an agent; `outcome` and `reason` say how something ended or why.
+ * A decision's records (decisions.ts) also carry `key`, which says what the
+ * record is about so it is never written twice, `answer` and `source`, and
+ * `at`, the time it happened when that is earlier than the save.
  */
 export interface Draft {
   kind: RecordKind;
@@ -47,6 +51,10 @@ export interface Draft {
   item?: string;
   outcome?: string;
   reason?: string;
+  key?: string;
+  answer?: string;
+  source?: string;
+  at?: number;
   text: string;
 }
 
@@ -78,14 +86,20 @@ export interface StoredRecord {
   label: string;
   outcome?: string;
   reason?: string;
+  key?: string;
+  answer?: string;
+  source?: string;
 }
+
+/** The optional text fields a record may carry, in the order they are saved. */
+export const OPTIONAL_TEXT_FIELDS = ["outcome", "reason", "key", "answer", "source"] as const;
 
 /** Turns a draft into the record saved for it. */
 export function stampRecord(draft: Draft, actor: Actor, rid: string, ts: number): StoredRecord {
   return {
     src: "board",
     rid,
-    ts,
+    ts: draft.at ?? ts,
     kind: draft.kind,
     topic: draft.topic,
     home: draft.home ?? null,
@@ -93,8 +107,11 @@ export function stampRecord(draft: Draft, actor: Actor, rid: string, ts: number)
     ...(draft.item === undefined ? {} : { item: draft.item }),
     by: actor.by,
     label: actor.label,
-    ...(draft.outcome === undefined ? {} : { outcome: draft.outcome }),
-    ...(draft.reason === undefined ? {} : { reason: draft.reason }),
+    ...Object.fromEntries(
+      OPTIONAL_TEXT_FIELDS.flatMap((name) =>
+        draft[name] === undefined ? [] : [[name, draft[name]]],
+      ),
+    ),
     text: draft.text,
   };
 }

@@ -23,6 +23,7 @@ export function boardPaths(config) {
         notifyPending: path.join(boardDataDir, "notify-pending.json"),
         aggregator: path.join(boardDataDir, "aggregator.json"),
         todos: path.join(boardDataDir, "todos.json"),
+        decisions: path.join(boardDataDir, "decisions.json"),
     };
 }
 const CONFIG_FLAGS = ["home", "root", "commit", "port", "state", "data"];

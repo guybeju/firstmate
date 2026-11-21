@@ -42,6 +42,7 @@ function hold(id: string, extra: Partial<ReportHold> = {}): ReportHold {
     hold_age_days: 1,
     origin: "",
     on_answer: null,
+    hold_set: null,
     ...extra,
   };
 }
@@ -59,6 +60,8 @@ function report(extra: Partial<HomeReport> = {}): HomeReport {
     ledger_hint: null,
     aggregator: null,
     secondmates: [],
+    closed_holds: [],
+    closed_cursor: null,
     ...extra,
   };
 }

@@ -13,7 +13,7 @@
 #   fm-board.sh install-rules
 #   fm-board.sh rules
 #   fm-board.sh migrate-myshape [--check | --undo]
-#   fm-board.sh feed <home> <ledger-offset> <prefix-sha256>
+#   fm-board.sh feed <home> <ledger-offset> <prefix-sha256> [<closed-offset> <closed-sha256>]
 #   fm-board.sh deliver        (one action record on stdin)
 #   fm-board.sh adopt
 #

@@ -418,7 +418,7 @@ test_only_the_boards_files() {
     case "$file" in
       config/myshape-port | data/topics.json | data/topics-archive.json | data/myshape/events.jsonl | \
         data/myshape/summaries.jsonl | data/myshape/offsets.json | data/myshape/notify-pending.json | \
-        data/myshape/aggregator.json | data/myshape/todos.json | state/myshape/token | \
+        data/myshape/aggregator.json | data/myshape/todos.json | data/myshape/decisions.json | state/myshape/token | \
         state/myshape/port | state/myshape/service.log | state/myshape/service.log.1 | \
         state/myshape/audit.jsonl | state/myshape/startup-error) ;;
       *) extra+=" $file" ;;

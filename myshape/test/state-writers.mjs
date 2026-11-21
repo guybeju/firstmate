@@ -8,6 +8,10 @@
 //   - a record reaches the journal only through store.ts's flushOutbox (the
 //     sink's append) and the one sink, commitTarget in board-server.ts;
 //   - store.ts exports no function but readBoard, loadBoard and commitChange;
+//   - decisions.json, what the board saw at its last read of each home, is
+//     written only in decisions.ts (DecisionStore), and the decision records
+//     that read leaves are saved only through board-server.ts saveRecords,
+//     which commits them with commitChange;
 //   - no file but topics.ts, todos.ts and store.ts assigns into, deletes from
 //     or pushes onto the board's state (doc, archive, items, marks, closed,
 //     outbox, queues, merged, history), which a cast past the read-only types
@@ -132,6 +136,7 @@ for (const file of files) {
       const statePath = args.some((value) => STATE_PATHS.has(value));
       const allowed = base === "store.ts" && WRITERS.has(token.fn);
       if (statePath && !allowed) problems.push(`${where(token)}: a state file written outside store.ts's writers (${args.join("")})`);
+      if (args.includes("decisions") && base !== "decisions.ts") problems.push(`${where(token)}: decisions.json written outside decisions.ts (${args.join("")})`);
     }
     if (call && WRITERS.has(token.value) && token.value !== "writeIfChanged" && !(base === "store.ts" && token.fn === "commitChange"))
       problems.push(`${where(token)}: ${token.value} called outside commitChange`);
@@ -145,6 +150,13 @@ for (const file of files) {
       const allowed = base === "store.ts" && token.fn === "flushOutbox";
       if (!allowed) problems.push(`${where(token)}: a record appended outside store.ts flushOutbox`);
     }
+    if (call && token.value === "decisionStep") {
+      const allowed = base === "board-server.ts" && token.fn === "recordDecisions";
+      if (!allowed) problems.push(`${where(token)}: decision records made outside board-server.ts recordDecisions`);
+    }
+    if (base === "board-server.ts" && token.fn === "recordDecisions" && call
+      && (token.value === "commitChange" || token.value === "appendRecord"))
+      problems.push(`${where(token)}: recordDecisions saves its records other than through saveRecords`);
     if (STATE_OWNERS.has(base)) continue;
     if (ASSIGN.has(token.kind) && list[index - 1]?.kind === K.Identifier) {
       const { names } = chainBefore(list, index - 1);

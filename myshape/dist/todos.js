@@ -45,7 +45,7 @@ function pad(value) {
     return String(value).padStart(2, "0");
 }
 /** MM-DD HH:mm in this machine's time, the way the page prints times. */
-function shortTime(iso) {
+export function shortTime(iso) {
     const date = new Date(iso);
     if (Number.isNaN(date.getTime()))
         return null;

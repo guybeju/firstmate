@@ -157,6 +157,7 @@ describe("layout", () => {
       notifyPending: "/d/myshape/notify-pending.json",
       aggregator: "/d/myshape/aggregator.json",
       todos: "/d/myshape/todos.json",
+      decisions: "/d/myshape/decisions.json",
     });
   });
 

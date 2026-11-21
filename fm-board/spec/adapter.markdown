@@ -50,7 +50,7 @@ stderr 第一行指出新的指令，第二行說使用者還要做什麼：這�
 看板服務只執行 `bin/fm-board.sh` 的兩個子命令（contracts 第 7 節）；它們的程式在 `bin/fm-board-io-lib.sh`，檔頭寫明每一種跑什麼。
 看板在環境變數 `MYSHAPE_HOME` 給它的 home，這兩個子命令把它當成 `FM_HOME`。
 
-### 3.1 `feed <home> <offset> <sha>`
+### 3.1 `feed <home> <offset> <sha> [<closed-offset> <closed-sha>]`
 
 | `<home>` | 跑 |
 | --- | --- |
@@ -58,6 +58,8 @@ stderr 第一行指出新的指令，第二行說使用者還要做什麼：這�
 | 登記的同機 secondmate | `fm-topic-board-read.sh --in-home <id> <offset> <sha>` |
 | 登記的遠端 secondmate | `fm-on.sh <id> fm-topic-board-read.sh <offset> <sha>`；`fm-on.sh` 說那邊沒有這支追蹤的程式時，exit 4，stderr 一行「還沒換到 fork：…再回主 home 跑 /updatefirstmate。它的 agent 不會顯示。」 |
 | 其他 | exit 2，什麼都不跑 |
+
+看板給了已關的待決事項的游標（contracts 第 4 節）時，三種都在 `<offset>` 前面加 `--closed-since <closed-offset> <closed-sha>`；沒給時參數和以前一樣，所以舊版的遠端照樣讀得到。
 
 讀到的回報原樣交給看板，另外加上：
 
@@ -68,11 +70,18 @@ stderr 第一行指出新的指令，第二行說使用者還要做什麼：這�
 彙整腳本 `fm-topic-board-read.sh` 的輸出（contracts 第 4 節的形狀）：
 
 - `tasks[]`、`holds[]` 取自 `fm-fleet-snapshot.sh --json`：`tasks` 與 `backlog.records[]`。`holds[]` 只收 `hold_kind` 是 captain 的紀錄；主 home 原因以 `動手：` 開頭的不收，`queued[]` 也不收（它們搬上看板，第 3.3 節），secondmate home 的照收。`origin` 從 hold 內文的 `Captain hold origin:` 那一行取出，取不到就是空字串。`on_answer` 取自 `Captain hold on answer:` 那一行（`fm-captain-hold.sh hold --on-answer` 寫的），沒有那一行或值不是 `close`、`release` 就是 `null`。
+- `holds[].hold_set` 取自 snapshot 的 `hold_set`（`Captain hold set:` 那一行）。
+- `closed_holds[]` 是每一筆最新的 Resolution 紀錄（`Resolution recorded by fm-captain-hold.`，或已經退役的 `fm-decision-hold` 寫的），來自 snapshot 的每一筆 backlog 項目（放行的還在佇列裡，也算），加上 `--closed-since` 的游標之後 Done 的保留搬進封存檔的。
+  封存檔是 backlog 根目錄的 `.tasks.toml` 的 `[markdown] archive`，沒寫就是 backlog 旁的 `done-archive.md`；backend 不是 markdown 時沒有封存（`absent`）。
+  `mode`、`digest` 取自 `Resolution mode:`、`Decision digest:`；`Captain decision:` 下第一行是 `Captain answered this call through <來源>.` 時，`source`、`answer`、`label` 取自那一行與 `Answer:`、`Answer as shown to the captain:`，其他的 `source` 是空字串，`answer` 是第一行（最多 300 字）。`occurrence` 是那一筆的 Resolution 紀錄數。
+  `opened_at`、`closed_at` 取自 `state/captain-hold-events.jsonl`（第 5 節）裡同一個 task、同一個 `occurrence` 最早的 `held`、`resolved` 那一行；還在舊程式上、沒有這個檔的 home 是 `null`。
+  主 home 原因以 `動手：` 開頭的不收，和 `holds[]` 一樣。
+- `closed_cursor` 是封存檔的游標，和帳本一樣是位元組與前綴雜湊；沒給游標時是 `start`，停在封存檔的尾端；每次最多讀 256 KiB，切在兩筆之間，還有就 `more: true`。這一段讀不到（檔案讀不了、不是一般檔）時兩個欄位都不出現，整個回報照樣交出，不會被當成沒有已關的待決事項。
 - `ledger.lines` 從 offset 起、每次最多 256 KiB 的完整行；還有沒讀完的就 `more: true`。offset 超過檔案長度、或前綴雜湊對不上，回 `continuity-broken`。沒有帳本檔回 `absent`。`fm-on.sh` 每個 job 的輸出上限是 1 MiB。
 - `secondmates[]` 只在主 home 的輸出裡有，資料取自上游的 `fm-secondmate-registry-lib.sh` 逐行解析 `data/secondmates.md`。
 - 腳本自己設 `FM_CREW_STATE_NO_FORGE=1`。
 
-測試：`fm-board/test/stage-1-feed.sh`（每個欄位、和 `myshape/test/contract/report-main.json` 一樣的欄位結構、三種 home、exit 4）。
+測試：`fm-board/test/stage-1-feed.sh`（每個欄位、和 `myshape/test/contract/report-main.json` 一樣的欄位結構、三種 home、exit 4、`test_closed_decisions` 的游標與封存）。
 
 ### 3.2 `deliver`
 
@@ -137,6 +146,7 @@ second mate 的 home 讀不到那一份時（沒有檔或副本、讀不懂、�
 | `data/<task-id>/topic` | 0644 | `tag`；每個 home 各自一份，看板經彙整腳本讀 |
 | `state/dispatch-plan/` | 0700 | `fm-dispatch-plan.sh`：遠端 second mate 的 `queues.json`（`queues-in`），主 home 的 `pushed/`（`queues-push`） |
 | `config/fleet-ledger` | — | `setup`；上游的帳本旗標 |
+| `state/captain-hold-events.jsonl` | — | 上游的 `bin/fm-captain-hold.sh`（fork 加的 `record_hold_line`，contracts 第 2 節）：每次 hold 一行 `held`、每次作答、放行、對帳、PR 結算一行 `resolved`，`{"v":1,"ts":<epoch>,"task":…,"occurrence":<n>,"event":…}`，只追加；重做時再寫一行，讀的一方取最早的。寫不進去時那支指令照常完成，stderr 多一行 `actionable:` |
 | `data/captain.md`、`data/captain-shared.md` 裡的標記區塊 | — | `install-rules` |
 | `state/fm-board/rules-backup/` | 0700 | `install-rules` 寫入前的備份 |
 | `state/fm-board/migrate-myshape.journal`、`migrate-myshape.d/`、`migrate-myshape.lock/` | — | `migrate-myshape` 的紀錄、它記下的校驗碼與 hold 原因、同時只跑一個的鎖；`--undo` 做完時刪掉紀錄 |
@@ -168,6 +178,7 @@ second mate 的 home 讀不到那一份時（沒有檔或副本、讀不懂、�
 | `bin/fm-fleet-snapshot.sh --json` | `fm-dispatch-plan.sh order`、`migrate-myshape` 找要換原因的 hold | 和彙整腳本相同（contracts 第 11.1 節） | `dispatch-plan/test/stage-1-order.sh` 全部 |
 | `bin/fm-tasks-axi.sh hold <id> --reason <文字>`、`unhold <id>` | `order` 只印成給 first mate 照著跑的指令；`migrate-myshape` 用 `hold` 換掉沒有種類的 hold 的原因 | 指令的形狀；對已經 hold 的項目再 `hold` 一次只換原因、中間不解除，但會拿掉 hold 的種類（tasks-axi 0.2.6 實測），所以有種類的 hold 不換 | `stage-1-order.sh` 的 `test_sections` 只檢查印出來的字串；`stage-8-migrate.sh` 用真的 `tasks-axi` |
 | `bin/fm-captain-hold.sh answers --source myshape` | `fm-board.sh --in-home <id> answers` | 在那個 home 執行並原樣傳回 | `stage-1-tag.sh` 的 `test_in_home_answers_passes_through`（替身） |
+| `bin/fm-tasks-axi-lib.sh` 的 `fm_tasks_axi_backend <目錄>` | `fm-topic-board-read.sh` | backlog 根目錄的 backend；不是 `markdown` 就沒有封存檔 | 真的：`stage-1-feed.sh` 的 `test_closed_decisions` |
 
 「真的」是測試執行 checkout 裡真的那支指令；「替身」是測試用自己寫的假指令取代它，只檢查送出去的參數與 stdin，並照劇本回應。替身的那幾列，框架改了輸出或 exit code，測試不會失敗，要靠人對照這兩張表。
 
@@ -197,6 +208,8 @@ snapshot 的 JSON 裡用到的欄位（少了哪一個，對應的東西就從�
 | `backlog.records[].body_lines[]` 裡 `topic: <議題 id>` 那一行 | 排隊中的項目沒有議題標記時用它（C51）；first mate 轉交項目時寫的 |
 | `backlog.present` | `adopt` 只在它是 `true` 時才把 hold 不在了當成關掉 |
 | `backlog.records[].body_lines[]` 裡 `Captain hold set: <時間>` 那一行 | 搬上看板的項目記下原本什麼時候開的（`--since`） |
+| `backlog.records[].hold_set` | `holds[].hold_set` |
+| `backlog.records[].body_lines[]` 裡的 Resolution 紀錄（`Resolution recorded by fm-captain-hold.`、`Decision digest:`、`Resolution mode:`、`Captain decision:` 或 `Reconciliation evidence:`，與其後的 `Captain answered this call through …`、`Answer:`、`Answer as shown to the captain:`） | `closed_holds[]`；封存檔裡的同樣格式，項目行是 `- [x] <id> - <標題> (…) (hold: <原因>)`，內文縮兩格 |
 
 ### 7.2 `deliver` 跑的
 

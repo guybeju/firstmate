@@ -39,6 +39,16 @@ describe("the feed", () => {
     expect(refusedFor({ kind: "feed", home: "main", offset: -1, sha: "-" })).toContain("offset");
     expect(refusedFor({ kind: "feed", home: "main", offset: 1.5, sha: "-" })).toContain("offset");
     expect(refusedFor({ kind: "feed", home: "main", offset: 0, sha: "abc" })).toContain("hash");
+    const closed = (offset: number, sha: string): AllowedCommand => ({
+      kind: "feed",
+      home: "main",
+      offset: 0,
+      sha: "-",
+      closed: { offset, sha },
+    });
+    expect(invocationFor(closed(4, SHA))).toEqual({ args: ["feed", "main", "0", "-", "4", SHA] });
+    expect(refusedFor(closed(-1, "-"))).toContain("closed offset");
+    expect(refusedFor(closed(0, "x"))).toContain("closed prefix hash");
   });
 });
 

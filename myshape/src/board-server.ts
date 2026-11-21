@@ -38,7 +38,9 @@ import { DispatchNotifier, fileStore } from "./notifier.js";
 import type { Dispatchable } from "./notifier.js";
 import { DEFAULT_TIMINGS, Poller } from "./poller.js";
 import type { PollTimings } from "./poller.js";
-import type { Aggregator } from "./report.js";
+import type { Aggregator, HomeReport } from "./report.js";
+import { DecisionStore, decisionStep } from "./decisions.js";
+import type { PageAnswer } from "./decisions.js";
 import { applyOperation, operationOf } from "./ops.js";
 import type { PageNotice } from "./ops.js";
 import type { Draft } from "./records.js";
@@ -51,7 +53,7 @@ import { findLines } from "./lineage.js";
 import type { TaskTags } from "./lineage.js";
 import { DEFAULT_WRITE_TIMINGS, WriteEngine } from "./writes.js";
 import { deliveryRecord } from "./writes.js";
-import type { Action, TopicRef, WriteRecord, WriteTimings } from "./writes.js";
+import type { Action, TopicRef, WriteRecord, WriteState, WriteTimings } from "./writes.js";
 
 const PRIVATE_FILE = 0o600;
 const HEALTH_PROBE_MS = 3000;
@@ -93,6 +95,8 @@ interface Service extends Boot {
   unavailable: string | null;
   /** The last root report's aggregator block, kept across starts. */
   aggregator: Aggregator | null;
+  /** What the last read of each home showed of its decisions (data/myshape/decisions.json). */
+  decisions: DecisionStore;
 }
 
 function log(message: string): void {
@@ -640,6 +644,69 @@ function saveRecords(
   service.version += 1;
 }
 
+/** The states of a page write that is still being sent. */
+const SENDING: readonly WriteState[] = ["waiting", "sending", "retrying"];
+
+/**
+ * What the board knows of its own answer to `home`/`task`: its hold.answered
+ * record (whose outcome is the answer or its label), a write still being
+ * sent, or neither.
+ */
+function pageAnswerState(
+  service: Service,
+  home: string,
+  task: string,
+  answers: string[],
+): PageAnswer {
+  const recorded = service.journal.events.some(
+    (event) =>
+      event.src === "board" &&
+      event.kind === "hold.answered" &&
+      event.home === home &&
+      event.task === task &&
+      answers.includes(event.outcome ?? ""),
+  );
+  if (recorded) return "recorded";
+  const sending = [...service.writes.records.values()].some(
+    (write) =>
+      write.action.kind === "answer" &&
+      write.home === home &&
+      write.task === task &&
+      SENDING.includes(write.state),
+  );
+  return sending ? "pending" : "none";
+}
+
+/**
+ * Records the decisions one good read of `home` opened or closed, then
+ * remembers what the read showed. Records first, memory second: a crash in
+ * between reads the same piece again, and the records' keys keep it once.
+ */
+function recordDecisions(service: Service, home: string, report: HomeReport): void {
+  const homes = service.poller.snapshots();
+  const step = decisionStep({
+    home,
+    previous: service.decisions.get(home),
+    report,
+    readAt: epochSeconds(),
+    saved: (key) => service.journal.hasKey(key),
+    topicOf: (task, origin) => {
+      const own = placeTask(service.board.topics, homes, home, task).topic;
+      if (own !== null || origin === "") return own;
+      return placeTask(service.board.topics, homes, home, origin).topic;
+    },
+    pageAnswer: (task, answers) => pageAnswerState(service, home, task, answers),
+  });
+  const [first, ...rest] = step.drafts;
+  if (first !== undefined) {
+    const before = service.board;
+    saveRecords(service, [first, ...rest], "board");
+    // A record that could not be saved is read again next time, so nothing is remembered yet.
+    if (service.board === before) return;
+  }
+  service.decisions.set(home, step.next);
+}
+
 /** Records how a page write that changes another home ended, and re-reads that home. */
 function recordFinished(service: Service, record: WriteRecord): void {
   const draft = deliveryRecord(record);
@@ -704,9 +771,11 @@ function loadService(boot: Boot): Service {
   const bump = (): void => {
     service.version += 1;
   };
+  const decisions = new DecisionStore(paths.decisions);
   const service: Service = {
     ...boot,
     board: loaded.board,
+    decisions,
     journal,
     records: starting.records,
     summaries: new Summaries(paths.summaries),
@@ -723,6 +792,9 @@ function loadService(boot: Boot): Service {
       {
         onChange: bump,
         onAggregator: (reported) => rememberAggregator(service, reported),
+        closedCursor: (home) => decisions.get(home)?.cursor ?? null,
+        onReport: (home, report) => recordDecisions(service, home, report),
+        onCursorRefused: (home) => decisions.forget(home),
       },
       unavailable,
     ),

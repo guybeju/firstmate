@@ -39,6 +39,8 @@ export interface BoardPaths {
   aggregator: string;
   /** The hands-on items the board keeps for the captain. */
   todos: string;
+  /** Per home: which decisions the board saw at its last read, and the closed decisions' cursor. */
+  decisions: string;
 }
 
 export function boardPaths(config: Pick<BoardConfig, "state" | "data">): BoardPaths {
@@ -62,6 +64,7 @@ export function boardPaths(config: Pick<BoardConfig, "state" | "data">): BoardPa
     notifyPending: path.join(boardDataDir, "notify-pending.json"),
     aggregator: path.join(boardDataDir, "aggregator.json"),
     todos: path.join(boardDataDir, "todos.json"),
+    decisions: path.join(boardDataDir, "decisions.json"),
   };
 }
 
