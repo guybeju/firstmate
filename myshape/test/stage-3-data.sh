@@ -276,9 +276,13 @@ test_polling_follows_viewers() {
   assert_equals "$before" "$(wc -l < "$calls")" "polling must stop once nobody has viewed for the idle limit"
   assert_contains "$(t status)" "輪詢：沒在跑" "status must report that polling stopped"
   # Upstream's snapshot fetches a remote home summary on its own; everything
-  # else that reached the remote must be the board's one read command.
+  # else that reached the remote must be the board's one read command, with
+  # the closed decisions' cursor once the home has reported one.
   grep -v '^fm-remote-file.sh get state/home-summary.json ' "$calls" |
-    grep -vq '^fm-topic-board-read.sh [0-9]* [0-9a-f-]*$' && fail "the board ran something other than the read command remotely"
+    grep -vEq '^fm-topic-board-read.sh (--closed-since [0-9]+ [0-9a-f-]+ )?[0-9]+ [0-9a-f-]+$' &&
+    fail "the board ran something other than the read command remotely"
+  grep -qE '^fm-topic-board-read.sh --closed-since [0-9]+ [0-9a-f-]+ ' "$calls" ||
+    fail "a remote home that reported a closed decisions' cursor must be given it back"
   pass "the board polls only while someone is viewing, and only with the read command"
 }
 
