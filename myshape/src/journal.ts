@@ -133,10 +133,15 @@ export class Journal {
     for (const line of readCompleteLines(file)) {
       const { event, key } = parseStored(line);
       if (key !== null) this.seen.add(key);
-      if (event?.src === "board" && event.rid !== undefined) this.rids.add(event.rid);
-      if (event?.src === "board" && event.key !== undefined) this.keys.add(event.key);
+      if (event?.src === "board") this.index(event);
       if (event !== null) this.events.push(event);
     }
+  }
+
+  /** Remembers a saved record's id and what it is about, for replay and for decisions. */
+  private index(record: { rid?: string; key?: string }): void {
+    if (record.rid !== undefined) this.rids.add(record.rid);
+    if (record.key !== undefined) this.keys.add(record.key);
   }
 
   /** True when the record with this id is already saved. */
@@ -167,8 +172,7 @@ export class Journal {
   /** Saves one system record, on disk before it returns; only store.ts commitChange calls it. */
   appendRecord(record: StoredRecord): void {
     appendLineDurable(this.file, JSON.stringify(record), FILE_MODE);
-    this.rids.add(record.rid);
-    if (record.key !== undefined) this.keys.add(record.key);
+    this.index(record);
     this.events.push(record);
   }
 }

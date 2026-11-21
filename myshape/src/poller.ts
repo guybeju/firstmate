@@ -168,12 +168,10 @@ export class Poller {
         { kind: "feed", home: home.id, offset, sha, ...(closed === null ? {} : { closed }) },
         home.timeoutMs ?? this.timings.timeoutMs,
       );
-      // A home whose code went back to before the cursor refuses it; read it without one next time.
-      if (result.code === FEED_USAGE && closed !== null) this.host.onCursorRefused(home.id);
       const more =
         result.code === 0
           ? this.accept(home, result.stdout)
-          : this.reject(home, result.code, result.stderr);
+          : this.reject(home, result.code, result.stderr, closed !== null);
       if (!more) break;
     }
     // A read that found nothing new must not look like a change, or every
@@ -186,10 +184,18 @@ export class Poller {
   /**
    * A failed read. Exit 4 says the home cannot report at all: its data is
    * dropped and the feed's one line becomes its banner. Any other failure keeps
-   * the last report until it goes stale.
+   * the last report until it goes stale. A usage error to a read that passed
+   * the closed decisions' cursor makes the host forget that cursor.
    */
-  private reject(home: HomeState, code: number | null, stderr: string): boolean {
+  private reject(
+    home: HomeState,
+    code: number | null,
+    stderr: string,
+    cursorSent: boolean,
+  ): boolean {
     const text = stderr.trim();
+    // A home whose code went back to before the cursor refuses it; read it without one next time.
+    if (code === FEED_USAGE && cursorSent) this.host.onCursorRefused(home.id);
     if (code === FEED_CANNOT_REPORT) {
       home.version = "unreported";
       home.report = null;

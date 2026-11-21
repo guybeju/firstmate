@@ -158,7 +158,8 @@ function records(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.filter(isRecord) : [];
 }
 
-function strings(value: unknown): string[] {
+/** The strings of an array, or none when `value` is not one. */
+export function strings(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string")
     : [];

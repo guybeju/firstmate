@@ -6,6 +6,8 @@
 // the last read of each home showed, so a read never records what was already
 // there before the board started watching.
 import { isRecord, readJsonFile, stringField, writeFileAtomic } from "./files.js";
+import { strings } from "./report.js";
+import { shortTime } from "./todos.js";
 const FILE_MODE = 0o644;
 const LINE_MAX = 200;
 /** The source of an answer the page itself delivered: its own hold.answered record is that close. */
@@ -13,14 +15,6 @@ export const PAGE_SOURCE = "myshape";
 function oneLine(text) {
     const line = (text.split("\n")[0] ?? "").trim();
     return line.length > LINE_MAX ? `${line.slice(0, LINE_MAX)}…` : line;
-}
-function pad(value) {
-    return String(value).padStart(2, "0");
-}
-/** "MM-DD HH:mm" in this machine's time zone, as the page prints a record's time. */
-export function shortTime(epochSeconds) {
-    const date = new Date(epochSeconds * 1000);
-    return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 /** Epoch seconds of a "Captain hold set:" stamp with a time; null for a date or nothing. */
 export function holdSetSeconds(stamp) {
@@ -35,7 +29,12 @@ function named(title) {
 }
 /** The time of a record and, when the home did not say, the words that say it is a bound. */
 function timing(at, readAt) {
-    return at === null ? { at: readAt, suffix: `（最晚 ${shortTime(readAt)}）` } : { at, suffix: "" };
+    if (at !== null)
+        return { at, suffix: "" };
+    return {
+        at: readAt,
+        suffix: `（最晚 ${shortTime(new Date(readAt * 1000).toISOString()) ?? ""}）`,
+    };
 }
 function openKey(home, task, holdSet) {
     return `hold.opened\t${home}\t${task}\t${holdSet}`;
@@ -62,29 +61,25 @@ function viaWords(source) {
         return "聊天";
     return source === PAGE_SOURCE ? "看板" : source;
 }
-/** What a close says happened, by the record's mode. */
+const answeredWords = (said, via) => `已回答${said}（經${via}）`;
+/** What a close says happened, by the record's Resolution mode. */
+const CLOSE_WORDS = new Map([
+    ["", answeredWords],
+    ["answered", answeredWords],
+    ["routed", answeredWords],
+    ["repaired", (said, via) => `已回答${said}（經${via}，事後補記）`],
+    ["released", (said, via) => `已回答並放行，工作繼續${said}（經${via}）`],
+    ["reconciled", (said) => `已對帳結束，不必再答${said}`],
+    ["forge-closed", (said) => `隨 PR 結束而關閉${said}`],
+    ["forge-released", (said) => `隨 PR 結束而放行，工作繼續${said}`],
+]);
 function closeWords(closed) {
     const answer = oneLine(closed.label === "" ? closed.answer : closed.label);
     const said = answer === "" ? "" : `：${answer}`;
-    const via = viaWords(closed.source);
-    switch (closed.mode) {
-        case "":
-        case "answered":
-        case "routed":
-            return `已回答${said}（經${via}）`;
-        case "repaired":
-            return `已回答${said}（經${via}，事後補記）`;
-        case "released":
-            return `已回答並放行，工作繼續${said}（經${via}）`;
-        case "reconciled":
-            return `已對帳結束，不必再答${said}`;
-        case "forge-closed":
-            return `隨 PR 結束而關閉${said}`;
-        case "forge-released":
-            return `隨 PR 結束而放行，工作繼續${said}`;
-        default:
-            return `已結束（${closed.mode}）${said}`;
-    }
+    const words = CLOSE_WORDS.get(closed.mode);
+    return words === undefined
+        ? `已結束（${closed.mode}）${said}`
+        : words(said, viaWords(closed.source));
 }
 function closeOf(read, closed) {
     const when = timing(closed.closed_at, read.readAt);
@@ -101,6 +96,9 @@ function closeOf(read, closed) {
         text: `${named(closed.title)}${closeWords(closed)}${when.suffix}`,
     };
 }
+function gapOpenKey(home, closed) {
+    return `hold.opened\t${home}\t${closed.id}\t#${closed.digest}`;
+}
 /** The opening of a decision that opened and closed between two reads, when the home timed it. */
 function gapOpeningOf(read, closed, at) {
     return {
@@ -108,7 +106,7 @@ function gapOpeningOf(read, closed, at) {
         topic: read.topicOf(closed.id, closed.origin),
         home: read.home,
         task: closed.id,
-        key: `hold.opened\t${read.home}\t${closed.id}\t#${closed.digest}`,
+        key: gapOpenKey(read.home, closed),
         at,
         text: `${named(closed.title)}已開`,
     };
@@ -124,6 +122,12 @@ function openingsOf(read) {
         .filter((hold) => !read.saved(openKey(read.home, hold.id, hold.hold_set ?? "")))
         .map((hold) => openingOf(read, hold));
 }
+/** Whether a closed decision is new to the board: not seen at the last read, not the page's own, not saved. */
+function isNewClose(read, seen, closed) {
+    if (seen.has(`${closed.id}\t${closed.digest}`) || closed.source === PAGE_SOURCE)
+        return false;
+    return !read.saved(closeKey(read.home, closed.id, closed.digest));
+}
 function closesOf(read) {
     const { previous, report } = read;
     // Without a cursor the read started at the present: every close it shows was there before.
@@ -132,19 +136,13 @@ function closesOf(read) {
     const seen = new Set(previous.closedSeen);
     const wasOpen = new Set(previous.openSeen.map((key) => key.split("\t")[0]));
     const drafts = [];
-    for (const closed of report.closed_holds) {
-        if (seen.has(`${closed.id}\t${closed.digest}`))
-            continue;
-        if (closed.source === PAGE_SOURCE)
-            continue;
-        if (read.saved(closeKey(read.home, closed.id, closed.digest)))
-            continue;
-        const gapOpen = closed.opened_at !== null && !wasOpen.has(closed.id);
-        if (gapOpen && closed.opened_at !== null)
+    for (const closed of report.closed_holds.filter((each) => isNewClose(read, seen, each))) {
+        const unseenOpen = !wasOpen.has(closed.id) && !read.saved(gapOpenKey(read.home, closed));
+        if (closed.opened_at !== null && unseenOpen)
             drafts.push(gapOpeningOf(read, closed, closed.opened_at));
         drafts.push(closeOf(read, closed));
     }
-    return drafts.filter((draft) => draft.key === undefined || !read.saved(draft.key));
+    return drafts;
 }
 /**
  * The records one good read of a home leaves, and what to remember of it. A
@@ -166,11 +164,6 @@ export function decisionStep(read) {
         },
     };
 }
-function stringList(raw) {
-    return Array.isArray(raw)
-        ? raw.filter((value) => typeof value === "string")
-        : [];
-}
 function parseCursor(raw) {
     if (!isRecord(raw))
         return null;
@@ -184,8 +177,8 @@ function parseHome(raw) {
     return {
         code_commit: stringField(raw, "code_commit") ?? "",
         cursor: parseCursor(raw["cursor"]),
-        openSeen: stringList(raw["open_seen"]),
-        closedSeen: stringList(raw["closed_seen"]),
+        openSeen: strings(raw["open_seen"]),
+        closedSeen: strings(raw["closed_seen"]),
     };
 }
 /**

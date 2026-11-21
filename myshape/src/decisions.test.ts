@@ -2,9 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DecisionStore, decisionStep, holdSetSeconds, shortTime } from "./decisions.js";
+import { DecisionStore, decisionStep, holdSetSeconds } from "./decisions.js";
 import type { DecisionRead, HomeDecisions } from "./decisions.js";
 import type { ClosedHold, HomeReport, ReportHold } from "./report.js";
+import { shortTime } from "./todos.js";
 
 const READ_AT = 1_795_300_000;
 const SET = "2026-11-20T06:10:00Z";
@@ -194,7 +195,7 @@ describe("decisionStep", () => {
     ]);
     expect(drafts[1]?.[0]?.at).toBe(READ_AT);
     expect(drafts[1]?.[0]?.text).toBe(
-      `待決事項「NAS 兩步驗證」已回答：要（經聊天）（最晚 ${shortTime(READ_AT)}）`,
+      `待決事項「NAS 兩步驗證」已回答：要（經聊天）（最晚 ${shortTime(new Date(READ_AT * 1000).toISOString())}）`,
     );
   });
 
@@ -242,7 +243,7 @@ describe("decisionStep", () => {
     ]);
     expect(drafts[1]?.[0]).toMatchObject({
       at: READ_AT,
-      text: `待決事項「NAS 兩步驗證」已開（最晚 ${shortTime(READ_AT)}）`,
+      text: `待決事項「NAS 兩步驗證」已開（最晚 ${shortTime(new Date(READ_AT * 1000).toISOString())}）`,
     });
   });
 
@@ -263,6 +264,50 @@ describe("decisionStep", () => {
       ]);
       expect(drafts[1]?.[0]?.text.endsWith(words), words).toBe(true);
     }
+  });
+});
+
+describe("decisionStep's edges", () => {
+  it("cuts a long first line, keeps one exactly at the limit, and names an untitled decision", () => {
+    const long = "問".repeat(201);
+    const edge = "答".repeat(200);
+    const { drafts } = reads([
+      report({ closed_cursor: START }),
+      report({ holds: [hold("a", { question: long }), hold("b", { question: edge, title: "" })] }),
+    ]);
+    expect(drafts[1]?.map((draft) => draft.text)).toEqual([
+      `待決事項「NAS 兩步驗證」已開：${"問".repeat(200)}…`,
+      `待決事項已開：${edge}`,
+    ]);
+  });
+
+  it("records the mode as the outcome, an empty one as answered", () => {
+    const { drafts } = reads([
+      report({ closed_cursor: START }),
+      report({
+        closed_holds: [
+          closed("a", { mode: "", closed_at: 1 }),
+          closed("b", { mode: "released", source: "lavish", closed_at: 1 }),
+        ],
+      }),
+    ]);
+    expect(drafts[1]?.map((draft) => `${draft.outcome} ${draft.source}`)).toEqual([
+      "answered chat",
+      "released lavish",
+    ]);
+  });
+
+  it("does not open again a decision whose gap opening is already saved", () => {
+    const first = reads([report({ closed_cursor: START })]);
+    const step = decisionStep({
+      home: "main",
+      previous: first.last,
+      report: report({ closed_holds: [closed("x", { opened_at: 5, closed_at: 9 })] }),
+      readAt: READ_AT,
+      saved: (key) => key === "hold.opened\tmain\tx\t#d-x",
+      topicOf: () => null,
+    });
+    expect(step.drafts.map((draft) => draft.kind)).toEqual(["hold.closed"]);
   });
 });
 
@@ -313,6 +358,15 @@ describe("DecisionStore", () => {
     expect(new DecisionStore(file).get("main")).toBeUndefined();
     fs.writeFileSync(file, "{not json");
     expect(new DecisionStore(file).get("main")).toBeUndefined();
+    fs.writeFileSync(file, JSON.stringify({ v: 2, homes: { main: seen } }));
+    expect(new DecisionStore(file).get("main")).toBeUndefined();
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ v: 1, homes: { main: { cursor: { offset: "3", sha: "s" } } } }),
+    );
+    expect(new DecisionStore(file).get("main")?.cursor).toBeNull();
+    fs.writeFileSync(file, JSON.stringify({ v: 1, homes: { main: { cursor: { offset: 3 } } } }));
+    expect(new DecisionStore(file).get("main")?.cursor).toBeNull();
     fs.writeFileSync(file, JSON.stringify({ v: 1, homes: { main: { cursor: 3 } } }));
     expect(new DecisionStore(file).get("main")).toEqual({
       code_commit: "",

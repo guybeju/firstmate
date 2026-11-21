@@ -86,13 +86,18 @@ export class Journal {
             const { event, key } = parseStored(line);
             if (key !== null)
                 this.seen.add(key);
-            if (event?.src === "board" && event.rid !== undefined)
-                this.rids.add(event.rid);
-            if (event?.src === "board" && event.key !== undefined)
-                this.keys.add(event.key);
+            if (event?.src === "board")
+                this.index(event);
             if (event !== null)
                 this.events.push(event);
         }
+    }
+    /** Remembers a saved record's id and what it is about, for replay and for decisions. */
+    index(record) {
+        if (record.rid !== undefined)
+            this.rids.add(record.rid);
+        if (record.key !== undefined)
+            this.keys.add(record.key);
     }
     /** True when the record with this id is already saved. */
     hasRecord(rid) {
@@ -121,9 +126,7 @@ export class Journal {
     /** Saves one system record, on disk before it returns; only store.ts commitChange calls it. */
     appendRecord(record) {
         appendLineDurable(this.file, JSON.stringify(record), FILE_MODE);
-        this.rids.add(record.rid);
-        if (record.key !== undefined)
-            this.keys.add(record.key);
+        this.index(record);
         this.events.push(record);
     }
 }

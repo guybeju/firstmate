@@ -10,7 +10,8 @@ export const READ_TIMEOUT_S = { min: 1, max: 3600 };
 function records(value) {
     return Array.isArray(value) ? value.filter(isRecord) : [];
 }
-function strings(value) {
+/** The strings of an array, or none when `value` is not one. */
+export function strings(value) {
     return Array.isArray(value)
         ? value.filter((entry) => typeof entry === "string")
         : [];

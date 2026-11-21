@@ -173,7 +173,7 @@ function pad(value: number): string {
 }
 
 /** MM-DD HH:mm in this machine's time, the way the page prints times. */
-function shortTime(iso: string): string | null {
+export function shortTime(iso: string): string | null {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return null;
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
