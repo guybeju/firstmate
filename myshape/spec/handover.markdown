@@ -103,6 +103,7 @@ trash "$H"                                        # 再把暫時的 home 丟進�
 | C54 | 完成 | #52 |
 | C55 | 完成 | 這一條進 `carry` 的 PR（commit 訊息寫明 C55） |
 | C58 | 完成 | 這一條進 `carry` 的 PR |
+| C59 | 完成 | 這一條進 `carry` 的 PR |
 
 C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold 時記下的處理方式，卡片只剩一個送出鈕（見 C19）。
 
@@ -175,8 +176,11 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
 - 頁面上只能用拖的改順序：沒有鍵盤可用的移法，原生拖放在 Chrome 上也還沒驗（第 3 節）；這兩種情況改用 `bin/myshape.sh move`（C55）。
 - 看板認一個 home 的依據是 `state/myshape/token`：全新的 home 要先 `open` 才能 `create`；`open` 在 secondmate 的 home 也不會被拒絕，那裡會開出另一個看板（沒有規則叫 second mate 跑它）。
 - 「要你動手」的項目存在看板上（contracts 第 3.6 節），每一步都在議題的更新留一筆紀錄；按了「做完了」之後使用者不能自己收回；aggregator 不再需要的項目由它直接撤下，原因記在議題的更新裡，只有看板存項目之前搬上來的舊項目要使用者按「好，撤下」。
-- 看板的每一個改動都和它的紀錄一起存（C58），但看板只記得它自己做的事。它看不到的（設計報告 `todo-history-trace-design` 第 1.6 節）：
-  - 不經頁面開、在聊天裡答、放行、重新 hold 或對帳關掉的待決事項：看板只在讀到的 `holds[]` 裡看到它出現或不見，兩次讀取之間開了又關的完全看不到；
+- 看板的每一個改動都和它的紀錄一起存（C58），每個 home 的待決事項開了、關了也從讀取資料記下（C59），但看板只記得它自己做的事與讀得到的。它還看不到的（設計報告 `todo-history-trace-design` 第 1.6 節）：
+  - 看板開始看一個 home 之前（第一次讀到、或那個 home 換了程式）就開著的待決事項，關掉時只有一筆關閉、沒有開啟；之前就關掉的不補記；
+  - 還在舊程式上的 home：開啟的時間取不到 `hold_set` 時是「最晚」讀到的那一刻，關掉的完全看不到；有新的讀取程式、但 `fm-captain-hold.sh` 還沒寫時間的，關閉是「最晚」讀到的那一刻；
+  - 搬進封存之後才被看板讀到的、而封存檔被改寫過（游標對不上）的那一段；backend 不是 markdown 時只看得到 backlog 裡還在的；
+  - 在看板作答之後、送到之前，同一個待決事項先在別處結束的：頁面記一筆「已在別處結束」，讀取資料再記一筆真正的關閉；
   - 看板自己存項目之前，「要你動手」項目在頁面之外的每一步（沒有補記）；
   - 誰寫了一行議題標記、為什麼：用指令做的歸併在議題頁顯示成「歸到「X」（first mate 用指令）」，時間取自標記檔，寫的是當時讀到的 aggregator 名稱，secondmate 自己做的也這樣寫；
   - `fm-tasks-axi.sh` 對排隊項目的 hold 與 unhold；
@@ -210,7 +214,7 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
 - 第 3 節「還開著」的項目與第 4 節「延後、之後要補的」由 fleet 接手。
 
 - 上游的新版合併進 `carry`：fleet 負責，見 [rollout](rollout.markdown)「之後怎麼更新」。
-- 看板的檔案是 `myshape/**` 與 `bin/myshape*.sh`，另外在上游的 `bin/fm-session-start.sh` 裡有一個呼叫點（contracts 第 11.3 節）。改到 [adapter](../../fm-board/spec/adapter.markdown) 第 7 節列的任何一支框架指令時，跑那一列寫的測試。
+- 看板的檔案是 `myshape/**` 與 `bin/myshape*.sh`，另外在上游的 `bin/fm-session-start.sh` 裡有一個呼叫點（contracts 第 11.3 節），`bin/fm-captain-hold.sh` 裡有兩處（contracts 第 2 節）。改到 [adapter](../../fm-board/spec/adapter.markdown) 第 7 節列的任何一支框架指令時，跑那一列寫的測試。
 - first mate 這一側接看板的檔是 `bin/fm-board.sh`、`bin/fm-board-lib.sh`、`bin/fm-board-io-lib.sh`、`bin/fm-board-migrate-lib.sh`、改名前的名字留下的提示 `bin/fm-topic.sh`（C57）、`bin/fm-dispatch-plan.sh`、`fm-board/**` 與 `dispatch-plan/**`（[adapter](../../fm-board/spec/adapter.markdown)）；改它們走同樣的流程，這一節的規則也適用。
 - 規則範本改了要升版本號（`fm-board/rules/captain.block.md.tmpl` 第一行），`fm-board/test/stage-6-rules.sh` 裡的版本與 token 上限跟著改，真的 home 由使用者明講之後重跑 `bin/fm-board.sh install-rules`。
 - `dist/` 要和 `src/` 一起提交；`dist/` 有變，執行中的看板要重啟才生效，`public/` 的 CSS 不用。

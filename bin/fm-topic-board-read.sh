@@ -52,7 +52,7 @@
 # seconds from state/captain-hold-events.jsonl (fm-captain-hold.sh writes one
 # line per hold and resolution; the earliest line of that task, occurrence and
 # event), or null when the home has no such line. The main home's 動手： holds
-# are left out, as from holds. At most 200 entries.
+# are left out, as from holds.
 # closed_cursor is the archive cursor to pass back as --closed-since:
 # {status, to_offset, to_prefix_sha256, more}. Without --closed-since the status
 # is "start" and the cursor is the archive's end, so the first read reports no
@@ -238,34 +238,41 @@ archive_cut() {
 
 # Write the archive part of the closed decisions to <out-file>:
 # {status, to_offset, to_prefix_sha256, more, rows: [{id, title, hold, body}]}.
-# <offset> is "" when the caller passed no cursor.
+# <offset> is "" when the caller passed no cursor. It runs where a failure does
+# not stop the script, so every step that can fail returns 1 itself.
 archive_section() {
-  local offset=$1 prefix=$2 out=$3 archive size to_offset more=false to_prefix=-
+  local offset=$1 prefix=$2 out=$3 archive size to_offset more=false to_prefix=- lines cut
   if ! archive=$(archive_path); then
-    jq -n '{status: "absent", to_offset: 0, to_prefix_sha256: "-", more: false, rows: []}' > "$out"
+    jq -n '{status: "absent", to_offset: 0, to_prefix_sha256: "-", more: false, rows: []}' > "$out" || return 1
     return 0
   fi
   size=0
-  [ ! -f "$archive" ] || size=$(file_size "$archive")
+  if [ -e "$archive" ]; then
+    [ -f "$archive" ] && [ -r "$archive" ] || return 1
+    size=$(file_size "$archive") || return 1
+  fi
   if [ -z "$offset" ] || [ "$offset" -gt "$size" ] ||
     { [ "$offset" -gt 0 ] && [ "$(head -c "$offset" "$archive" | sha256_stdin)" != "$prefix" ]; }; then
-    [ "$size" -eq 0 ] || to_prefix=$(head -c "$size" "$archive" | sha256_stdin)
+    if [ "$size" -gt 0 ]; then to_prefix=$(head -c "$size" "$archive" | sha256_stdin) || return 1; fi
     jq -n --arg status "$([ -z "$offset" ] && echo start || echo continuity-broken)" \
       --argjson to_offset "$size" --arg to_prefix "$to_prefix" \
-      '{status: $status, to_offset: $to_offset, to_prefix_sha256: $to_prefix, more: false, rows: []}' > "$out"
+      '{status: $status, to_offset: $to_offset, to_prefix_sha256: $to_prefix, more: false, rows: []}' > "$out" ||
+      return 1
     return 0
   fi
-  : > "$WORK/archive-delta"
-  [ ! -f "$archive" ] || ledger_from "$offset" "$archive" > "$WORK/archive-delta"
+  : > "$WORK/archive-delta" || return 1
+  if [ "$size" -gt 0 ]; then ledger_from "$offset" "$archive" > "$WORK/archive-delta" || return 1; fi
   # Only complete lines: a row still being appended waits for the next read.
-  head -n "$(wc -l < "$WORK/archive-delta" | tr -d ' ')" "$WORK/archive-delta" > "$WORK/archive-lines"
+  lines=$(wc -l < "$WORK/archive-delta" | tr -d ' ') || return 1
+  head -n "$lines" "$WORK/archive-delta" > "$WORK/archive-lines" || return 1
   if [ "$(file_size "$WORK/archive-lines")" -gt "$ARCHIVE_MAX_BYTES" ]; then
-    head -c "$(archive_cut "$WORK/archive-lines" "$ARCHIVE_MAX_BYTES")" "$WORK/archive-lines" > "$WORK/archive-piece"
-    mv "$WORK/archive-piece" "$WORK/archive-lines"
+    cut=$(archive_cut "$WORK/archive-lines" "$ARCHIVE_MAX_BYTES") || return 1
+    head -c "$cut" "$WORK/archive-lines" > "$WORK/archive-piece" || return 1
+    mv "$WORK/archive-piece" "$WORK/archive-lines" || return 1
     more=true
   fi
   to_offset=$((offset + $(file_size "$WORK/archive-lines")))
-  [ "$to_offset" -eq 0 ] || to_prefix=$(head -c "$to_offset" "$archive" | sha256_stdin)
+  if [ "$to_offset" -gt 0 ]; then to_prefix=$(head -c "$to_offset" "$archive" | sha256_stdin) || return 1; fi
   jq -R -n --argjson to_offset "$to_offset" --arg to_prefix "$to_prefix" --argjson more "$more" '
     def close: if .cur != null then .rows += [.cur] | .cur = null else . end;
     (reduce inputs as $line ({rows: [], cur: null};
@@ -283,17 +290,18 @@ archive_section() {
                          | . as $h
                          | if startswith("fm-hold-v1:") then (try (.[11:] | @base64d) catch $h) else . end),
                   body: .body} ]}
-  ' < "$WORK/archive-lines" > "$out"
+  ' < "$WORK/archive-lines" > "$out" || return 1
 }
 
 # Write {"<task>\t<occurrence>\t<event>": <earliest epoch>} from the hold
 # lines fm-captain-hold.sh appends, to <out-file>; {} when there are none.
 hold_times() {
   local out=$1 file="$STATE/captain-hold-events.jsonl"
-  if [ ! -f "$file" ]; then
+  if [ ! -e "$file" ]; then
     printf '{}\n' > "$out"
     return 0
   fi
+  [ -f "$file" ] && [ -r "$file" ] || return 1
   jq -R -n '
     reduce (inputs | fromjson? | objects
             | select(.v == 1 and (.ts | type) == "number" and (.task | type) == "string"
@@ -301,7 +309,7 @@ hold_times() {
            ) as $line ({};
       ("\($line.task)\t\($line.occurrence)\t\($line.event)") as $key
       | if .[$key] == null or .[$key] > $line.ts then .[$key] = $line.ts else . end)
-  ' < "$file" > "$out"
+  ' < "$file" > "$out" || return 1
 }
 
 # Write {closed_holds, closed_cursor} to <out-file> from the snapshot, the
@@ -347,7 +355,7 @@ closed_section() {
                        | select($r != null)
                        | {id, title} + $r
                          + {opened_at: $t["\(.id)\t\($r.occurrence)\theld"],
-                            closed_at: $t["\(.id)\t\($r.occurrence)\tresolved"]} ][0:200],
+                            closed_at: $t["\(.id)\t\($r.occurrence)\tresolved"]} ],
        closed_cursor: ($archive[0] | del(.rows))}
   ' > "$out"
 }

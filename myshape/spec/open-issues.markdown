@@ -472,6 +472,20 @@ first mate 用 `propose` 開的議題停在提議中，要等使用者在頁面�
 - 不在這一條：待決事項從讀取資料記下的開與關（`hold.opened`、`closed_holds`）、`fm-captain-hold.sh` 與讀取契約的修改、補記修好之前已經關掉的項目（使用者選了不補），各是之後的工作。
 - 回不去的：舊版程式存檔時丟掉 `outbox`，只有最後一次改動的紀錄剛好也沒寫進 `events.jsonl` 時才會少一筆；已經寫進去的紀錄舊版照樣當文字顯示。
 
+### C59　在頁面之外開、關的待決事項沒有留下紀錄
+
+使用者 2026-11-21：`archer-openwrt` 議題頁還是看不到任何一張卡被開、被回答的痕跡；可追蹤是重要的指標，要看板的設計強制存下紀錄。
+C58 之後看板只記得在頁面上答的；在聊天裡答、first mate 自己開或收的待決事項，看板只在讀到的 `holds[]` 裡看到它出現或不見。
+使用者在三個做法裡選了 C（設計報告 `todo-history-trace-design` 第 2.7 節，A、B、C 一個疊一個），並接受多一個要跟上游合併的例外；修好之前已經關掉的不補記（選了 B）。
+**做法**：
+
+- 讀取腳本多報 `holds[].hold_set`、`closed_holds[]` 與 `closed_cursor`（[contracts](contracts.markdown) 第 4 節的 C12、C13）；`closed_holds[]` 讀 backlog 裡每一筆的 Resolution 紀錄，加上游標之後搬進封存的。
+- `bin/fm-captain-hold.sh` 每次 hold、作答、放行在 `state/captain-hold-events.jsonl` 寫一行確切的時間（contracts 第 2 節的第三個例外）。
+- 看板讀到新的 hold 寫 `hold.opened`、讀到新的已關待決事項寫 `hold.closed`，經 `commitChange` 存，帶 `key` 只寫一次；`data/myshape/decisions.json` 記每個 home 上一次看到的，第一次讀到一個 home 時什麼都不記（第 3.3、3.7 節）。
+- 一個待決事項一筆開啟、一筆關閉：在看板作答的，關閉是看板送到時寫的 `hold.answered`，讀取資料裡 `source` 是 `myshape` 的那一筆不另寫。
+- 防呆：`decisions.test.ts`、`stage-1-feed.sh` 的 `test_closed_decisions`、`stage-5-http.sh` 的 `test_decisions_open_and_close_once`、`stage-7-upgrade.sh` 的從前一版升上來與退回去、`check-state-writers.sh` 檢查 `decisions.json` 只有 `decisions.ts` 寫、紀錄只經 `saveRecords`。
+- 還看不到的列在 [handover](handover.markdown) 第 4 節。
+
 ### C28　使用者的 ub-mode 與全域規範裡沒有做到的
 
 - 測試不是每一步都先寫：第一段與之後的修正是測試先行；第二段起多半是程式與測試一起寫，再用測試把問題找出來（找到的都記在上面）。單元測試是全部寫完之後才補的。

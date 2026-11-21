@@ -15,7 +15,7 @@ TMP_ROOT=$(fm_test_tmproot fm-board-stage-1-feed)
 CONTRACT="$ROOT/myshape/test/contract"
 
 # Only scratch homes are read: drop anything that points a run at another home.
-unset FM_DATA_OVERRIDE FM_STATE_OVERRIDE FM_CONFIG_OVERRIDE FM_PROJECTS_OVERRIDE FM_TASK_ID FM_TASK_INBOX
+unset FM_DATA_OVERRIDE FM_STATE_OVERRIDE FM_CONFIG_OVERRIDE FM_PROJECTS_OVERRIDE FM_TASK_ID FM_TASK_INBOX TASKS_AXI_BACKEND
 export FM_SNAPSHOT_NOW=2026-07-25T00:00:00Z
 export TB_LOG="$TMP_ROOT/calls.log" TB_PLAY="$TMP_ROOT/play" TB_REMOTES="$TMP_ROOT/remotes"
 export FEED_ON_LOG="$TMP_ROOT/fm-on.log" FEED_ON_FAIL="$TMP_ROOT/fm-on-fail"
@@ -73,7 +73,31 @@ write_main_fleet() {
 - [ ] q-after - After run-a (repo: sample) (kind: ship) (blocked-by: run-a)
 
 ## Done
+- [x] call-done - Ship it? (repo: sample) (kind: captain) (done 2026-07-21) (hold: 要出貨嗎？) (hold-kind: captain)
+  Resolution recorded by fm-captain-hold.
+  Decision digest: d-call-done
+  Resolution mode: answered
+
+  Captain decision:
+  要，今天出
+
+  Captain hold origin: run-a
+- [x] todo-done - Log in (repo: sample) (kind: captain) (done 2026-07-21) (hold: 動手：登入) (hold-kind: captain)
+  Resolution recorded by fm-captain-hold.
+  Decision digest: d-todo-done
+  Resolution mode: answered
+
+  Captain decision:
+  Captain answered this call through myshape.
+  Task: todo-done
+  Answer: 做完了
 EOF
+  {
+    printf '%s\n' '{"v":1,"ts":1795400000,"task":"call-done","occurrence":1,"event":"held"}'
+    printf '%s\n' 'not json' '{"v":2,"ts":1,"task":"call-done","occurrence":1,"event":"resolved"}'
+    printf '%s\n' '{"v":1,"ts":1795400600,"task":"call-done","occurrence":1,"event":"resolved"}'
+    printf '%s\n' '{"v":1,"ts":1795409999,"task":"call-done","occurrence":1,"event":"resolved"}'
+  } > "$home/state/captain-hold-events.jsonl"
   mkdir -p "$home/projects/w" "$home/data/run-a" "$home/data/gone-merged"
   fm_write_meta "$home/state/run-a.meta" "window=firstmate:fm-run-a" "worktree=$home/projects/w" \
     "project=sample" "harness=claude" "kind=ship" "mode=ship" "yolo=off"
@@ -262,6 +286,94 @@ test_remote_failures() {
   pass "a remote checkout without the reader is exit 4 with one line; other fm-on.sh failures pass through"
 }
 
+# archive_row <home> <id> <answer-line...>: appends one released row to <home>'s Done archive.
+archive_row() {
+  local home=$1 id=$2 line
+  shift 2
+  {
+    printf '\n## Archived 2026-07-22\n'
+    printf -- '- [x] %s - Archived %s (repo: sample) (kind: captain) (done 2026-07-22) (hold-kind: captain)\n' "$id" "$id"
+    printf '  Resolution recorded by fm-captain-hold.\n  Decision digest: d-%s\n  Resolution mode: released\n\n' "$id"
+    printf '  Captain decision:\n'
+    for line in "$@"; do printf '  %s\n' "$line"; done
+  } >> "$home/data/done-archive.md"
+}
+
+test_closed_decisions() {
+  local out cursor size sha
+  rm -f "$MAIN/data/done-archive.md"
+  printf 'backend = "markdown"\n' > "$MAIN/.tasks.toml"
+  out=$(feed "$FAKE" main 0 -) || fail "feed main failed"
+  assert_equals '2026-07-20T00:00:00Z 2026-07-20T00:00:00Z' "$(jq -r '[.holds[].hold_set] | join(" ")' <<< "$out")" \
+    "holds[] must carry each hold's set time"
+  assert_equals 'call-done|answered|要，今天出||d-call-done|1|run-a|1795400000|1795400600' \
+    "$(jq -r '[.closed_holds[] | "\(.id)|\(.mode)|\(.answer)|\(.source)|\(.digest)|\(.occurrence)|\(.origin)|\(.opened_at)|\(.closed_at)"] | join(" ")' <<< "$out")" \
+    "closed_holds[] must carry the answered decision and its earliest v1 hold times, and leave the main home's 動手： hold out"
+  assert_equals '{"status":"start","to_offset":0,"to_prefix_sha256":"-","more":false}' "$(jq -c .closed_cursor <<< "$out")" \
+    "without a cursor the closed decisions start at the present"
+  archive_row "$MAIN" old-1 '先放著'
+  out=$(feed "$FAKE" main 0 -) || fail "feed main failed"
+  size=$(wc -c < "$MAIN/data/done-archive.md" | tr -d ' ')
+  sha=$(sha256sum < "$MAIN/data/done-archive.md" | cut -d' ' -f1)
+  assert_equals "start $size $sha call-done" \
+    "$(jq -r '"\(.closed_cursor.status) \(.closed_cursor.to_offset) \(.closed_cursor.to_prefix_sha256) \([.closed_holds[].id] | join(" "))"' <<< "$out")" \
+    "a first read must put the cursor at the archive's end and report no archived row"
+  archive_row "$MAIN" new-1 'Captain answered this call through lavish.' 'Task: new-1' 'Answer: 好' \
+    'Answer as shown to the captain: 好，繼續'
+  out=$(feed "$FAKE" main 0 - "$size" "$sha") || fail "feed main with a closed cursor failed"
+  assert_equals 'delta call-done new-1|released|好|好，繼續|lavish|Archived new-1' \
+    "$(jq -r '"\(.closed_cursor.status) \(.closed_holds[0].id) \(.closed_holds[1] | "\(.id)|\(.mode)|\(.answer)|\(.label)|\(.source)|\(.title)")"' <<< "$out")" \
+    "a cursor must report the rows archived after it, with a keyed answer's source and label"
+  cursor=$(jq -r '"\(.closed_cursor.to_offset) \(.closed_cursor.to_prefix_sha256)"' <<< "$out")
+  # shellcheck disable=SC2086  # the cursor is two words on purpose
+  out=$(feed "$FAKE" main 0 - $cursor) || fail "feed main from the new cursor failed"
+  assert_equals 'call-done' "$(jq -r '[.closed_holds[].id] | join(" ")' <<< "$out")" "a row is reported once from the archive"
+  size=$(wc -c < "$MAIN/data/done-archive.md" | tr -d ' ')
+  out=$(feed "$FAKE" main 0 - 3 "$sha") || fail "feed main with a cursor that does not match failed"
+  assert_equals "continuity-broken $size call-done" \
+    "$(jq -r '"\(.closed_cursor.status) \(.closed_cursor.to_offset) \([.closed_holds[].id] | join(" "))"' <<< "$out")" \
+    "a cursor that no longer matches the archive starts over at its end"
+  out=$(feed "$FAKE" sm1 0 - 0 -) || fail "feed sm1 with a closed cursor failed"
+  assert_equals delta "$(jq -r .closed_cursor.status <<< "$out")" "a local secondmate gets the cursor too"
+  : > "$FEED_ON_LOG"
+  feed "$FAKE" far1 0 - 0 - >/dev/null || fail "feed far1 with a closed cursor failed"
+  assert_equals 'fm-on.sh far1 fm-topic-board-read.sh --closed-since 0 - 0 -' "$(cat "$FEED_ON_LOG")" \
+    "a remote home gets the cursor only as the board passed it"
+  : > "$FEED_ON_LOG"
+  feed "$FAKE" far1 0 - >/dev/null || fail "feed far1 failed"
+  assert_equals 'fm-on.sh far1 fm-topic-board-read.sh 0 -' "$(cat "$FEED_ON_LOG")" \
+    "without a cursor a remote home gets the arguments older code takes"
+  printf 'backend = "markdown"\n[markdown]\narchive = "data/other.md"\n' > "$MAIN/.tasks.toml"
+  out=$(feed "$FAKE" main 0 - "$size" "$sha") || fail "feed main with another archive failed"
+  assert_equals 'continuity-broken 0' "$(jq -r '"\(.closed_cursor.status) \(.closed_cursor.to_offset)"' <<< "$out")" \
+    "the archive is the one the backlog's .tasks.toml names"
+  printf 'backend = "beads"\n' > "$MAIN/.tasks.toml"
+  out=$(feed "$FAKE" main 0 - 0 -) || fail "feed main on another backend failed"
+  assert_equals absent "$(jq -r .closed_cursor.status <<< "$out")" "a backend with no markdown archive has none"
+  printf 'backend = "markdown"\n' > "$MAIN/.tasks.toml"
+  rm -f "$MAIN/data/done-archive.md"
+  for size in $(seq 1 700); do archive_row "$MAIN" "bulk-$size" "$(printf '答%.0s' $(seq 100))"; done
+  out=$(feed "$FAKE" main 0 - 0 -) || fail "feed main of a large archive failed"
+  cursor=$(jq -r '"\(.closed_cursor.to_offset) \(.closed_cursor.to_prefix_sha256)"' <<< "$out")
+  assert_equals 'true' "$(jq -r '.closed_cursor.more and (.closed_cursor.to_offset <= 262144)' <<< "$out")" \
+    "a read takes at most 256 KiB of the archive and says there is more"
+  sha=$(jq -r '[.closed_holds[].id | select(startswith("bulk-"))] | length' <<< "$out")
+  # shellcheck disable=SC2086  # the cursor is two words on purpose
+  out=$(feed "$FAKE" main 0 - $cursor) || fail "feed main of the rest of a large archive failed"
+  assert_equals '700 false' "$(jq -r --argjson first "$sha" \
+    '"\($first + ([.closed_holds[].id | select(startswith("bulk-"))] | length)) \(.closed_cursor.more)"' <<< "$out")" \
+    "the cut falls between rows, so the two reads report every row once"
+  mv "$MAIN/state/captain-hold-events.jsonl" "$TMP_ROOT/events.keep"
+  mkdir "$MAIN/state/captain-hold-events.jsonl"
+  out=$(feed "$FAKE" main 0 -) || fail "a read whose closed decisions cannot be read must still succeed"
+  assert_equals 'false false 2' "$(jq -r '"\(has("closed_holds")) \(has("closed_cursor")) \(.holds | length)"' <<< "$out")" \
+    "closed decisions that cannot be read are left out, never reported as none"
+  rmdir "$MAIN/state/captain-hold-events.jsonl"
+  mv "$TMP_ROOT/events.keep" "$MAIN/state/captain-hold-events.jsonl"
+  rm -f "$MAIN/.tasks.toml" "$MAIN/data/done-archive.md"
+  pass "the reader reports each closed decision with its times, and archived ones once, after the board's cursor"
+}
+
 test_usage_errors() {
   expect_code 2 "$(feed_code "$FAKE" nobody 0 -)" "feed of an unknown home"
   expect_code 2 "$(feed_code "$FAKE" '../x' 0 -)" "feed of a malformed home id"
@@ -273,10 +385,13 @@ test_usage_errors() {
   expect_code 2 "$(feed_code "$FAKE" main 0 "$(printf 'a%.0s' $(seq 63))")" "feed with a short sha"
   expect_code 2 "$(feed_code "$FAKE" main 0)" "feed with a missing argument"
   expect_code 2 "$(feed_code "$FAKE" main 0 - extra)" "feed with an extra argument"
+  expect_code 2 "$(feed_code "$FAKE" main 0 - 0 nothex)" "feed with a malformed closed sha"
+  expect_code 2 "$(feed_code "$FAKE" main 0 - x -)" "feed with a malformed closed offset"
+  expect_code 2 "$(feed_code "$FAKE" main 0 - 0 - extra)" "feed with one argument too many"
   expect_code 0 "$(feed_code "$FAKE" main 0 "$(printf 'a%.0s' $(seq 64))")" "feed with a well-formed sha"
   pass "an unknown home and a malformed offset or sha are usage errors"
 }
 
 fm_test_run test_main_report_carries_the_backlog test_main_report_has_the_contract_keys \
   test_aggregator_block_and_read_hints test_ledger_hint_only_when_the_ledger_is_off \
-  test_secondmates_are_read_in_their_own_homes test_remote_failures test_usage_errors
+  test_secondmates_are_read_in_their_own_homes test_remote_failures test_closed_decisions test_usage_errors
