@@ -1,14 +1,20 @@
-// The only external commands the board service may run: the aggregator's feed
-// and its deliverer, both one program fixed here, never read from
-// configuration (contracts section 7). Every run is an argument array for
-// execFile (no shell), and gets MYSHAPE_HOME set to the board's home.
+// The only external programs the board service may run: the aggregator's feed
+// and its deliverer, as the binding names them and binding.ts allows them
+// right before each run (contracts section 7). The argument shapes are fixed
+// here: the board adds "feed" or "deliver" and its own validated arguments.
+// Every run is an argument array for execFile (no shell), with captain text
+// only on stdin, and gets a short fixed environment, never the starter's.
 import { execFile } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
+import type { Role } from "./binding.js";
 import type { BoardConfig } from "./layout.js";
 
-/** The aggregator's program, relative to the code root. */
-export const AGGREGATOR_PROGRAM = path.join("bin", "fm-board.sh");
+/**
+ * The only names the board copies from its own environment into each
+ * program's, when set; MYSHAPE_HOME is the board's own (contracts section 7).
+ * A name a program turns out to need is added here, never by passing the
+ * starter's whole environment.
+ */
+export const PROGRAM_ENV_NAMES = ["PATH", "HOME", "LANG", "TMPDIR"];
 
 export type AllowedCommand =
   | {
@@ -26,6 +32,8 @@ export interface CommandResult {
   code: number | null;
   stdout: string;
   stderr: string;
+  /** Why nothing ran: the program may not run now (binding.ts). Absent when it ran or was refused. */
+  blocked?: string;
 }
 
 interface Invocation {
@@ -78,26 +86,36 @@ export function invocationFor(command: AllowedCommand): Invocation {
   return { args: ["deliver"], stdin: `${command.record}\n` };
 }
 
-/**
- * Why the aggregator's program cannot be started, or null when it can: it
- * must be a regular file (a symlink to one counts) with an execute bit.
- */
-export function programProblem(root: string): string | null {
-  const program = path.join(root, AGGREGATOR_PROGRAM);
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(program);
-  } catch {
-    return `沒有 ${AGGREGATOR_PROGRAM}`;
-  }
-  if (!stat.isFile()) return `${AGGREGATOR_PROGRAM} 不是一般檔案`;
-  return (stat.mode & 0o111) === 0 ? `${AGGREGATOR_PROGRAM} 不能執行` : null;
+/** PATH without its empty and relative entries, which would search the working directory. */
+export function absolutePath(value: string): string {
+  return value
+    .split(":")
+    .filter((entry) => entry.startsWith("/"))
+    .join(":");
 }
+
+/**
+ * The environment every program gets: the listed names the board has, with
+ * the values whoever started the board gave them (PATH without empty or
+ * relative entries), and MYSHAPE_HOME. Nothing else of the starter's passes.
+ */
+export function programEnv(own: NodeJS.ProcessEnv, home: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const name of PROGRAM_ENV_NAMES) {
+    const value = own[name];
+    if (value !== undefined) env[name] = name === "PATH" ? absolutePath(value) : value;
+  }
+  env["MYSHAPE_HOME"] = home;
+  return env;
+}
+
+/** The program a role runs now, or why it may not run (checked right before every run). */
+export type ProgramGate = (role: Role) => { program: string } | { blocked: string };
 
 export type CommandRunner = (command: AllowedCommand, timeoutMs: number) => Promise<CommandResult>;
 
-/** Builds the runner bound to one home and code root. */
-export function commandRunner(config: BoardConfig): CommandRunner {
+/** Builds the runner bound to one home, whose programs `gate` allows. */
+export function commandRunner(config: BoardConfig, gate: ProgramGate): CommandRunner {
   return (command, timeoutMs) =>
     new Promise((resolve) => {
       let invocation: Invocation;
@@ -107,11 +125,16 @@ export function commandRunner(config: BoardConfig): CommandRunner {
         resolve({ code: null, stdout: "", stderr: (error as Error).message });
         return;
       }
+      const allowed = gate(command.kind);
+      if ("blocked" in allowed) {
+        resolve({ code: null, stdout: "", stderr: "", blocked: allowed.blocked });
+        return;
+      }
       const child = execFile(
-        path.join(config.root, AGGREGATOR_PROGRAM),
+        allowed.program,
         invocation.args,
         {
-          env: { ...process.env, MYSHAPE_HOME: config.home },
+          env: programEnv(process.env, config.home),
           timeout: timeoutMs,
           maxBuffer: MAX_OUTPUT_BYTES,
           encoding: "utf8",

@@ -1,6 +1,7 @@
 // Where the board keeps its files. One place, so the service and the client
 // can never disagree about a path.
 import path from "node:path";
+import { BINDING_NAME } from "./binding.js";
 export const DEFAULT_PORT = 47819;
 export function boardPaths(config) {
     const runtimeDir = path.join(config.state, "myshape");
@@ -24,9 +25,22 @@ export function boardPaths(config) {
         aggregator: path.join(boardDataDir, "aggregator.json"),
         todos: path.join(boardDataDir, "todos.json"),
         decisions: path.join(boardDataDir, "decisions.json"),
+        binding: path.join(config.config, BINDING_NAME),
+        confirmations: path.join(boardDataDir, "confirmations.json"),
     };
 }
-const CONFIG_FLAGS = ["home", "root", "commit", "port", "state", "data"];
+const CONFIG_FLAGS = [
+    "home",
+    "root",
+    "commit",
+    "port",
+    "state",
+    "data",
+    "config",
+    "binding",
+    "exempt",
+];
+const SHA_OR_NONE = /^(-|[0-9a-f]{64})$/;
 /** Reads leading `--flag value` pairs up to `--`; returns them and the arguments after it. */
 function splitFlags(argv) {
     const values = new Map();
@@ -43,9 +57,15 @@ function splitFlags(argv) {
     }
     return { values, rest: argv.slice(index + 1) };
 }
+/** The `--exempt` value: "-" for none, else binding paths joined by commas. */
+function exemptList(value) {
+    return value === "-" ? [] : value.split(",").filter((entry) => entry !== "");
+}
 /**
- * Reads the `--home --root --commit --port --state --data` flags that
- * myshape.sh passes to both programs, and returns the remaining arguments.
+ * Reads the `--home --root --commit --port --state --data --config --binding
+ * --exempt` flags that myshape.sh passes to both programs, and returns the
+ * remaining arguments. A start without the binding's flags is refused, so no
+ * program can run without a confirmation by default.
  */
 export function parseConfigArgs(argv) {
     const { values, rest } = splitFlags(argv);
@@ -58,6 +78,9 @@ export function parseConfigArgs(argv) {
     const port = Number(need("port"));
     if (!Number.isInteger(port) || port < 1 || port > 65535)
         throw new Error("--port is not a port number");
+    const binding = need("binding");
+    if (!SHA_OR_NONE.test(binding))
+        throw new Error("--binding is not a SHA-256 or -");
     return {
         config: {
             home: need("home"),
@@ -66,6 +89,9 @@ export function parseConfigArgs(argv) {
             port,
             state: need("state"),
             data: need("data"),
+            config: need("config"),
+            binding,
+            exempt: exemptList(need("exempt")),
         },
         rest,
     };

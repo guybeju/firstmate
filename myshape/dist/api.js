@@ -1,6 +1,7 @@
 // The browser API: what each /api/ route does once a request has passed the
 // checks in http.ts. Topic operations are the same ones myshape.sh uses.
 import * as actions from "./actions.js";
+import { ROLES } from "./binding.js";
 import { bindingOf } from "./confirm.js";
 import { textField } from "./files.js";
 function ok(body = {}) {
@@ -96,6 +97,27 @@ const resend = (host, body) => {
     const act = () => fromProblem(host.writes.resend(id, unknown));
     return unknown ? twoStep(host, body, bindingOf("resend", id), act) : act();
 };
+/**
+ * Lets the board run a program it cannot vouch for, in two steps. The request
+ * names only the role; the program's path and the SHA-256 of its bytes and of
+ * the binding are read by the service at both steps, so a program or binding
+ * that changed in between is refused.
+ */
+const confirmProgram = (host, body) => {
+    const role = ROLES.find((name) => name === body["role"]);
+    if (role === undefined)
+        return fail(400, "usage", "role 要是 feed 或 deliver。");
+    const program = host.programToConfirm(role);
+    if (typeof program === "string")
+        return fail(409, "refused", program);
+    const binding = bindingOf("program-confirm", program.path, program.sha256, program.binding_sha256);
+    return twoStep(host, body, binding, () => {
+        const reply = fromTopicOp(host.topicOp("program-confirm", { ...program }));
+        if (reply.status === 200)
+            host.programConfirmed();
+        return reply;
+    });
+};
 /** Every browser API route, as "<method> <path>". */
 export const ROUTES = {
     "GET state": state,
@@ -116,6 +138,7 @@ export const ROUTES = {
     "POST todos/takedown": todoClose("todo-takedown"),
     "POST writes/resend": resend,
     "POST writes/ignore": (host, body) => fromProblem(host.writes.ignore(field(body, "write_id"))),
+    "POST programs/confirm": confirmProgram,
 };
 export function createApi(host) {
     return async (method, route, query, body) => {

@@ -4,12 +4,13 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   CommandRefused,
+  PROGRAM_ENV_NAMES,
   commandRunner,
   directTextProblem,
   invocationFor,
-  programProblem,
+  programEnv,
 } from "./commands.js";
-import type { AllowedCommand } from "./commands.js";
+import type { AllowedCommand, ProgramGate } from "./commands.js";
 
 const SHA = "a".repeat(64);
 
@@ -78,20 +79,25 @@ describe("directTextProblem", () => {
   });
 });
 
-describe("programProblem", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tb-program-"));
-  const program = path.join(root, "bin", "fm-board.sh");
-  afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+describe("programEnv", () => {
+  it("copies only the listed names the board has, and sets MYSHAPE_HOME", () => {
+    const env = programEnv(
+      { PATH: "/usr/bin", HOME: "/h", SSH_AUTH_SOCK: "/decoy", FM_DATA_OVERRIDE: "/decoy" },
+      "/the/home",
+    );
+    expect(env).toEqual({ PATH: "/usr/bin", HOME: "/h", MYSHAPE_HOME: "/the/home" });
+    expect(PROGRAM_ENV_NAMES).toEqual(["PATH", "HOME", "LANG", "TMPDIR"]);
+  });
 
-  it("needs a regular executable file", () => {
-    expect(programProblem(root)).toContain("沒有");
-    fs.mkdirSync(program, { recursive: true });
-    expect(programProblem(root)).toContain("不是一般檔案");
-    fs.rmSync(program, { recursive: true });
-    fs.writeFileSync(program, "#!/bin/sh\n", { mode: 0o644 });
-    expect(programProblem(root)).toContain("不能執行");
-    fs.chmodSync(program, 0o755);
-    expect(programProblem(root)).toBeNull();
+  it("drops empty and relative PATH entries and keeps the rest in order", () => {
+    expect(programEnv({ PATH: ":/usr/bin::.:bin:/bin:" }, "/h")["PATH"]).toBe("/usr/bin:/bin");
+    expect(programEnv({ PATH: "" }, "/h")["PATH"]).toBe("");
+  });
+
+  it("does not let the starter's MYSHAPE_HOME through", () => {
+    expect(programEnv({ MYSHAPE_HOME: "/other" }, "/the/home")).toEqual({
+      MYSHAPE_HOME: "/the/home",
+    });
   });
 });
 
@@ -103,11 +109,27 @@ describe("commandRunner", () => {
       mode: 0o755,
     });
   };
-  const config = { home: "/the/main/home", root, commit: "c", port: 1, state: "/s", data: "/d" };
-  const run = commandRunner(config);
+  const config = {
+    home: "/the/main/home",
+    root,
+    commit: "c",
+    port: 1,
+    state: "/s",
+    data: "/d",
+    config: "/c",
+    binding: "-",
+    exempt: [],
+  };
+  const roles: string[] = [];
+  let blocked: string | null = null;
+  const gate: ProgramGate = (role) => {
+    roles.push(role);
+    return blocked === null ? { program: path.join(root, "bin", "fm-board.sh") } : { blocked };
+  };
+  const run = commandRunner(config, gate);
   afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
-  it("runs the program from the code root with MYSHAPE_HOME, the arguments, and stdin", async () => {
+  it("runs the program the gate names with MYSHAPE_HOME, the arguments, and stdin", async () => {
     program('printf "%s|" "$MYSHAPE_HOME" "$@"; cat');
     const result = await run({ kind: "deliver", record: '{"v":1,"id":"w"}' }, 5000);
     expect(result).toEqual({
@@ -135,6 +157,31 @@ describe("commandRunner", () => {
     expect(result.code).toBeNull();
     expect(result.stderr).toContain("home id");
     expect(fs.existsSync(path.join(root, "ran"))).toBe(false);
+  });
+
+  it("asks the gate for the role right before running, and runs nothing it refuses", async () => {
+    program(`touch ${path.join(root, "ran-blocked")}`);
+    roles.length = 0;
+    blocked = "要先在頁面上確認";
+    const result = await run({ kind: "deliver", record: "{}" }, 5000);
+    blocked = null;
+    expect(result).toEqual({ code: null, stdout: "", stderr: "", blocked: "要先在頁面上確認" });
+    expect(roles).toEqual(["deliver"]);
+    expect(fs.existsSync(path.join(root, "ran-blocked"))).toBe(false);
+    await run({ kind: "feed", home: "main", offset: 0, sha: "-" }, 5000);
+    expect(roles).toEqual(["deliver", "feed"]);
+  });
+
+  it("hands the program only the fixed environment", async () => {
+    process.env["TB_CANARY"] = "leak";
+    program("env | sed 's/=.*//' | LC_ALL=C sort");
+    const result = await run({ kind: "feed", home: "main", offset: 0, sha: "-" }, 5000);
+    delete process.env["TB_CANARY"];
+    const names = result.stdout.trim().split("\n");
+    expect(names).not.toContain("TB_CANARY");
+    expect(names).toContain("MYSHAPE_HOME");
+    for (const name of names)
+      expect([...PROGRAM_ENV_NAMES, "MYSHAPE_HOME", "PWD", "SHLVL", "_"]).toContain(name);
   });
 
   it("gives a null code when the program is missing or times out", async () => {

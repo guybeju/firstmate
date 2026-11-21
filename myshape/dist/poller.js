@@ -32,19 +32,19 @@ export class Poller {
     offsets;
     timings;
     host;
-    unavailable;
+    blocked;
     homes = new Map([[MAIN_HOME, newHome(MAIN_HOME)]]);
     lastViewerAt = 0;
     timer = null;
     constructor(run, journal, offsets, timings, host, 
-    /** Why the feed cannot run in this service's life, or null when it can. */
-    unavailable) {
+    /** Why the feed may not run now, or null when it may (binding.ts). */
+    blocked) {
         this.run = run;
         this.journal = journal;
         this.offsets = offsets;
         this.timings = timings;
         this.host = host;
-        this.unavailable = unavailable;
+        this.blocked = blocked;
     }
     /** True while a viewer asked for the board recently enough to keep polling. */
     get active() {
@@ -53,8 +53,7 @@ export class Poller {
     /** Records that someone is looking, which starts or continues scheduled polling. */
     touch() {
         this.lastViewerAt = Date.now();
-        if (this.unavailable === null)
-            this.timer ??= setInterval(() => this.tick(), TICK_MS);
+        this.timer ??= setInterval(() => this.tick(), TICK_MS);
     }
     stop() {
         if (this.timer !== null)
@@ -79,7 +78,7 @@ export class Poller {
     /** Reads one home now (joining a read already in flight); resolves to whether it succeeded. */
     readNow(id) {
         const home = this.homes.get(id);
-        if (home === undefined || this.unavailable !== null)
+        if (home === undefined || this.blocked() !== null)
             return Promise.resolve(false);
         home.reading ??= this.readHome(home).finally(() => {
             home.reading = null;
@@ -119,6 +118,9 @@ export class Poller {
             const { offset, sha } = this.offsets.get(home.id);
             const closed = this.host.closedCursor(home.id);
             const result = await this.run({ kind: "feed", home: home.id, offset, sha, ...(closed === null ? {} : { closed }) }, home.timeoutMs ?? this.timings.timeoutMs);
+            // The feed may not run now: nothing was read, and the page says why.
+            if (result.blocked !== undefined)
+                return false;
             const more = result.code === 0
                 ? this.accept(home, result.stdout)
                 : this.reject(home, result.code, result.stderr, closed !== null);

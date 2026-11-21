@@ -1,6 +1,8 @@
 // The browser API: what each /api/ route does once a request has passed the
 // checks in http.ts. Topic operations are the same ones myshape.sh uses.
 import * as actions from "./actions.js";
+import { ROLES } from "./binding.js";
+import type { Role } from "./binding.js";
 import type { ActionContext, ActionResult } from "./actions.js";
 import { bindingOf } from "./confirm.js";
 import type { ConfirmStore } from "./confirm.js";
@@ -21,6 +23,18 @@ export interface ApiHost {
   actionContext: () => ActionContext;
   writes: WriteEngine;
   confirm: ConfirmStore;
+  /** The program of a role waiting for the captain's confirmation, or why there is none to confirm. */
+  programToConfirm: (role: Role) => ProgramToConfirm | string;
+  /** Called after a confirmation is saved. */
+  programConfirmed: () => void;
+}
+
+/** What the captain confirms: computed by the service at both steps, never taken from the request. */
+export interface ProgramToConfirm {
+  path: string;
+  sha256: string;
+  binding_sha256: string;
+  roles: Role[];
 }
 
 type Body = Record<string, unknown>;
@@ -139,6 +153,30 @@ const resend: Route = (host, body) => {
   return unknown ? twoStep(host, body, bindingOf("resend", id), act) : act();
 };
 
+/**
+ * Lets the board run a program it cannot vouch for, in two steps. The request
+ * names only the role; the program's path and the SHA-256 of its bytes and of
+ * the binding are read by the service at both steps, so a program or binding
+ * that changed in between is refused.
+ */
+const confirmProgram: Route = (host, body) => {
+  const role = ROLES.find((name) => name === body["role"]);
+  if (role === undefined) return fail(400, "usage", "role 要是 feed 或 deliver。");
+  const program = host.programToConfirm(role);
+  if (typeof program === "string") return fail(409, "refused", program);
+  const binding = bindingOf(
+    "program-confirm",
+    program.path,
+    program.sha256,
+    program.binding_sha256,
+  );
+  return twoStep(host, body, binding, () => {
+    const reply = fromTopicOp(host.topicOp("program-confirm", { ...program }));
+    if (reply.status === 200) host.programConfirmed();
+    return reply;
+  });
+};
+
 /** Every browser API route, as "<method> <path>". */
 export const ROUTES: Record<string, Route> = {
   "GET state": state,
@@ -181,6 +219,7 @@ export const ROUTES: Record<string, Route> = {
   "POST todos/takedown": todoClose("todo-takedown"),
   "POST writes/resend": resend,
   "POST writes/ignore": (host, body) => fromProblem(host.writes.ignore(field(body, "write_id"))),
+  "POST programs/confirm": confirmProgram,
 };
 
 export function createApi(host: ApiHost): ApiHandler {

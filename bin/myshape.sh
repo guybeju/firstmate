@@ -42,6 +42,17 @@
 # open prints the board's URL. status and stop never start the service, but
 # the main home's next session start does.
 #
+# The service reaches its aggregator through the home's
+# config/myshape-aggregator.json, which names it and the paths of its feed
+# and deliver programs (myshape/spec/contracts.markdown section 7). Each time
+# this command starts or replaces the service, it asks git which of those
+# paths are relative paths under the code root's bin/ that git tracks and
+# that equal HEAD, and hands that list to the service: only those run without
+# a confirmation on the page. The code root is this command's own directory's
+# parent, or FM_ROOT_OVERRIDE. A board running with another binding file than
+# the one there now is replaced by the next command, like one running other
+# code.
+#
 # summary stores a one-to-three sentence milestone summary read from stdin (at
 # most 600 characters) and prints the line to start the chat reminder with:
 # "<topic name>：", "未分類：" when the task has no topic, or "議題不明（<task-id>）："
@@ -320,10 +331,32 @@ status_without_node() {
   done
 }
 
+# binding_flags: the --binding and --exempt values for the service: the
+# binding file's SHA-256 (or -) and the paths it names that git tracks under
+# the code root's bin/ unchanged from HEAD (or -). The node helper reads the
+# file; git is asked here, so the service itself runs no git.
+binding_flags() {
+  local lines sha rest="" path exempt=""
+  lines=$(node "$BOARD_DIST/binding-cli.js" "$CONFIG/myshape-aggregator.json") || lines=-
+  sha=${lines%%$'\n'*}
+  case "$sha" in
+    - | *[!0-9a-f]* | '') printf '%s\n%s\n' - - && return 0 ;;
+  esac
+  case "$lines" in *$'\n'*) rest=${lines#*$'\n'} ;; esac
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    if git --literal-pathspecs -C "$FM_ROOT" ls-files --error-unmatch -- "$path" >/dev/null 2>&1 &&
+      git --literal-pathspecs -C "$FM_ROOT" diff --quiet HEAD -- "$path" >/dev/null 2>&1; then
+      exempt=${exempt:+$exempt,}$path
+    fi
+  done <<< "$rest"
+  printf '%s\n%s\n' "$sha" "${exempt:--}"
+}
+
 # Hand a socket subcommand to the node client, after the checks that must not
 # need node themselves.
 cmd_service() {
-  local sub=$1 port commit major
+  local sub=$1 port commit major binding exempt flags
   if ! command -v node >/dev/null 2>&1; then
     if [ "$sub" = status ]; then
       status_without_node
@@ -334,13 +367,18 @@ cmd_service() {
   major=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || printf '0')
   case "$major" in '' | *[!0-9]*) major=0 ;; esac
   [ "$major" -ge 22 ] || service_unavailable "node 版本低於 22" "請升級到 22 以上"
-  if [ ! -f "$BOARD_DIST/board-client.js" ] || [ ! -f "$BOARD_DIST/board-server.js" ]; then
+  if [ ! -f "$BOARD_DIST/board-client.js" ] || [ ! -f "$BOARD_DIST/board-server.js" ] ||
+    [ ! -f "$BOARD_DIST/binding-cli.js" ]; then
     service_unavailable "編譯結果不見了（${BOARD_DIST}）" "確認 checkout 完整"
   fi
   port=$(configured_port)
   commit=$(git -C "$FM_ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown')
+  flags=$(binding_flags)
+  binding=${flags%%$'\n'*}
+  exempt=${flags#*$'\n'}
   exec node "$BOARD_DIST/board-client.js" --home "$FM_HOME" --root "$FM_ROOT" --commit "$commit" \
-    --port "$port" --state "$STATE" --data "$DATA" -- "$@"
+    --port "$port" --state "$STATE" --data "$DATA" --config "$CONFIG" --binding "$binding" \
+    --exempt "$exempt" -- "$@"
 }
 
 # How many words of a split are not options or option values: the source

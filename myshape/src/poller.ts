@@ -80,8 +80,8 @@ export class Poller {
     private readonly offsets: Offsets,
     private readonly timings: PollTimings,
     private readonly host: PollHost,
-    /** Why the feed cannot run in this service's life, or null when it can. */
-    private readonly unavailable: string | null,
+    /** Why the feed may not run now, or null when it may (binding.ts). */
+    private readonly blocked: () => string | null,
   ) {}
 
   /** True while a viewer asked for the board recently enough to keep polling. */
@@ -92,7 +92,7 @@ export class Poller {
   /** Records that someone is looking, which starts or continues scheduled polling. */
   touch(): void {
     this.lastViewerAt = Date.now();
-    if (this.unavailable === null) this.timer ??= setInterval(() => this.tick(), TICK_MS);
+    this.timer ??= setInterval(() => this.tick(), TICK_MS);
   }
 
   stop(): void {
@@ -121,7 +121,7 @@ export class Poller {
   /** Reads one home now (joining a read already in flight); resolves to whether it succeeded. */
   readNow(id: string): Promise<boolean> {
     const home = this.homes.get(id);
-    if (home === undefined || this.unavailable !== null) return Promise.resolve(false);
+    if (home === undefined || this.blocked() !== null) return Promise.resolve(false);
     home.reading ??= this.readHome(home).finally(() => {
       home.reading = null;
       home.dueAt = Date.now() + (home.everyMs ?? this.timings.readMs);
@@ -168,6 +168,8 @@ export class Poller {
         { kind: "feed", home: home.id, offset, sha, ...(closed === null ? {} : { closed }) },
         home.timeoutMs ?? this.timings.timeoutMs,
       );
+      // The feed may not run now: nothing was read, and the page says why.
+      if (result.blocked !== undefined) return false;
       const more =
         result.code === 0
           ? this.accept(home, result.stdout)

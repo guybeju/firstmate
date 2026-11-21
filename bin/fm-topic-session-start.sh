@@ -11,6 +11,7 @@
 #   看板服務：在跑
 #   看板服務：原本沒在跑，已啟動
 #   看板服務：原本沒有回應，已重新啟動
+#   看板服務：已接上 firstmate，換上新的看板
 #   看板服務：無法啟動：<原因>
 #
 # It prints nothing and starts nothing when this home does not use the board:
@@ -23,9 +24,14 @@
 # the 無法啟動 line naming bin/fm-board.sh migrate-myshape, and nothing is
 # started.
 #
-# A running board is left alone, even one running older code: the next board
-# command replaces that one (myshape.sh open). A board that is not running,
-# including one stopped on purpose with myshape.sh stop, is started.
+# In such a home without config/myshape-aggregator.json, it first writes the
+# board's binding to firstmate (bin/fm-board.sh bind), so a home set up before
+# the board ran its programs from a binding needs no manual step; a running
+# board, which started without one, is then replaced through myshape.sh open
+# and the line says so. Otherwise a running board is left alone, even one
+# running older code: the next board command replaces that one (myshape.sh
+# open). A board that is not running, including one stopped on purpose with
+# myshape.sh stop, is started.
 #
 # After printing its line, once the board runs, it also runs
 # bin/fm-board.sh adopt, so hands-on holds from before the board kept hands-on
@@ -33,7 +39,8 @@
 # when there is something to adopt; when it does, that board command replaces
 # a board running older code like any other.
 #
-# Costs: one myshape.sh status when the board is running. Otherwise also one
+# Costs: one myshape.sh status when the board is running, after one
+# fm-board.sh bind when the binding is missing. Otherwise also one
 # myshape.sh open, whose stdout carries the board's access token and is
 # discarded unread. Then one fm-board.sh adopt, bounded at ADOPT_BOUND
 # seconds, its output discarded; a pass cut short is finished by the board's
@@ -51,6 +58,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 STATUS_BOUND=10
 START_BOUND=30
 ADOPT_BOUND=15
@@ -82,16 +90,19 @@ adopt() {
 }
 
 main() {
-  local status_out first err rc=0
+  local status_out first err rc=0 bound=0
   fm_root_is_secondmate_home "$FM_HOME" && return 0
   if [ ! -f "$STATE/myshape/token" ]; then
     [ ! -f "$STATE/topic-board/token" ] ||
       printf '%s\n' '看板服務：無法啟動：還沒搬到新名字，跑 bin/fm-board.sh migrate-myshape'
     return 0
   fi
+  if [ ! -e "$CONFIG/myshape-aggregator.json" ] && [ ! -L "$CONFIG/myshape-aggregator.json" ]; then
+    "$SCRIPT_DIR/fm-board.sh" bind >/dev/null 2>&1 && bound=1
+  fi
   status_out=$(fm_run_timed "$STATUS_BOUND" "$SCRIPT_DIR/myshape.sh" status 2>/dev/null) || true
   IFS= read -r first <<< "$status_out" || true
-  if [ "$first" = "$RUNNING_LINE" ]; then
+  if [ "$first" = "$RUNNING_LINE" ] && [ "$bound" -eq 0 ]; then
     printf '%s\n' "$RUNNING_LINE"
     adopt
     return 0
@@ -100,6 +111,8 @@ main() {
   if [ "$rc" -ne 0 ]; then
     printf '%s\n' "看板服務：無法啟動：$(start_failure_reason "$rc" "$err")"
     return 0
+  elif [ "$first" = "$RUNNING_LINE" ]; then
+    printf '%s\n' '看板服務：已接上 firstmate，換上新的看板'
   elif [ "$first" = "$HUNG_LINE" ]; then
     printf '%s\n' '看板服務：原本沒有回應，已重新啟動'
   else

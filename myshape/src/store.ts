@@ -1,6 +1,7 @@
 // Loads the board's state files and is their only writer. A change and its
 // records are saved together: commitChange renames the change's one commit
-// file with the records in its `outbox`, then appends them to events.jsonl,
+// file (topics.json, todos.json or confirmations.json) with the records in
+// its `outbox`, then appends them to events.jsonl,
 // and every later commit (and every start) first saves any outbox record the
 // journal still lacks.
 import fs from "node:fs";
@@ -36,6 +37,8 @@ import type {
   TopicState,
   TopicsDoc,
 } from "./topics.js";
+import { emptyConfirmations } from "./confirmations.js";
+import type { Confirmation, ConfirmationStore } from "./confirmations.js";
 import { carryMarks, emptyTodos, isValidItemId, withProjection } from "./todos.js";
 import type { ItemState, TodoItem, TodoStore } from "./todos.js";
 
@@ -260,13 +263,14 @@ function parseOutbox(raw: unknown): StoredRecord[] {
   });
 }
 
-/** The two files a change can commit through; each holds the records of its last commit. */
-export type CommitFile = "topics" | "todos";
+/** The three files a change can commit through; each holds the records of its last commit. */
+export type CommitFile = "topics" | "todos" | "confirmations";
 
 /** What the board keeps on disk, as the service holds it. */
 export interface StoredBoard {
   topics: Frozen<TopicState>;
   todos: Frozen<TodoStore>;
+  confirmations: Frozen<ConfirmationStore>;
   outbox: Readonly<Record<CommitFile, readonly StoredRecord[]>>;
 }
 
@@ -288,7 +292,8 @@ export interface CommitTarget {
 /** One change: its commit file, the next state of that file's family, and its records. */
 export type Change =
   | { file: "topics"; next: Frozen<TopicState>; records: Records }
-  | { file: "todos"; next: Frozen<TodoStore>; records: Records };
+  | { file: "todos"; next: Frozen<TodoStore>; records: Records }
+  | { file: "confirmations"; next: Frozen<ConfirmationStore>; records: Records };
 
 export type Committed =
   | {
@@ -318,7 +323,7 @@ const EMPTY_DOC = serialize({ ...emptyState().doc, outbox: [] });
 
 /** Appends every outbox record the journal lacks; returns why it could not, or null. */
 function flushOutbox(sink: RecordSink, outbox: StoredBoard["outbox"]): string | null {
-  for (const record of [...outbox.topics, ...outbox.todos]) {
+  for (const record of [...outbox.topics, ...outbox.todos, ...outbox.confirmations]) {
     if (sink.has(record.rid)) continue;
     try {
       sink.append(record);
@@ -373,6 +378,16 @@ function writeTodos(
   return topics;
 }
 
+/** Writes the captain's confirmations; confirmations.json is its own commit point. */
+function writeConfirmations(
+  paths: BoardPaths,
+  next: Frozen<ConfirmationStore>,
+  outbox: readonly StoredRecord[],
+): void {
+  fs.mkdirSync(paths.boardDataDir, { recursive: true });
+  writeFileAtomic(paths.confirmations, serialize({ ...next, outbox }), FILE_MODE);
+}
+
 /**
  * The only writer of the board's state files. First saves every earlier
  * record still waiting in an outbox, and refuses the change when it cannot.
@@ -399,9 +414,16 @@ export function commitChange(
   if (change.file === "topics") {
     writeTopics(target.paths, board.topics, change.next, records);
     next = { ...board, topics: change.next, outbox: { ...board.outbox, topics: records } };
-  } else {
+  } else if (change.file === "todos") {
     const topics = writeTodos(target.paths, board, change.next, records);
-    next = { topics, todos: change.next, outbox: { ...board.outbox, todos: records } };
+    next = { ...board, topics, todos: change.next, outbox: { ...board.outbox, todos: records } };
+  } else {
+    writeConfirmations(target.paths, change.next, records);
+    next = {
+      ...board,
+      confirmations: change.next,
+      outbox: { ...board.outbox, confirmations: records },
+    };
   }
   return { ok: true, board: next, records, appendError: flushOutbox(target.sink, next.outbox) };
 }
@@ -428,6 +450,7 @@ export function readBoard(paths: BoardPaths): ReadBoard {
   const rawTopics = readFile(paths.topics);
   const rawArchive = readFile(paths.archive);
   const rawTodos = readFile(paths.todos);
+  const rawConfirmations = readFile(paths.confirmations);
   const live =
     rawTopics === null
       ? { doc: empty.doc, confirmed: [] }
@@ -441,11 +464,20 @@ export function readBoard(paths: BoardPaths): ReadBoard {
   }
   const state: TopicState = { doc: live.doc, archive: gone.archive };
   const store = rawTodos === null ? null : parseFile(paths.todos, rawTodos, parseTodoStore);
+  const confirmations =
+    rawConfirmations === null
+      ? emptyConfirmations()
+      : parseFile(paths.confirmations, rawConfirmations, parseConfirmations);
   return {
     board: {
       topics: store === null ? state : withProjection(state, store),
       todos: store ?? emptyTodos(),
-      outbox: { topics: parseOutbox(rawTopics), todos: parseOutbox(rawTodos) },
+      confirmations,
+      outbox: {
+        topics: parseOutbox(rawTopics),
+        todos: parseOutbox(rawTodos),
+        confirmations: parseOutbox(rawConfirmations),
+      },
     },
     hasTodos: store !== null,
     confirmed: live.confirmed,
@@ -558,4 +590,30 @@ function parseTodoStore(raw: unknown): TodoStore {
   store.marks = parseTodos(raw["marks"]);
   store.closed = isRecord(raw["closed"]) ? stringRecord(raw["closed"]) : {};
   return store;
+}
+
+const SHA256 = /^[0-9a-f]{64}$/;
+
+/** One stored confirmation, or null when it is not a whole one: then it confirms nothing. */
+function parseConfirmation(raw: unknown): Confirmation | null {
+  if (!isRecord(raw)) return null;
+  const program = stringField(raw, "path");
+  const sha256 = stringField(raw, "sha256");
+  const bindingSha256 = stringField(raw, "binding_sha256");
+  if (program === null || !program.startsWith("/")) return null;
+  if (sha256 === null || !SHA256.test(sha256)) return null;
+  if (bindingSha256 === null || !SHA256.test(bindingSha256)) return null;
+  return { path: program, sha256, binding_sha256: bindingSha256, at: textField(raw, "at") };
+}
+
+function parseConfirmations(raw: unknown): ConfirmationStore {
+  if (!isRecord(raw) || raw["v"] !== 1) throw new Error("expected an object with v: 1");
+  const entries = Array.isArray(raw["entries"]) ? raw["entries"] : [];
+  return {
+    v: 1,
+    entries: entries.flatMap((entry: unknown) => {
+      const parsed = parseConfirmation(entry);
+      return parsed === null ? [] : [parsed];
+    }),
+  };
 }

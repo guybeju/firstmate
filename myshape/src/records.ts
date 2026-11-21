@@ -32,6 +32,8 @@ export const RECORD_KINDS = [
   "hold.answered",
   "hold.closed",
   "agent.tagged",
+  "program.confirmed",
+  "writes.released",
 ] as const;
 export type RecordKind = (typeof RECORD_KINDS)[number];
 

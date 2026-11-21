@@ -16,7 +16,9 @@ import * as actions from "./actions.js";
 import { createApi } from "./api.js";
 import { ConfirmStore } from "./confirm.js";
 import { serveBoard } from "./http.js";
-import { commandRunner, programProblem } from "./commands.js";
+import { ROLES, checkRole, readBinding, roleReason } from "./binding.js";
+import { commandRunner } from "./commands.js";
+import { isConfirmed } from "./confirmations.js";
 import { Journal, MAIN_HOME, Offsets, SUMMARY_KINDS, SUMMARY_MAX, Summaries } from "./journal.js";
 import { boardPaths, parseConfigArgs } from "./layout.js";
 import { MAX_REQUEST_BYTES } from "./protocol.js";
@@ -38,6 +40,8 @@ const WRITE_HISTORY_MS = 24 * 60 * 60 * 1000;
 const TEST_MODE = process.env["MYSHAPE_TEST"] === "1";
 /** What the page and the board's texts call the agent side when its report names none. */
 const DEFAULT_LABEL = "aggregator";
+/** The account the service runs as, which must own every program it runs. */
+const UID = process.getuid?.() ?? -1;
 // sizeof(sun_path) minus the terminating NUL. Node silently truncates a longer
 // path instead of failing, so the length is checked before listening.
 const SOCKET_PATH_MAX = os.platform() === "darwin" ? 103 : 107;
@@ -103,6 +107,8 @@ function healthData(service) {
         pid: process.pid,
         port: service.config.port,
         code_commit: service.config.commit,
+        binding_sha256: service.config.binding,
+        root: service.config.root,
         boot_id: service.bootId,
         started_at: service.startedAt,
     };
@@ -282,16 +288,84 @@ function viewVersion(service) {
     const stale = service.poller
         .snapshots()
         .map((home) => home.lastOkAt === null || nowMs - home.lastOkAt > service.timings.staleMs ? "1" : "0");
-    return `${service.version}-${stale.join("")}`;
+    // A program changing on disk is a change no write announces either.
+    const reach = crypto
+        .createHash("sha256")
+        .update(JSON.stringify([blockedReasons(service), programsToConfirm(service)]))
+        .digest("hex")
+        .slice(0, 12);
+    return `${service.version}-${stale.join("")}-${reach}`;
 }
 /** The name the board's texts use for the agent side. */
 function labelOf(service) {
     return service.aggregator?.label ?? DEFAULT_LABEL;
 }
+/**
+ * What the binding and the program allow for one role right now. The binding
+ * and the program are read again on every call, so a change to either takes
+ * effect at the next run.
+ */
+function roleCheck(service, role) {
+    const read = readBinding(service.paths.binding, UID);
+    const input = {
+        root: service.config.root,
+        uid: UID,
+        exempt: (written) => read.kind === "ok" &&
+            read.sha256 === service.config.binding &&
+            service.config.exempt.includes(written),
+        confirmed: (program, sha256) => read.kind === "ok" && isConfirmed(service.board.confirmations, program, sha256, read.sha256),
+    };
+    return checkRole(read, role, input);
+}
+/** The gate the runner asks right before every run. */
+function programGate(service) {
+    return (role) => {
+        const check = roleCheck(service, role);
+        const reason = roleReason(check);
+        if (reason !== null || check.kind !== "program")
+            return { blocked: reason ?? "" };
+        return { program: check.check.path };
+    };
+}
+/** The programs waiting for the captain's confirmation, one entry per program. */
+function programsToConfirm(service) {
+    const read = readBinding(service.paths.binding, UID);
+    if (read.kind !== "ok")
+        return [];
+    const found = new Map();
+    for (const role of ROLES) {
+        const check = roleCheck(service, role);
+        if (check.kind !== "program" || check.check.ok || check.check.confirm === null)
+            continue;
+        const { path: program, confirm } = check.check;
+        const entry = found.get(program) ?? {
+            path: program,
+            sha256: confirm.sha256,
+            binding_sha256: read.sha256,
+            roles: [],
+        };
+        entry.roles.push(role);
+        found.set(program, entry);
+    }
+    return [...found.values()];
+}
+/** Why the board cannot reach the aggregator now, one reason per problem; empty when it can. */
+function blockedReasons(service) {
+    const reasons = ROLES.map((role) => roleReason(roleCheck(service, role)));
+    return [...new Set(reasons.filter((reason) => reason !== null))];
+}
 function aggregatorView(service) {
+    const reasons = blockedReasons(service);
+    const read = readBinding(service.paths.binding, UID);
     return {
-        connected: service.unavailable === null,
-        unavailable: service.unavailable,
+        connected: reasons.length === 0,
+        unavailable: reasons.length === 0 ? null : reasons.join("；"),
+        binding: read.kind === "ok" ? read.binding : null,
+        confirm: programsToConfirm(service).map(({ path: program, sha256, roles }) => ({
+            path: program,
+            sha256,
+            roles,
+        })),
         name: service.aggregator?.name ?? null,
         label: labelOf(service),
         update_hint: service.aggregator?.update_hint ?? null,
@@ -516,7 +590,10 @@ function notifyDispatchable(service, ready) {
         submitNotice(service, { kind: "notice", event: "topic.dispatchable", text, topic: ref }, id);
     }
 }
-/** Saves records only, through the same commit as every change; a failure is logged, not thrown. */
+/**
+ * Saves records only, through the same commit as every change; a failure is
+ * logged, not thrown. Returns whether they were saved.
+ */
 function saveRecords(service, records, by) {
     const change = { file: "topics", next: service.board.topics, records };
     const saved = commitChange(commitTarget(service), service.board, change, {
@@ -525,11 +602,26 @@ function saveRecords(service, records, by) {
     });
     if (!saved.ok) {
         log(`could not save a record: ${saved.line}`);
-        return;
+        return false;
     }
     service.board = saved.board;
     if (saved.appendError !== null)
         log(`records wait in the outbox: ${saved.appendError}`);
+    service.version += 1;
+    return true;
+}
+/** The record of handing the waiting writes over, oldest first, saved before they go. */
+function recordRelease(service, ids) {
+    const name = readBinding(service.paths.binding, UID);
+    const who = name.kind === "ok" ? name.binding.name : labelOf(service);
+    const text = `接上 ${who}，依序送出等著的 ${ids.length} 筆：${ids.join("、")}`;
+    return saveRecords(service, [{ kind: "writes.released", topic: null, text }], "board");
+}
+/** After the captain confirmed a program: waiting writes go, and reading starts again. */
+function programConfirmed(service) {
+    service.writes.releaseWaiting();
+    service.poller.touch();
+    void service.poller.readNow(MAIN_HOME);
     service.version += 1;
 }
 /** The states of a page write that is still being sent. */
@@ -648,10 +740,7 @@ function loadService(boot) {
     const loaded = loadBoard(commitTarget(starting), aggregator?.label ?? DEFAULT_LABEL);
     for (const problem of loaded.appendErrors)
         log(`records wait in the outbox: ${problem}`);
-    const run = commandRunner(boot.config);
-    const unavailable = programProblem(boot.config.root);
-    if (unavailable !== null)
-        log(`not connected to an aggregator: ${unavailable}`);
+    const run = commandRunner(boot.config, (role) => programGate(service)(role));
     const bump = () => {
         service.version += 1;
     };
@@ -666,7 +755,6 @@ function loadService(boot) {
         timings,
         version: 1,
         ipc: null,
-        unavailable,
         aggregator,
         poller: new Poller(run, journal, new Offsets(paths), timings, {
             onChange: bump,
@@ -674,17 +762,21 @@ function loadService(boot) {
             closedCursor: (home) => decisions.get(home)?.cursor ?? null,
             onReport: (home, report) => recordDecisions(service, home, report),
             onCursorRefused: (home) => decisions.forget(home),
-        }, unavailable),
+        }, () => roleReason(roleCheck(service, "feed"))),
         confirm: new ConfirmStore(),
         notifier: new DispatchNotifier(notifyDelay(), fileStore(paths.notifyPending), (ready) => notifyDispatchable(service, ready)),
         writes: new WriteEngine(paths.audit, {
             run,
-            unavailable,
+            blocked: () => roleReason(roleCheck(service, "deliver")),
+            onRelease: (ids) => recordRelease(service, ids),
             readTags: (home, task) => readTags(service, home, task),
             onChange: bump,
             onFinished: (record) => recordFinished(service, record),
         }, writeTimings()),
     };
+    const reasons = blockedReasons(service);
+    if (reasons.length > 0)
+        log(`not connected to an aggregator: ${reasons.join("; ")}`);
     service.writes.resumeUnfinished();
     announceConfirmed(service, loaded.confirmed);
     service.notifier.start(service.board.topics);
@@ -765,6 +857,11 @@ function serveBrowser(service) {
             actionContext: () => actionContext(service),
             writes: service.writes,
             confirm: service.confirm,
+            programToConfirm: (role) => {
+                const found = programsToConfirm(service).find((entry) => entry.roles.includes(role));
+                return found ?? roleReason(roleCheck(service, role)) ?? "這支程式不需要確認。";
+            },
+            programConfirmed: () => programConfirmed(service),
         }),
         // Only the path is recorded: a query string could carry a token someone pasted into the URL.
         onRejected: (reason, request) => {

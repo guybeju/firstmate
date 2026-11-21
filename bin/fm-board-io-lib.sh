@@ -285,16 +285,9 @@ fmb_note() {
   esac
 }
 
-# fmb_request_id <record> [suffix]: the note's request id, kept from a write
-# made before action records existed when the record carries one.
+# fmb_request_id <record> [suffix]: the note's request id, tb-<write id>[suffix].
 fmb_request_id() {
-  local legacy
-  legacy=$(fmb_field "$1" .legacy_request_id)
-  if [ -n "$legacy" ] && [ -z "${2:-}" ]; then
-    printf '%s\n' "$legacy"
-  else
-    printf 'tb-%s%s\n' "$(fmb_field "$1" .id)" "${2:-}"
-  fi
+  printf 'tb-%s%s\n' "$(fmb_field "$1" .id)" "${2:-}"
 }
 
 fmb_deliver_message() {

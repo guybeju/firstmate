@@ -49,6 +49,15 @@ const FIXTURES = {
   "todo-claim": { args: { task: "open" }, fromPage: true },
   "todo-drop": { args: { task: "open" }, fromPage: true },
   "todo-takedown": { args: { task: "obsolete" }, fromPage: true },
+  "program-confirm": {
+    args: {
+      path: "/opt/agg/bin/feed",
+      sha256: "b".repeat(64),
+      binding_sha256: "c".repeat(64),
+      roles: ["feed", "deliver"],
+    },
+    fromPage: true,
+  },
 } satisfies Record<OperationName, Fixture>;
 
 function topicsFixture(): TopicState {
@@ -107,7 +116,11 @@ let target: CommitTarget;
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "tb-ops-"));
-  paths = boardPaths({ state: path.join(dir, "state"), data: path.join(dir, "data") });
+  paths = boardPaths({
+    state: path.join(dir, "state"),
+    data: path.join(dir, "data"),
+    config: path.join(dir, "config"),
+  });
   fs.mkdirSync(paths.boardDataDir, { recursive: true });
   const write = (file: string, value: unknown): void =>
     fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
@@ -136,6 +149,7 @@ function files(): Record<string, string | null> {
     topics: read(paths.topics),
     archive: read(paths.archive),
     todos: read(paths.todos),
+    confirmations: read(paths.confirmations),
     events: read(paths.events),
   };
 }
@@ -178,7 +192,10 @@ describe("every operation in the table", () => {
         expect(line.label).toBe("plain");
         expect(line.ts).toBe(1_795_200_000);
         expect(RECORD_KINDS).toContain(line.kind);
-        expect(line.topic !== null || line.item !== undefined).toBe(true);
+        // A confirmation is about the whole board, so it alone has no topic or item.
+        expect(
+          line.topic !== null || line.item !== undefined || commitFile === "confirmations",
+        ).toBe(true);
         expect(outbox.map((record) => record.rid)).toContain(line.rid);
       }
       const again = run(readBoard(paths).board, op);
@@ -207,6 +224,17 @@ describe("every operation in the table", () => {
       WHO,
     );
     expect(page.response).toEqual({ ok: false, code: "refused", line: "create 只能從指令送。" });
+    const confirm = applyOperation(
+      target,
+      board,
+      { op: "program-confirm", args: FIXTURES["program-confirm"].args, fromPage: false },
+      WHO,
+    );
+    expect(confirm.response).toEqual({
+      ok: false,
+      code: "refused",
+      line: "program-confirm 是使用者在頁面上按的，不能從指令送。",
+    });
     const unknown = applyOperation(target, board, { op: "nope", args: {}, fromPage: false }, WHO);
     expect(unknown.response).toEqual({ ok: false, code: "usage", line: "不認得的 op：nope" });
     expect(journalLines()).toEqual([]);

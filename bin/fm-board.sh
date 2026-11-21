@@ -6,6 +6,7 @@
 #   fm-board.sh tag <task-id> <topic-id>
 #   fm-board.sh tag <new-task-id> --from <old-task-id>
 #   fm-board.sh setup
+#   fm-board.sh bind
 #   fm-board.sh split <topic-id> <name> --goal <one line> [--id <new-id>] [--reason <one line>] [<task-id> | <secondmate-id>/<task-id>]...
 #   fm-board.sh --in-home <secondmate-id> tag <task-id> <topic-id>
 #   fm-board.sh --in-home <secondmate-id> answers        (one answer line on stdin)
@@ -35,7 +36,15 @@
 #        old or more, or no jq - the tag is written as given with one line on
 #        stderr saying why it was not checked. --from is not checked anywhere.
 #        Without jq the main home's check is skipped with a warning too.
-# setup  Creates this home's config/fleet-ledger flag. Safe to repeat.
+# setup  Creates this home's config/fleet-ledger flag, then binds the board
+#        to firstmate as bind does. Safe to repeat.
+# bind   Writes this home's config/myshape-aggregator.json, which tells the
+#        board to reach firstmate through bin/fm-board.sh feed and deliver:
+#        {"v":1,"name":"firstmate","feed":"bin/fm-board.sh","deliver":"bin/fm-board.sh"}.
+#        A file that is already there is left as it is, whatever it says; a
+#        secondmate home, which runs no board, gets none. Prints one line.
+#        The board runs bin/fm-board.sh without a confirmation on its page
+#        only while git tracks it unchanged in the code root.
 #
 # split makes a new confirmed topic out of part of <topic-id> with
 # "myshape.sh split", right after it in the same queue, and retags the named
@@ -219,15 +228,38 @@ cmd_tag() {
   printf '%s\n' "ok $task 已標記為 $topic"
 }
 
+BINDING_TEXT='{"v":1,"name":"firstmate","feed":"bin/fm-board.sh","deliver":"bin/fm-board.sh"}'
+
+cmd_bind() {
+  local file="$CONFIG/myshape-aggregator.json" tmp
+  [ "$#" -eq 0 ] || usage_error "bind 不收參數"
+  if in_secondmate_home; then
+    printf '%s\n' "ok bind secondmate home 不跑看板，不寫 aggregator 設定"
+  elif [ -e "$file" ] || [ -L "$file" ]; then
+    if [ "$(cat "$file" 2>/dev/null)" = "$BINDING_TEXT" ]; then
+      printf '%s\n' "ok bind aggregator 設定本來就是 firstmate"
+    else
+      printf '%s\n' "ok bind config/myshape-aggregator.json 已經有別的內容，沒有改"
+    fi
+  else
+    mkdir -p "$CONFIG"
+    tmp=$(mktemp "$CONFIG/.myshape-aggregator.XXXXXX") || tb_die 1 "寫不進 ${CONFIG}，aggregator 設定沒有寫。"
+    printf '%s\n' "$BINDING_TEXT" > "$tmp" && chmod 644 "$tmp" && mv "$tmp" "$file" ||
+      { rm -f -- "$tmp"; tb_die 1 "寫不進 ${file}，aggregator 設定沒有寫。"; }
+    printf '%s\n' "ok bind 看板的 aggregator 設定已寫：firstmate"
+  fi
+}
+
 cmd_setup() {
   [ "$#" -eq 0 ] || usage_error "setup 不收參數"
   if [ -e "$CONFIG/fleet-ledger" ]; then
     printf '%s\n' "ok setup 帳本本來就開著"
-    return 0
+  else
+    mkdir -p "$CONFIG"
+    : > "$CONFIG/fleet-ledger"
+    printf '%s\n' "ok setup 帳本已開"
   fi
-  mkdir -p "$CONFIG"
-  : > "$CONFIG/fleet-ledger"
-  printf '%s\n' "ok setup 帳本已開"
+  cmd_bind
 }
 
 # The data directory holding <task-spec>'s tag file: this home's for "<task>",
@@ -589,6 +621,7 @@ main() {
     --in-home) cmd_in_home "$@" ;;
     tag) cmd_tag "$@" ;;
     setup) cmd_setup "$@" ;;
+    bind) cmd_bind "$@" ;;
     split) cmd_split "$@" ;;
     install-rules) cmd_install_rules "$@" ;;
     rules) cmd_rules "$@" ;;
