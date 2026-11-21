@@ -902,13 +902,17 @@ test_bind_only_the_page_confirms() {
 
 # AT9.5 (second half): everything else waits for a confirmation, or is refused.
 test_bind_what_needs_a_confirmation() {
-  local program reason home_copy
+  local program reason home_copy file
   cp "$R9/bin/stub-plain" "$R9/bin/stub-untracked"
   chmod 755 "$R9/bin/stub-untracked"
+  # Staged with git add but not committed: not equal to HEAD.
+  cp "$R9/bin/stub-plain" "$R9/bin/stub-staged"
+  chmod 755 "$R9/bin/stub-staged"
+  git -C "$R9" add bin/stub-staged
   mkdir -p "$BH/state/agg"
   sa_stub_files plain "$BH/state/agg" "$AGG_B"
   # A program outside the root waits too: AT9.2.
-  for program in bin/stub-untracked "$BH/state/agg/stub-plain"; do
+  for program in bin/stub-untracked bin/stub-staged "$BH/state/agg/stub-plain"; do
     bind_to "$program" plain
     r9 open >/dev/null
     assert_equals 1 "$(agg_b '.confirm | length')" "$program must wait for a confirmation"
@@ -923,6 +927,7 @@ test_bind_what_needs_a_confirmation() {
   assert_equals "1|$R9/bin/stub-plain" "$(agg_b '"\(.confirm | length)|\(.confirm[0].path)"')" \
     "a tracked program changed before the start must wait for a confirmation"
   git -C "$R9" checkout -q -- bin/stub-plain
+  git -C "$R9" rm -q --cached bin/stub-staged
   ln -s "$OUTSIDE" "$TMP_ROOT/stub-link"
   cp "$OUTSIDE" "$TMP_ROOT/stub-plain-text" && chmod 644 "$TMP_ROOT/stub-plain-text"
   for program in "$TMP_ROOT/stub-link|是符號連結" "$TMP_ROOT/nothing-here|找不到" "$TMP_ROOT/stub-plain-text|不能執行（權限 0644）"; do
@@ -942,15 +947,22 @@ test_bind_what_needs_a_confirmation() {
   assert_contains "$(post "$BH" programs/confirm '{"role":"deliver"}' | jq -r '.message')" "權限 0775" \
     "a group-writable program must not be offered for confirmation"
   chmod 755 "$OUTSIDE"
-  home_copy=$BH/bin
-  mkdir -p "$home_copy"
-  printf '#!/bin/sh\ntouch %s/home-copy-ran\nexit 1\n' "$BH" > "$home_copy/stub-plain"
-  chmod 755 "$home_copy/stub-plain"
+  # Decoy code roots: in the home, and named by files under its config/, data/
+  # and state/; none of them may be where a relative path resolves.
+  for home_copy in "$BH" "$BH/config/decoy-root" "$BH/data/decoy-root" "$BH/state/decoy-root"; do
+    mkdir -p "$home_copy/bin"
+    printf '#!/bin/sh\ntouch %s/home-copy-ran\nexit 1\n' "$BH" > "$home_copy/bin/stub-plain"
+    chmod 755 "$home_copy/bin/stub-plain"
+  done
+  for file in config/myshape-root data/myshape/root state/myshape/root; do
+    printf '%s\n' "$BH/${file%%/*}/decoy-root" > "$BH/$file"
+  done
   bind_to bin/stub-plain plain
   r9 open >/dev/null
   refresh "$BH"
   wait_for "the root's program to run" is true agg_b '.connected'
-  assert_absent "$BH/home-copy-ran" "a relative path must resolve against the code root, never the home"
+  assert_absent "$BH/home-copy-ran" "a relative path must resolve against the code root, never the home or a root named under its config/, data/ or state/"
+  assert_contains "$(r9 status)" "程式目錄：$R9" "the code root must stay the one the command derived"
   pass "untracked, changed, home and outside programs wait for a confirmation; a symlink, a missing or a non-executable file, and a group-writable unconfirmable one are refused (AT9.5)"
 }
 
