@@ -309,10 +309,12 @@ TB_FAKE_ENV_NAMES="TB_LOG TB_PLAY TB_REMOTES FM_SNAPSHOT_NOW"
 # checkout's fm-board.sh from <root>/bin, beside the stand-ins. Run it after
 # the test exported the settings of TB_FAKE_ENV_NAMES it needs.
 tb_fake_aggregator() {
-  local fake=$1 name
+  local fake=$1 name value
   : > "$fake/tb-fake.env"
   for name in $TB_FAKE_ENV_NAMES; do
-    [ -z "${!name+x}" ] || printf 'export %s=%q\n' "$name" "${!name}" >> "$fake/tb-fake.env"
+    if value=$(printenv "$name"); then
+      printf 'export %s=%q\n' "$name" "$value" >> "$fake/tb-fake.env"
+    fi
   done
   rm -f "$fake/bin/fm-board.sh"
   ln -s "$ROOT/bin/fm-board.sh" "$fake/bin/fm-board-real.sh"

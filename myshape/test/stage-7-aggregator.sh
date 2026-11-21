@@ -845,11 +845,15 @@ test_bind_a_confirmation_is_bound_to_the_bytes() {
 }
 
 # AT9.3: every program gets the fixed environment, whatever the starter had.
+# The canaries are ones the board's own command does not read (it honors
+# FM_*_OVERRIDE for its paths, so the plan's FM_DATA_OVERRIDE would move the
+# board's data rather than test what reaches the program): FM_SSH_BIN and
+# TMUX are what firstmate's adapter would read, SSH_AUTH_SOCK the agent.
 test_bind_a_fixed_environment() {
   local names expected id
   : > "$AGG_B/env-probe"
   expected=$(printf '%s\n' HOME LANG MYSHAPE_HOME PATH TMPDIR)
-  SA_ENV=("${BASE_ENV[@]}" TB_CANARY=leak FM_DATA_OVERRIDE=/decoy SSH_AUTH_SOCK=/decoy MYSHAPE_HOME=/decoy)
+  SA_ENV=("${BASE_ENV[@]}" TB_CANARY=leak FM_SSH_BIN=/decoy SSH_AUTH_SOCK=/decoy TMUX=/decoy MYSHAPE_HOME=/decoy)
   SA_CMD_PATH="$SA_PATH::." r9 restart >/dev/null
   SA_ENV=("${BASE_ENV[@]}")
   for program in confirmed exempt; do
@@ -864,7 +868,7 @@ test_bind_a_fixed_environment() {
     done
     [ "$program" = exempt ] && break
     bind_to bin/stub-plain plain
-    SA_ENV=("${BASE_ENV[@]}" TB_CANARY=leak FM_DATA_OVERRIDE=/decoy SSH_AUTH_SOCK=/decoy MYSHAPE_HOME=/decoy)
+    SA_ENV=("${BASE_ENV[@]}" TB_CANARY=leak FM_SSH_BIN=/decoy SSH_AUTH_SOCK=/decoy TMUX=/decoy MYSHAPE_HOME=/decoy)
     SA_CMD_PATH="$SA_PATH::." r9 open >/dev/null
     SA_ENV=("${BASE_ENV[@]}")
   done
