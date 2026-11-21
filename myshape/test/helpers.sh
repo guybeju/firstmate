@@ -303,28 +303,28 @@ SH
 # <root>/tb-fake.env instead.
 TB_FAKE_ENV_NAMES="TB_LOG TB_PLAY TB_REMOTES FM_SNAPSHOT_NOW"
 
-# tb_fake_aggregator <root>: make <root>'s bin/fm-board.sh the program the
+# tb_fake_aggregator <fake-root>: make that root's bin/fm-board.sh the program the
 # board's binding names: a committed wrapper (git tracks it unchanged, so it
 # runs without a confirmation) that loads <root>/tb-fake.env and runs this
 # checkout's fm-board.sh from <root>/bin, beside the stand-ins. Run it after
 # the test exported the settings of TB_FAKE_ENV_NAMES it needs.
 tb_fake_aggregator() {
-  local root=$1 name
-  : > "$root/tb-fake.env"
+  local fake=$1 name
+  : > "$fake/tb-fake.env"
   for name in $TB_FAKE_ENV_NAMES; do
-    [ -z "${!name+x}" ] || printf 'export %s=%q\n' "$name" "${!name}" >> "$root/tb-fake.env"
+    [ -z "${!name+x}" ] || printf 'export %s=%q\n' "$name" "${!name}" >> "$fake/tb-fake.env"
   done
-  rm -f "$root/bin/fm-board.sh"
-  ln -s "$ROOT/bin/fm-board.sh" "$root/bin/fm-board-real.sh"
-  cat > "$root/bin/fm-board.sh" <<'SH'
+  rm -f "$fake/bin/fm-board.sh"
+  ln -s "$ROOT/bin/fm-board.sh" "$fake/bin/fm-board-real.sh"
+  cat > "$fake/bin/fm-board.sh" <<'SH'
 #!/usr/bin/env bash
 # shellcheck source=/dev/null
 . "$(dirname "$0")/../tb-fake.env"
 exec "$(dirname "$0")/fm-board-real.sh" "$@"
 SH
-  chmod 755 "$root/bin/fm-board.sh"
-  git -C "$root" add bin/fm-board.sh
-  git -C "$root" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm "fake aggregator"
+  chmod 755 "$fake/bin/fm-board.sh"
+  git -C "$fake" add bin/fm-board.sh
+  git -C "$fake" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm "fake aggregator"
 }
 
 # tb_bind_home <home>: bind the home's board to firstmate's programs, the way

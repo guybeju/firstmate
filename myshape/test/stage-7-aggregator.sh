@@ -802,8 +802,10 @@ test_bind_paths_only() {
   assert_equals "$before" "$(calls_b)" "a refused binding must run nothing"
   assert_equals "" "$(awk '$1 != "feed" && $1 != "deliver"' "$AGG_B/calls.log")" \
     "every run must have feed or deliver as its first argument"
+  # The same bytes the running board started with: no command replaces it,
+  # and the next read of the root home hands the waiting writes over.
   bind_to bin/stub-plain plain
-  r9 open >/dev/null
+  refresh "$BH"
   wait_for "the waiting writes to go once the binding is right" is 0 state_of "$BH" '[.writes[] | select(.state == "waiting")] | length'
   pass "a binding with arrays, arguments or other keys is refused, runs nothing, and writes wait (AT9.1)"
 }
@@ -877,7 +879,7 @@ test_bind_only_the_page_confirms() {
   r9 open >/dev/null
   sa_confirm "$BH"
   assert_present "$BH/data/myshape/confirmations.json" "the confirmation must be kept in the board's data"
-  assert_equals "" "$(ls "$BH/config" | grep -v -x -E 'myshape-port|myshape-aggregator.json' || true)" \
+  assert_equals "" "$(find "$BH/config" -mindepth 1 -maxdepth 1 ! -name myshape-port ! -name myshape-aggregator.json)" \
     "the confirmation must not be written into config/"
   before=$(cat "$BH/data/myshape/confirmations.json")
   out=$(tb_op "$BH" program-confirm "$(jq -cn --arg path "$OUTSIDE" '{path: $path, sha256: ("0" * 64), binding_sha256: ("0" * 64)}')" 2>&1) || rc=$?

@@ -5,8 +5,8 @@
 // every state change, retried only when the deliverer says so, and resumed
 // after a restart from the audit log alone. While the deliverer may not run,
 // writes wait; they are handed over in record order, oldest first, when it may
-// again: at the next start, at the page's confirmation of the deliverer, and
-// before any newer write is sent.
+// again: at the next start, at the page's confirmation of the deliverer,
+// after a good read of the root home, and before any newer write is sent.
 import crypto from "node:crypto";
 import { appendLine, isRecord, readCompleteLines, stringField } from "./files.js";
 export const DEFAULT_WRITE_TIMINGS = {

@@ -244,8 +244,10 @@ cmd_bind() {
   else
     mkdir -p "$CONFIG"
     tmp=$(mktemp "$CONFIG/.myshape-aggregator.XXXXXX") || tb_die 1 "寫不進 ${CONFIG}，aggregator 設定沒有寫。"
-    printf '%s\n' "$BINDING_TEXT" > "$tmp" && chmod 644 "$tmp" && mv "$tmp" "$file" ||
-      { rm -f -- "$tmp"; tb_die 1 "寫不進 ${file}，aggregator 設定沒有寫。"; }
+    if ! { printf '%s\n' "$BINDING_TEXT" > "$tmp" && chmod 644 "$tmp" && mv "$tmp" "$file"; }; then
+      rm -f -- "$tmp"
+      tb_die 1 "寫不進 ${file}，aggregator 設定沒有寫。"
+    fi
     printf '%s\n' "ok bind 看板的 aggregator 設定已寫：firstmate"
   fi
 }

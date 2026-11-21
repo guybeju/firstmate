@@ -760,7 +760,13 @@ function loadService(boot) {
             onChange: bump,
             onAggregator: (reported) => rememberAggregator(service, reported),
             closedCursor: (home) => decisions.get(home)?.cursor ?? null,
-            onReport: (home, report) => recordDecisions(service, home, report),
+            onReport: (home, report) => {
+                recordDecisions(service, home, report);
+                // A deliverer that may run again without a start or a confirmation
+                // (a binding put back as it was) hands its waiting writes over here.
+                if (home === MAIN_HOME)
+                    service.writes.releaseWaiting();
+            },
             onCursorRefused: (home) => decisions.forget(home),
         }, () => roleReason(roleCheck(service, "feed"))),
         confirm: new ConfirmStore(),

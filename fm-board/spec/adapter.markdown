@@ -10,7 +10,7 @@
 
 | 路徑 | 內容 |
 | --- | --- |
-| `bin/fm-board.sh` | 轉接指令：看板執行的 `feed` 與 `deliver`（第 3 節），把舊的要你動手搬上看板的 `adopt`（第 3.3 節），`tag`、`setup`、帶 task 的 `split`、`--in-home`、`install-rules`、`rules`，與一次性的 `migrate-myshape` |
+| `bin/fm-board.sh` | 轉接指令：看板執行的 `feed` 與 `deliver`（第 3 節），把舊的要你動手搬上看板的 `adopt`（第 3.3 節），寫看板設定檔的 `bind`（第 3 節），`tag`、`setup`、帶 task 的 `split`、`--in-home`、`install-rules`、`rules`，與一次性的 `migrate-myshape` |
 | `bin/fm-board-io-lib.sh` | `feed` 與 `deliver` 的程式；只有 `fm-board.sh` source 它 |
 | `bin/fm-board-migrate-lib.sh` | `migrate-myshape` 的步驟（C57）；只有 `fm-board.sh` source 它，每個 home 都搬完之後拿掉 |
 | `bin/fm-topic.sh` | 改名前的指令名稱留下的提示（第 2 節）；每個 home 都搬完之後拿掉 |
@@ -18,7 +18,7 @@
 | `bin/fm-queue-source-lib.sh` | second mate 的 home 去哪裡讀主 home 的議題清單、副本能不能用；`fm-dispatch-plan.sh` 與 `fm-board.sh tag`（只在 subshell 裡）source 它 |
 | `bin/fm-dispatch-plan.sh` | `order`：照看板的佇列排出該派、該 hold、該解除的 backlog 項目，在每個 home；`queues-in`、`queues-push`：把佇列副本送到遠端的 second mate（[dispatch-plan](../../dispatch-plan/spec/dispatch-plan.markdown)） |
 | `fm-board/rules/` | 三個規則範本，副檔名 `.md.tmpl`（fork 不能新增追蹤的 `.md`） |
-| `fm-board/test/` | `run.sh` 與這一側的測試：`feed`（`stage-1-feed.sh`），`deliver`（`stage-2-deliver.sh`），`tag`、`setup`、`--in-home`（`stage-1-tag.sh`），帶 task 的 `split`（`stage-3-split.sh`），`adopt`（`stage-3-adopt.sh`），規則與安裝說明（`stage-6-*.sh`、`check-guide.sh`），改名前的名字與 `migrate-myshape`（`stage-8-*.sh`） |
+| `fm-board/test/` | `run.sh` 與這一側的測試：`feed`（`stage-1-feed.sh`），`deliver`（`stage-2-deliver.sh`），`tag`、`setup`、`bind`、`--in-home`（`stage-1-tag.sh`），帶 task 的 `split`（`stage-3-split.sh`），`adopt`（`stage-3-adopt.sh`），設定檔、session start 與群組能寫的 checkout（`stage-4-binding.sh`），規則與安裝說明（`stage-6-*.sh`、`check-guide.sh`），改名前的名字與 `migrate-myshape`（`stage-8-*.sh`） |
 | `dispatch-plan/test/` | `run.sh` 與 `fm-dispatch-plan.sh` 的測試（`stage-1` 到 `stage-4`） |
 | `dispatch-plan/spec/` | `fm-dispatch-plan.sh` 的說明 |
 | `fm-board/spec/` | 這一頁 |
@@ -47,8 +47,12 @@ stderr 第一行指出新的指令，第二行說使用者還要做什麼：這�
 
 ## 3. 看板怎麼用到這一側
 
-看板服務只執行 `bin/fm-board.sh` 的兩個子命令（contracts 第 7 節）；它們的程式在 `bin/fm-board-io-lib.sh`，檔頭寫明每一種跑什麼。
-看板在環境變數 `MYSHAPE_HOME` 給它的 home，這兩個子命令把它當成 `FM_HOME`。
+看板服務執行 home 的 `config/myshape-aggregator.json` 寫的兩支程式（contracts 第 7 節）。
+first mate 的設定檔是 `{"v":1,"name":"firstmate","feed":"bin/fm-board.sh","deliver":"bin/fm-board.sh"}`：兩支都是 `bin/fm-board.sh`，看板加上 `feed` 或 `deliver`；它們的程式在 `bin/fm-board-io-lib.sh`，檔頭寫明每一種跑什麼。
+`fm-board.sh setup` 與 `bind` 寫這個設定檔，session start（`bin/fm-topic-session-start.sh`）在用看板的主 home 少了它時也寫，然後跑 `myshape.sh open`，把沒有設定檔就啟動的看板換掉；已經有的設定檔，不管寫什麼都不改；secondmate 的 home 不跑看板，不寫。
+`bin/fm-board.sh` 是 git 追蹤、和 HEAD 相同的 `bin/` 底下的檔，所以看板不用在頁面上確認就執行它，群組能寫也一樣；在 checkout 裡改了它、還沒提交，下一次看板啟動時就要確認，而在群組能寫的 checkout 上（例如這台 PC）要確認的程式會被拒絕，看板就接不上，直到改動提交或還原。
+看板只給程式五個環境變數：`MYSHAPE_HOME`（它的 home）、`PATH`、`HOME`、`LANG`、`TMPDIR`。
+這兩個子命令把 `MYSHAPE_HOME` 當成 `FM_HOME`；它們跑的框架指令要的其他設定都從 `HOME` 底下的檔或預設值來：遠端 home 經 `fm-on.sh` 用 `~/.ssh` 的設定與金鑰檔連，不經 `SSH_AUTH_SOCK`，終端機 backend 用預設的 socket。
 
 ### 3.1 `feed <home> <offset> <sha> [<closed-offset> <closed-sha>]`
 
@@ -101,7 +105,6 @@ stderr 第一行指出新的指令，第二行說使用者還要做什麼：這�
 | `tag` | `main`／同機／遠端 | `fm-board.sh tag`／`fm-board.sh --in-home <id> tag`／`fm-on.sh <id> fm-board.sh tag`，參數 `<task> <議題 id>`；遠端的先跑 `fm-dispatch-plan.sh queues-push --to <id>`，不看它的結果 | 0 已送達；遠端 255 重試；其他失敗 |
 
 - 作答逐行讀 stdout：`closed: <task>` 之後接著送通知 `fm-inbox.sh note --request-id tb-<id>-note -`，內容「［議題：<名稱>］已在看板回答 <home>/<task>：<答案>」（沒有議題是「未分類」），結果照 `message`；`skipped: <task> (already closed)`、`(… records a different captain decision …)`、`(not held for the captain)` 是已由別處處理；其他的 `skipped:`、`refused:` 是失敗。同樣的答案重放一次，`answers` 回 `closed:`、什麼都不改，所以作答到一半重來是安全的。
-- 紀錄帶 `legacy_request_id`（看板改版前寫下的寫入）時，`message` 與 `notice` 用它當 request id。
 - `home` 不是 `main` 也不是登記的 secondmate、紀錄不是合法的 JSON、`kind` 不認得、欄位不完整：結果都是失敗。
 - 給 worker 的文字以 `/`、`$`、`!` 或 `-` 開頭也是失敗；看板本來就擋，這裡再擋一次，因為 `fm-send.sh` 不收 `--` 終止符。
 

@@ -90,7 +90,7 @@ test_the_environment_is_hardened() {
     "the board-only root must hold exactly the board's files"
   assert_equals "" "$(cd "$SA_ROOT" && git ls-files | grep -v -e '^bin/myshape\.sh$' -e '^bin/myshape-lib\.sh$' -e '^myshape/' |
     grep -v -e '^bin/fm-' || true)" "the board-only root must hold nothing else"
-  assert_absent "$SA_ROOT/bin/fm-board.sh" "the board-only root must not hold firstmate's adapter"
+  assert_equals "" "$(git -C "$SA_ROOT" ls-files bin/fm-board.sh)" "the board-only root must not hold firstmate's adapter"
   [ "$ROOT_COMMIT" != "$(git -C "$ROOT" rev-parse HEAD)" ] || fail "the root must have its own commit"
   # No stage-7 script may reach the real checkout's board or its fixtures. The
   # patterns are split so this check cannot match its own text.
