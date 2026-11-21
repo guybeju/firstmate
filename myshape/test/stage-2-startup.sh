@@ -89,6 +89,7 @@ assert_no_token() {  # <digest> <home>
 test_reports_a_running_board_without_touching_it() {
   local home out pid
   home=$(tb_make_service_home running)
+  tb_bind_home "$home"
   tb_run "$home" "$TOPIC" open >/dev/null || fail "the board did not start"
   pid=$(tb_board_pid "$home")
   out=$(session_start "$home")
