@@ -143,9 +143,9 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
   `topic.confirmed` 只在看板啟動時確認舊版留下的提議時寫，封存檔裡的也寫（第 3.1 節）；更早寫下的照樣顯示。
 - 待決事項從讀取資料記下的開與關（C59），`by` 是 `board`，在待決事項的議題底下（它自己的標記，沒有就是來源 task 的），帶 `home` 與 `task`：
   - `hold.opened`：一次讀取的 `holds[]` 裡有、上一次讀取沒有的 hold。`ts` 是它的 `hold_set`；`hold_set` 只有日期或沒有時是這次讀取的時間，`text` 結尾加「（最晚 MM-DD HH:mm）」。`closed_holds[]` 裡一個上一次讀取時還沒開的、帶 `opened_at` 的待決事項，也先寫一筆，`ts` 是 `opened_at`。
-  - `hold.closed`：`closed_holds[]` 裡上一次讀取沒有的一筆。`ts` 是它的 `closed_at`，沒有時是這次讀取的時間，加「（最晚 …）」。`outcome` 是 Resolution mode（`answered`、`released`、`repaired`、`reconciled`、`forge-closed`、`forge-released`，空的記成 `answered`），`answer` 是答案，`source` 是經哪裡（`chat` 是 first mate 直接記下的話）。在看板作答的（`source` 是 `myshape`）不另寫：它的關閉就是送到時寫的 `hold.answered`。
+  - `hold.closed`：`closed_holds[]` 裡上一次讀取沒有的一筆。`ts` 是它的 `closed_at`，沒有時是這次讀取的時間，加「（最晚 …）」。`outcome` 是 Resolution mode（`answered`、`released`、`repaired`、`reconciled`、`forge-closed`、`forge-released`，空的記成 `answered`），`answer` 是答案，`source` 是經哪裡（`chat` 是 first mate 直接記下的話）。在看板作答的（`source` 是 `myshape`）有看板自己的 `hold.answered`（`outcome` 是那個答案或它顯示的字）時不另寫，那一筆就是它的關閉；看板的那個作答還在送出中、等待或重試時先不寫，也不記成看過，游標留在原處，下一次讀再看；兩者都不是（送出的結果不是已送達，或有人用同一個入口手動作答）時照一般的關閉寫，「經看板」。
   - 兩種都帶 `key`：`hold.opened\t<home>\t<task>\t<hold_set>`（從 `closed_holds[]` 先寫的是 `…\t#<digest>`）與 `hold.closed\t<home>\t<task>\t<digest>`。看板啟動時從這個檔重建 key 的集合，同一個 key 只寫一次。
-  - 從什麼時候開始看：看板第一次讀到一個 home、或那個 home 的 `code_commit` 換了的那一次，不寫開啟；那個 home 的回報還沒給過 `closed_cursor`，或看板還沒交給它游標的那一次，不寫關閉。那時已經開著、已經關掉的都不補記。
+  - 從什麼時候開始看：看板第一次讀到一個 home、或那個 home 的 `code_commit` 換了的那一次（每一次更新程式都是），不寫開啟；那個 home 的回報還沒給過 `closed_cursor`，或看板還沒交給它游標的那一次，不寫關閉。那時已經開著、已經關掉的都不補記。
   `text` 例：「待決事項「NAS 兩步驗證」已開：NAS 要不要開兩步驗證？」、「待決事項「NAS 兩步驗證」已回答：要（經聊天）」、「待決事項「X」已回答並放行，工作繼續：好（經聊天）」、「待決事項「X」已對帳結束，不必再答：…」、「待決事項「X」隨 PR 結束而關閉」。
 - 每一個改動都有一個存它的檔：議題的改動是 `topics.json`，要你動手的改動是 `data/myshape/todos.json`。看板先把兩個檔 `outbox` 裡 `events.jsonl` 還沒有的紀錄補寫進去（寫不進去就拒絕這次改動，回「看板寫不進紀錄（原因），這次的修改沒有做」），再把改動和它的紀錄一起寫進那個檔的 `outbox`、用同一次改名存下，然後把紀錄追加到這裡並 fsync。追加失敗時改動已經生效，紀錄留在 `outbox`，下一次改動或下一次啟動補寫；啟動時補寫不進去，看板就不啟動。
   封存時封存檔先寫、`topics.json` 後寫，重開時反過來，所以中途當掉時議題留在 `topics.json`、沒有紀錄，或兩邊都有、`topics.json` 為準、紀錄由 `outbox` 補寫。要你動手的改動先寫 `topics.json` 的 `todos`，再寫 `todos.json`；看板啟動時從 `todos.json` 重算 `todos`。

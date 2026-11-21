@@ -532,6 +532,27 @@ function saveRecords(service, records, by) {
         log(`records wait in the outbox: ${saved.appendError}`);
     service.version += 1;
 }
+/** The states of a page write that is still being sent. */
+const SENDING = ["waiting", "sending", "retrying"];
+/**
+ * What the board knows of its own answer to `home`/`task`: its hold.answered
+ * record (whose outcome is the answer or its label), a write still being
+ * sent, or neither.
+ */
+function pageAnswerState(service, home, task, answers) {
+    const recorded = service.journal.events.some((event) => event.src === "board" &&
+        event.kind === "hold.answered" &&
+        event.home === home &&
+        event.task === task &&
+        answers.includes(event.outcome ?? ""));
+    if (recorded)
+        return "recorded";
+    const sending = [...service.writes.records.values()].some((write) => write.action.kind === "answer" &&
+        write.home === home &&
+        write.task === task &&
+        SENDING.includes(write.state));
+    return sending ? "pending" : "none";
+}
 /**
  * Records the decisions one good read of `home` opened or closed, then
  * remembers what the read showed. Records first, memory second: a crash in
@@ -551,6 +572,7 @@ function recordDecisions(service, home, report) {
                 return own;
             return placeTask(service.board.topics, homes, home, origin).topic;
         },
+        pageAnswer: (task, answers) => pageAnswerState(service, home, task, answers),
     });
     const [first, ...rest] = step.drafts;
     if (first !== undefined) {

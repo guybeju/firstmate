@@ -13,8 +13,15 @@ import { shortTime } from "./todos.js";
 
 const FILE_MODE = 0o644;
 const LINE_MAX = 200;
-/** The source of an answer the page itself delivered: its own hold.answered record is that close. */
+/** The source of an answer the page itself sent: its own hold.answered record is that close. */
 export const PAGE_SOURCE = "myshape";
+
+/**
+ * What the board knows of an answer it sent itself: its hold.answered record
+ * is saved, its write is still under way, or neither (the write ended without
+ * being delivered, or the answer was given through the same intake by hand).
+ */
+export type PageAnswer = "recorded" | "pending" | "none";
 
 /** What the board saw at its last good read of one home. */
 export interface HomeDecisions {
@@ -39,6 +46,8 @@ export interface DecisionRead {
   saved: (key: string) => boolean;
   /** The topic a decision of `task` (raised by `origin`) belongs to. */
   topicOf: (task: string, origin: string) => string | null;
+  /** What the board knows of its own answer to `task` that the home recorded as one of `answers`. */
+  pageAnswer: (task: string, answers: string[]) => PageAnswer;
 }
 
 export interface DecisionStep {
@@ -167,46 +176,76 @@ function openingsOf(read: DecisionRead): Draft[] {
     .map((hold) => openingOf(read, hold));
 }
 
-/** Whether a closed decision is new to the board: not seen at the last read, not the page's own, not saved. */
+/** Whether a closed decision is new to the board: not seen at the last read and not saved. */
 function isNewClose(read: DecisionRead, seen: Set<string>, closed: ClosedHold): boolean {
-  if (seen.has(`${closed.id}\t${closed.digest}`) || closed.source === PAGE_SOURCE) return false;
+  if (seen.has(`${closed.id}\t${closed.digest}`)) return false;
   return !read.saved(closeKey(read.home, closed.id, closed.digest));
 }
 
-function closesOf(read: DecisionRead): Draft[] {
+/** How the board knows of a close the page may have sent itself; "none" for any other source. */
+function pageAnswerOf(read: DecisionRead, closed: ClosedHold): PageAnswer {
+  if (closed.source !== PAGE_SOURCE) return "none";
+  return read.pageAnswer(
+    closed.id,
+    [closed.answer, closed.label].filter((word) => word !== ""),
+  );
+}
+
+interface Closes {
+  drafts: Draft[];
+  /** Closes of answers the page is still sending: read again next time, not remembered yet. */
+  waiting: string[];
+}
+
+function closesOf(read: DecisionRead): Closes {
   const { previous, report } = read;
   // Without a cursor the read started at the present: every close it shows was there before.
   if (report.closed_cursor === null || previous === undefined || previous.cursor === null)
-    return [];
+    return { drafts: [], waiting: [] };
   const seen = new Set(previous.closedSeen);
-  const wasOpen = new Set(previous.openSeen.map((key) => key.split("\t")[0]));
-  const drafts: Draft[] = [];
+  const wasOpen = new Set(previous.openSeen.map((key) => key.split("\t")[0] ?? key));
+  const result: Closes = { drafts: [], waiting: [] };
   for (const closed of report.closed_holds.filter((each) => isNewClose(read, seen, each))) {
-    const unseenOpen = !wasOpen.has(closed.id) && !read.saved(gapOpenKey(read.home, closed));
-    if (closed.opened_at !== null && unseenOpen)
-      drafts.push(gapOpeningOf(read, closed, closed.opened_at));
-    drafts.push(closeOf(read, closed));
+    const page = pageAnswerOf(read, closed);
+    if (page === "pending") result.waiting.push(`${closed.id}\t${closed.digest}`);
+    if (page === "none") result.drafts.push(...closeDrafts(read, wasOpen, closed));
   }
-  return drafts;
+  return result;
+}
+
+/** A close, after its opening when the decision opened and closed unseen and the home timed it. */
+function closeDrafts(read: DecisionRead, wasOpen: Set<string>, closed: ClosedHold): Draft[] {
+  const unseenOpen = !wasOpen.has(closed.id) && !read.saved(gapOpenKey(read.home, closed));
+  if (closed.opened_at === null || !unseenOpen) return [closeOf(read, closed)];
+  return [gapOpeningOf(read, closed, closed.opened_at), closeOf(read, closed)];
 }
 
 /**
  * The records one good read of a home leaves, and what to remember of it. A
  * hold not seen at the last read gets an opening at its set time; a closed
  * decision not seen before gets a close at the time the home's hold line
- * gives, or "at the latest" this read. A close the page delivered itself
- * (source myshape) is already its hold.answered record, so it leaves none.
+ * gives, or "at the latest" this read. A close the page sent itself (source
+ * myshape) is its hold.answered record and leaves none; while that answer is
+ * still being sent it waits, with the cursor kept, for a later read; when the
+ * page has no record of it, the close is written like any other.
  */
 export function decisionStep(read: DecisionRead): DecisionStep {
-  const { report } = read;
+  const { report, previous } = read;
   const cursor = report.closed_cursor;
+  const closes = closesOf(read);
+  const waiting = new Set(closes.waiting);
+  const kept = waiting.size > 0 && previous !== undefined ? previous.cursor : undefined;
   return {
-    drafts: [...openingsOf(read), ...closesOf(read)],
+    drafts: [...openingsOf(read), ...closes.drafts],
     next: {
       code_commit: report.code_commit,
-      cursor: cursor === null ? null : { offset: cursor.to_offset, sha: cursor.to_prefix_sha256 },
+      cursor:
+        kept ??
+        (cursor === null ? null : { offset: cursor.to_offset, sha: cursor.to_prefix_sha256 }),
       openSeen: report.holds.map((hold) => `${hold.id}\t${hold.hold_set ?? ""}`),
-      closedSeen: report.closed_holds.map((closed) => `${closed.id}\t${closed.digest}`),
+      closedSeen: report.closed_holds
+        .map((closed) => `${closed.id}\t${closed.digest}`)
+        .filter((key) => !waiting.has(key)),
     },
   };
 }

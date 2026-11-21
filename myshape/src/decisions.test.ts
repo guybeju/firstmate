@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DecisionStore, decisionStep, holdSetSeconds } from "./decisions.js";
-import type { DecisionRead, HomeDecisions } from "./decisions.js";
+import type { DecisionRead, HomeDecisions, PageAnswer } from "./decisions.js";
 import type { ClosedHold, HomeReport, ReportHold } from "./report.js";
 import { shortTime } from "./todos.js";
 
@@ -64,8 +64,9 @@ function report(extra: Partial<HomeReport> = {}): HomeReport {
 }
 
 /** Runs reads in order, each from what the one before remembered, collecting the saved keys. */
-function reads(reports: HomeReport[], start?: HomeDecisions) {
+function reads(reports: HomeReport[], start?: HomeDecisions, pageAnswers: PageAnswer[] = []) {
   const saved = new Set<string>();
+  const asked: string[] = [];
   let previous = start;
   const drafts: ReturnType<typeof decisionStep>["drafts"][] = [];
   for (const each of reports) {
@@ -76,13 +77,17 @@ function reads(reports: HomeReport[], start?: HomeDecisions) {
       readAt: READ_AT,
       saved: (key) => saved.has(key),
       topicOf: (task, origin) => (task === "tagged" || origin === "tagged" ? "nas" : null),
+      pageAnswer: (task, answers) => {
+        asked.push(`${task} ${answers.join("|")}`);
+        return pageAnswers.shift() ?? "recorded";
+      },
     };
     const step = decisionStep(input);
     for (const draft of step.drafts) if (draft.key !== undefined) saved.add(draft.key);
     drafts.push(step.drafts);
     previous = step.next;
   }
-  return { drafts, last: previous as HomeDecisions };
+  return { drafts, last: previous as HomeDecisions, asked };
 }
 
 const START = { status: "start", to_offset: 10, to_prefix_sha256: "s", more: false } as const;
@@ -153,6 +158,7 @@ describe("decisionStep", () => {
       readAt: READ_AT,
       saved: (key) => key === `hold.opened\tmain\tx\t${SET}`,
       topicOf: () => null,
+      pageAnswer: () => "recorded",
     });
     expect(again.drafts).toEqual([]);
   });
@@ -200,11 +206,63 @@ describe("decisionStep", () => {
   });
 
   it("leaves a close the page delivered to the page's own record", () => {
-    const { drafts } = reads([
+    const page = closed("x", { source: "myshape", answer: "A", label: "要", closed_at: SET_S + 5 });
+    const { drafts, asked } = reads([
       report({ closed_cursor: START, holds: [hold("x")] }),
-      report({ closed_holds: [closed("x", { source: "myshape", closed_at: SET_S + 5 })] }),
+      report({ closed_holds: [page] }),
+      report({ closed_holds: [page] }),
     ]);
+    expect(drafts.flat()).toEqual([]);
+    expect(asked).toEqual(["x A|要"]);
+  });
+
+  it("waits, with the cursor kept, while the page is still sending its answer", () => {
+    const page = closed("x", { source: "myshape", closed_at: SET_S + 5 });
+    const moved = { status: "delta", to_offset: 99, to_prefix_sha256: "t", more: false } as const;
+    const { drafts, last } = reads(
+      [
+        report({ closed_cursor: START, holds: [hold("x")] }),
+        report({ closed_holds: [page], closed_cursor: moved }),
+        report({ closed_holds: [page], closed_cursor: moved }),
+      ],
+      undefined,
+      ["pending", "recorded"],
+    );
+    expect(drafts.flat()).toEqual([]);
+    expect(last.cursor).toEqual({ offset: 99, sha: "t" });
+  });
+
+  it("closes like any other a page answer the board has no record of", () => {
+    const page = closed("x", { source: "myshape", closed_at: SET_S + 5 });
+    const { drafts, last } = reads(
+      [
+        report({ closed_cursor: START, holds: [hold("x")] }),
+        report({ closed_holds: [page] }),
+        report({ closed_holds: [page] }),
+      ],
+      undefined,
+      ["pending", "none"],
+    );
     expect(drafts[1]).toEqual([]);
+    expect(drafts[2]?.map((draft) => `${draft.kind} ${draft.source} ${draft.text}`)).toEqual([
+      "hold.closed myshape 待決事項「NAS 兩步驗證」已回答：要（經看板）",
+    ]);
+    expect(last.closedSeen).toEqual(["x\td-x"]);
+  });
+
+  it("keeps the cursor where it was while a page answer waits", () => {
+    const page = closed("x", { source: "myshape", closed_at: SET_S + 5 });
+    const moved = { status: "delta", to_offset: 99, to_prefix_sha256: "t", more: false } as const;
+    const { last } = reads(
+      [
+        report({ closed_cursor: START, holds: [hold("x")] }),
+        report({ closed_holds: [page], closed_cursor: moved }),
+      ],
+      undefined,
+      ["pending"],
+    );
+    expect(last.cursor).toEqual({ offset: 10, sha: "s" });
+    expect(last.closedSeen).toEqual([]);
   });
 
   it("opens and closes a decision that came and went between two reads", () => {
@@ -306,6 +364,7 @@ describe("decisionStep's edges", () => {
       readAt: READ_AT,
       saved: (key) => key === "hold.opened\tmain\tx\t#d-x",
       topicOf: () => null,
+      pageAnswer: () => "recorded",
     });
     expect(step.drafts.map((draft) => draft.kind)).toEqual(["hold.closed"]);
   });

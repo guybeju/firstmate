@@ -482,7 +482,7 @@ C58 之後看板只記得在頁面上答的；在聊天裡答、first mate 自�
 - 讀取腳本多報 `holds[].hold_set`、`closed_holds[]` 與 `closed_cursor`（[contracts](contracts.markdown) 第 4 節的 C12、C13）；`closed_holds[]` 讀 backlog 裡每一筆的 Resolution 紀錄，加上游標之後搬進封存的。
 - `bin/fm-captain-hold.sh` 每次 hold、作答、放行在 `state/captain-hold-events.jsonl` 寫一行確切的時間（contracts 第 2 節的第三個例外）。
 - 看板讀到新的 hold 寫 `hold.opened`、讀到新的已關待決事項寫 `hold.closed`，經 `commitChange` 存，帶 `key` 只寫一次；`data/myshape/decisions.json` 記每個 home 上一次看到的，第一次讀到一個 home 時什麼都不記（第 3.3、3.7 節）。
-- 一個待決事項一筆開啟、一筆關閉：在看板作答的，關閉是看板送到時寫的 `hold.answered`，讀取資料裡 `source` 是 `myshape` 的那一筆不另寫。
+- 一個待決事項一筆開啟、一筆關閉：在看板作答的，關閉是看板送到時寫的 `hold.answered`，讀取資料裡 `source` 是 `myshape` 的那一筆不另寫；那個作答還在送出時先等，看板沒有它的紀錄時照一般的關閉寫。
 - 防呆：`decisions.test.ts`、`stage-1-feed.sh` 的 `test_closed_decisions`、`stage-5-http.sh` 的 `test_decisions_open_and_close_once`、`stage-7-upgrade.sh` 的從前一版升上來與退回去、`check-state-writers.sh` 檢查 `decisions.json` 只有 `decisions.ts` 寫、紀錄只經 `saveRecords`。
 - 還看不到的列在 [handover](handover.markdown) 第 4 節。
 
