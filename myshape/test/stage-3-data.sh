@@ -182,7 +182,7 @@ test_updates_and_topics() {
   assert_equals "gone-task:task.cleaned_up gone-task:task.merged gone-task:task.dispatched ship-a:task.pr_ready ship-a:task.status ship-a:task.dispatched" "$out" \
     "ledger events must be listed newest first under their task's topic"
   assert_equals "https://example.invalid/pull/7|working：halfway" \
-    "$(view '[.updates[] | select(.task == "ship-a")] | "\(.[0].pr)|\(.[1].text)"')" \
+    "$(view '[.updates[] | select(.task == "ship-a" and .source == "ledger")] | "\(.[0].pr)|\(.[1].text)"')" \
     "updates must carry the PR link and the status text"
   assert_equals 3 "$(view '[.updates[] | select(.source == "board" and .event == "topic.created")] | length')" \
     "system records must appear among the updates"
