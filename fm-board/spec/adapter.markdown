@@ -49,7 +49,10 @@ stderr 第一行指出新的指令，第二行說使用者還要做什麼：這�
 
 看板服務執行 home 的 `config/myshape-aggregator.json` 寫的兩支程式（contracts 第 7 節）。
 first mate 的設定檔是 `{"v":1,"name":"firstmate","feed":"bin/fm-board.sh","deliver":"bin/fm-board.sh"}`：兩支都是 `bin/fm-board.sh`，看板加上 `feed` 或 `deliver`；它們的程式在 `bin/fm-board-io-lib.sh`，檔頭寫明每一種跑什麼。
-`fm-board.sh setup` 與 `bind` 寫這個設定檔，session start（`bin/fm-topic-session-start.sh`）在用看板的主 home 少了它時也寫，然後跑 `myshape.sh open`，把沒有設定檔就啟動的看板換掉；已經有的設定檔，不管寫什麼都不改；secondmate 的 home 不跑看板，不寫。
+寫這個設定檔的只有 `fm-board.sh` 裡一個函式：`setup` 與 `bind` 用它；session start（`bin/fm-topic-session-start.sh`）在用看板的主 home 少了它時經 `bind` 寫，然後跑 `myshape.sh open`，把沒有設定檔就啟動的看板換掉；`tag`、`split`、`adopt` 在用看板的 home（不是 secondmate 的 home，而且有 `state/myshape/token`）少了它時先寫好，在 stderr 印一行「看板的 aggregator 設定原本不在，已寫好：firstmate（config/myshape-aggregator.json）」。
+看板自己跑的 `feed` 與 `deliver`（包括 `deliver` 為歸併跑的 `tag`，看板給它們 `MYSHAPE_HOME`）、`bin/myshape.sh` 與看板服務都不寫。
+它只寫上面那一行內容、不收參數，路徑上已經有的檔或連結不管寫什麼都不換掉；secondmate 的 home 不跑看板，不寫。
+所以只刪掉設定檔不會讓看板一直不接：下一次 session start 或下一個這些指令會寫回來；要一直不接，在那個路徑放一個別的內容的檔（例如空檔），看板把它當成沒有程式。
 `bin/fm-board.sh` 是 git 追蹤、和 HEAD 相同的 `bin/` 底下的檔，所以看板不用在頁面上確認就執行它，群組能寫也一樣；在 checkout 裡改了它、還沒提交，下一次看板啟動時就要確認，而在群組能寫的 checkout 上（例如這台 PC）要確認的程式會被拒絕，看板就接不上，直到改動提交或還原。
 看板只給程式五個環境變數：`MYSHAPE_HOME`（它的 home）、`PATH`、`HOME`、`LANG`、`TMPDIR`。
 這兩個子命令把 `MYSHAPE_HOME` 當成 `FM_HOME`；它們跑的框架指令要的其他設定都從 `HOME` 底下的檔或預設值來：遠端 home 經 `fm-on.sh` 用 `~/.ssh` 的設定與金鑰檔連，不經 `SSH_AUTH_SOCK`，終端機 backend 用預設的 socket。

@@ -388,7 +388,9 @@ deliver 的程式能執行之後，`waiting` 的寫入照稽核紀錄的順序�
 之後照 7.1 的結果處理。
 等著發的「議題變成可派」通知與它們的時間存在 `data/myshape/notify-pending.json`，啟動時讀回來，已經到時間而且還可派的立刻發；這種通知的順序是延遲結束、記下來的那一刻，不是拖曳的那一刻。
 
-**怎麼退回。** 刪掉 `config/myshape-aggregator.json` 再跑 `myshape.sh restart`：什麼程式都不執行，寫入等著；把設定檔放回去再 restart，等著的寫入各送一次。
+**怎麼關掉、怎麼退回。** 要看板不執行任何程式，在 `config/myshape-aggregator.json` 放一個別的內容的檔（例如空檔）再跑 `myshape.sh restart`：空的設定檔讀成「是空的，看板不執行任何程式」，什麼都不執行，寫入等著。
+只刪掉設定檔留不久：替 home 寫設定檔的 aggregator 會再寫回來（first mate 在下一次 session start 或下一個會碰看板的 `fm-board.sh` 指令寫，[adapter](../../fm-board/spec/adapter.markdown) 第 3 節），它從不改掉路徑上已經有的檔。
+要再接上，換回正確的設定檔（first mate 是刪掉那個檔再跑 `fm-board.sh bind`）再 restart，等著的寫入各送一次。
 退回這個改動的 commit：看板又只執行寫死的 `<code root>/bin/fm-board.sh`，設定檔與確認紀錄留著、不被讀。
 
 `myshape.sh status` 寫出 code root（「程式目錄」）、設定檔的名稱與兩個路徑、有沒有接上與原因；設定檔和服務啟動時不同時另寫一行。

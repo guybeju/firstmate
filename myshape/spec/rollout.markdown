@@ -59,7 +59,7 @@
 ## 之後怎麼更新
 
 - **看板有新版**：合併進 `carry` 並推上 fork，然後在主 home 跑 `/updatefirstmate`。下一個議題指令會發現服務的程式版本不同，自動換掉舊服務。
-- **看板改由設定檔接上 aggregator 的那一次**（C60）：主 home 沒有 `config/myshape-aggregator.json` 時，更新之後第一次 session start 替它寫好 first mate 的設定檔並換掉在跑的看板，不用手動做什麼；一開始就用 `bin/fm-board.sh setup` 設定的新 home 也有。退回：刪掉設定檔再 `bin/myshape.sh restart`，看板什麼程式都不執行、寫入等著；退回那個 commit，看板又只執行寫死的 `bin/fm-board.sh`。
+- **看板改由設定檔接上 aggregator 的那一次**（C60）：主 home 沒有 `config/myshape-aggregator.json` 時，更新之後第一次 session start 替它寫好 first mate 的設定檔並換掉在跑的看板，`bin/fm-board.sh` 的 `tag`、`split`、`adopt` 在那之前跑到時也會先寫好，不用手動做什麼；一開始就用 `bin/fm-board.sh setup` 設定的新 home 也有。更新之後到第一個這種指令或 session start 之前，先跑的 `bin/myshape.sh` 指令會換上還沒有設定檔的看板：頁面寫「沒有接上 aggregator（沒有 config/myshape-aggregator.json）」，要送出的等著，之後自己接上、依序送出。關掉：在設定檔的路徑放一個空檔再 `bin/myshape.sh restart`，看板什麼程式都不執行、寫入等著（只刪掉會被寫回來）；退回那個 commit，看板又只執行寫死的 `bin/fm-board.sh`。
 - **上游有新版**：由 fleet 把上游的 `main` 合併進 `carry`（2026-11-17 起；原本寫的是看板開發用的 clone）。
   合併做在一個分支上：從 fork 的 `carry` 開分支，開發用的 clone 沒有上游的 remote，用網址直接 fetch 再合併（`git fetch https://github.com/kunchenguid/firstmate.git main && git merge FETCH_HEAD`），推這個分支，開一個 base 是 `carry` 的 PR，用「Create a merge commit」合併。
   不 squash、不 rebase，也不直接推到 `carry`：`carry` 的規則集 `carry-required-lint` 要求 `Lint 1` 與 `Lint 2` 兩個檢查通過、不能強推、不能刪除，略過名單是空的，所以沒通過這兩個檢查的 commit 推不上 `carry`。

@@ -103,6 +103,9 @@ export function readBinding(file, uid) {
     const sha256 = sha256Of(bytes);
     if (problem !== null)
         return { kind: "invalid", reason: problem, sha256 };
+    // An empty file is how a home turns the board's programs off for good.
+    if (bytes.toString("utf8").trim() === "")
+        return { kind: "invalid", reason: "是空的，看板不執行任何程式", sha256 };
     const parsed = parseBinding(bytes.toString("utf8"));
     return typeof parsed === "string"
         ? { kind: "invalid", reason: parsed, sha256 }

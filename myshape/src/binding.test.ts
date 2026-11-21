@@ -93,6 +93,13 @@ describe("readBinding", () => {
     expect(readBinding(file(), UID + 1)).toMatchObject({ kind: "invalid" });
   });
 
+  it("reads an empty file as a binding that runs nothing", () => {
+    fs.writeFileSync(file(), "");
+    expect(roleReason(checkRole(readBinding(file(), UID), "deliver", input()))).toBe(
+      "config/myshape-aggregator.json 不能用：是空的，看板不執行任何程式",
+    );
+  });
+
   it("names what is wrong with the content", () => {
     fs.writeFileSync(file(), '{"v":1,"name":"plain","feed":["bin/feed"],"deliver":"bin/feed"}');
     expect(checkRole(readBinding(file(), UID), "feed", input())).toEqual({
