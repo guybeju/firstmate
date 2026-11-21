@@ -703,8 +703,8 @@ test_plain_changes_are_marked() {
       fail "a command-made $kind must be marked plain 用指令: $(printf '%s\n' "$events" | grep "\"kind\":\"$kind\"" | tail -n 1)"
   done
   post "$PH" topics/rename '{"id":"H2","value":"H2c"}' >/dev/null
-  grep '"kind":"topic.renamed"' "$PH/data/myshape/events.jsonl" | tail -n 1 | grep -q '（在頁面上）' ||
-    fail "a page-made rename must be marked 在頁面上"
+  grep '"kind":"topic.renamed"' "$PH/data/myshape/events.jsonl" | tail -n 1 | grep -q '（你在頁面上）' ||
+    fail "a page-made rename must be marked 你在頁面上"
   assert_contains "$(p find --all H2)" "移到「一般」第 1（用指令）" "find --all must list the move"
   assert_contains "$(p find --all H2)" "目標改為「new goal」（用指令）" "find --all must list the goal change"
   pass "every command-made change to the captain's topics is marked as the agent's (AT7.6)"

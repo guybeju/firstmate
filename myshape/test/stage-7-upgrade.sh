@@ -29,6 +29,16 @@
 # waiting for adoption, topics.json still carries the mark for an older
 # reader, and the message reaches the stub once more and is delivered.
 #
+# Every change saves its record, B3 to the record guarantee: the B3 board
+# opens a topic and a hands-on item, records the captain's 做完了 and leaves a
+# close proposal, all as lines with no record id and files with no outbox;
+# then this working tree's board files are committed on top. The next command
+# replaces the service; its first start finds no outbox and replays nothing,
+# so events.jsonl is byte-identical; the next changes write records with ids
+# and the commit files carry their outbox; the closed item lists the B3
+# board's lines with the new close. Going back to B3 code, its board reads
+# the new lines, shows them, and its next change drops the outbox.
+#
 # Each base is pinned to carry's commit before its change, not computed as a
 # merge base: once the change is merged, the merge base is the change itself
 # and the step would test nothing. In both steps the new side runs with a stub
@@ -48,12 +58,13 @@ set -u
 BASE=5324261c
 BASE_B2=990ffb88
 BASE_B3=c5a54085
+BASE_RECORDS=0c320a14
 # The board's files at the base, under the names they had before the rename.
 BASE_BOARD_FILES="bin/fm-topic.sh bin/fm-topic-lib.sh topic-board/dist topic-board/public topic-board/package.json"
 for tool in jq node curl git; do
   command -v "$tool" >/dev/null 2>&1 || { echo "skip: $tool not found"; exit 0; }
 done
-for rev in "$BASE" "$BASE_B2" "$BASE_B3"; do
+for rev in "$BASE" "$BASE_B2" "$BASE_B3" "$BASE_RECORDS"; do
   git -C "$ROOT" cat-file -e "$rev^{commit}" 2>/dev/null || { echo "not ok - base $rev is not in this checkout" >&2; exit 1; }
 done
 TMP_ROOT=$(fm_test_tmproot tb-s7u)
@@ -475,9 +486,105 @@ test_b3_the_message_in_flight_arrives_once() {
   pass "the message in flight across B2 to B3 is delivered once, and the new side reaches no Firstmate file"
 }
 
+# --- B3 to the record guarantee ---------------------------------------------------
+
+R_DIR=""
+R_OLD_PID=""
+
+# install_board_files <revision or empty for this tree>: the board's files in SA_ROOT, committed.
+install_board_files() {
+  local path
+  for path in $TB_BOARD_FILES; do
+    rm -rf "${SA_ROOT:?}/$path"
+    mkdir -p "$SA_ROOT/$(dirname "$path")"
+    if [ -z "$1" ]; then
+      cp -R "$ROOT/$path" "$SA_ROOT/$path"
+    else
+      # shellcheck disable=SC2086 # one path, which may be a directory.
+      git -C "$ROOT" archive "$1" $path | tar -x -C "$SA_ROOT"
+    fi
+  done
+  sa_install_stub plain "$R_DIR/agg"
+  printf '{}\n' > "$R_DIR/agg/plain/main.json"
+  sa_trip_root "$SA_ROOT"
+}
+
+test_r_the_b3_board_leaves_lines_without_ids() {
+  R_DIR=$TMP_ROOT/records
+  SA_ROOT=$TMP_ROOT/root/records-board
+  tb_make_board_root "$SA_ROOT" "$BASE_RECORDS" >/dev/null
+  SA_ENV=(MYSHAPE_TEST=1 MYSHAPE_READ_MS=300)
+  sa_install_stub plain "$R_DIR/agg"
+  printf '{}\n' > "$R_DIR/agg/plain/main.json"
+  MAIN=$(sa_home records-main)
+  RUNTIME=$MAIN/state/myshape
+  sa_decoys "$MAIN"
+  sa "$MAIN" open >/dev/null || fail "the B3 board did not start"
+  sa "$MAIN" create "Rec A" --goal "a" --id rec-a >/dev/null
+  sa "$MAIN" todo add it1 "Log in" --topic rec-a --do "log in" >/dev/null
+  [ "$(api todos/claim '{"task":"it1"}' | jq -r '.ok')" = true ] || fail "做完了 on the B3 page failed"
+  sa "$MAIN" close-propose rec-a --reason "done" >/dev/null
+  assert_equals 4 "$(grep -c '"src":"board"' "$MAIN/data/myshape/events.jsonl")" "the B3 board must write one line per step"
+  assert_equals 0 "$(grep -c '"rid"' "$MAIN/data/myshape/events.jsonl" || true)" "B3 lines carry no record id"
+  assert_equals "false false" "$(jq 'has("outbox")' "$MAIN/data/topics.json") $(jq 'has("outbox")' "$MAIN/data/myshape/todos.json")" \
+    "B3 files carry no outbox"
+  cp "$MAIN/data/myshape/events.jsonl" "$TMP_ROOT/records-events.before"
+  R_OLD_PID=$(tb_board_pid "$MAIN")
+  pass "the B3 board writes its lines without record ids and its files without an outbox"
+}
+
+test_r_the_first_start_replays_nothing() {
+  install_board_files ""
+  ps -p "$R_OLD_PID" >/dev/null 2>&1 || fail "the B3 board must still be running when the change lands"
+  sa "$MAIN" open >/dev/null || fail "the next command after the change landed failed"
+  : > "$SA_TRIP_LOG"
+  assert_not_equals "$R_OLD_PID" "$(tb_board_pid "$MAIN")" "the next command must replace the B3 service"
+  assert_contains "$(sa "$MAIN" status)" "程式版本：$ROOT_COMMIT" "status must name the new commit"
+  cmp -s "$TMP_ROOT/records-events.before" "$MAIN/data/myshape/events.jsonl" ||
+    fail "the first start must find no outbox and replay nothing"
+  assert_equals "false" "$(jq 'has("outbox")' "$MAIN/data/topics.json")" "a start alone must not rewrite topics.json"
+  pass "the first start of the new code on B3 files replays nothing and rewrites nothing"
+}
+
+test_r_changes_now_save_their_records() {
+  local kept done_rid
+  [ "$(api topics/keep '{"id":"rec-a"}' | jq -r '.ok')" = true ] || fail "先不關 on the page failed"
+  kept=$(grep '"kind":"topic.kept"' "$MAIN/data/myshape/events.jsonl" | jq -r '"\(.rid) \(.by) \(.text)"')
+  assert_contains "$kept" " captain 議題「Rec A」先不關（你在頁面上）" "先不關 must save a record by the captain"
+  assert_equals "${kept%% *}" "$(jq -r '.outbox[0].rid' "$MAIN/data/topics.json")" "topics.json must carry the record in its outbox"
+  sa "$MAIN" todo "done" it1 >/dev/null || fail "todo done failed"
+  done_rid=$(grep '"kind":"todo.done"' "$MAIN/data/myshape/events.jsonl" | jq -r '.rid')
+  assert_equals "$done_rid" "$(jq -r '.outbox[0].rid' "$MAIN/data/myshape/todos.json")" "todos.json must carry the close in its outbox"
+  assert_equals "todo.done todo.claimed todo.opened" \
+    "$(api_state '.closed_todos[] | select(.item == "it1") | .records | map(.event) | join(" ")')" \
+    "the closed item must list the B3 board's lines with the new close"
+  pass "after the upgrade every change saves a record with an id, and old lines still show in the item's history"
+}
+
+test_r_going_back_drops_only_the_outbox() {
+  local pid
+  pid=$(tb_board_pid "$MAIN")
+  install_board_files "$BASE_RECORDS"
+  sa "$MAIN" open >/dev/null || fail "the next command after going back failed"
+  : > "$SA_TRIP_LOG"
+  assert_not_equals "$pid" "$(tb_board_pid "$MAIN")" "the next command must replace the new service with the B3 one"
+  assert_contains "$(api_state '[.updates[].text] | join("\n")')" "議題「Rec A」先不關（你在頁面上）" \
+    "the B3 board must show the new records as text"
+  sa "$MAIN" goal rec-a "a2" >/dev/null || fail "a change on the B3 board after going back failed"
+  assert_equals "false" "$(jq 'has("outbox")' "$MAIN/data/topics.json")" "the B3 board's next change drops the outbox"
+  assert_equals 1 "$(grep -c '"kind":"topic.kept"' "$MAIN/data/myshape/events.jsonl")" "the saved records stay, once"
+  sa "$MAIN" stop >/dev/null
+  sa_check_decoys "$MAIN"
+  sa_assert_no_boards
+  sa_assert_no_trips
+  pass "going back to B3 code keeps every record and drops only the outbox"
+}
+
 fm_test_run test_the_old_board_makes_its_data test_the_new_code_refuses_until_the_move \
   test_the_next_command_after_the_move_replaces_the_board test_the_note_in_flight_arrives_once test_the_new_side_reaches_no_firstmate_file \
   test_b2_the_b1_board_leaves_writes_settled_and_in_flight test_b2_the_next_command_replaces_the_board \
   test_b2_unfinished_writes_resume_or_show_once test_b2_the_new_side_reaches_no_firstmate_file \
   test_b3_the_b2_board_keeps_a_mark_and_a_message_in_flight test_b3_the_first_start_keeps_the_mark \
-  test_b3_the_message_in_flight_arrives_once
+  test_b3_the_message_in_flight_arrives_once \
+  test_r_the_b3_board_leaves_lines_without_ids test_r_the_first_start_replays_nothing \
+  test_r_changes_now_save_their_records test_r_going_back_drops_only_the_outbox

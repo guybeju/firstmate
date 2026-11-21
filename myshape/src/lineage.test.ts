@@ -3,9 +3,15 @@ import { findLines } from "./lineage.js";
 import * as topics from "./topics.js";
 import type { Queue, TopicResult, TopicState } from "./topics.js";
 
+/** A result that must be a change. */
+function changeOf(result: TopicResult): topics.TopicChange {
+  if (!result.ok || !result.changed) throw new Error(`expected a change: ${result.line}`);
+  return result;
+}
+
 function done(result: TopicResult): TopicState {
   if (!result.ok) throw new Error(`refused: ${result.line}`);
-  return result.state;
+  return result.state as TopicState;
 }
 
 /** Topics: 帳務重構 (billing, high), 登入 (login, normal), 點子 (idea, later). */
@@ -205,10 +211,12 @@ describe("findLines for working out what happened", () => {
     let state = fixture();
     state = done(
       topics.stampHistory(
-        topics.split(
-          state,
-          { from: "billing", name: "退款", goal: "g", id: "refunds", reason: "帳務太寬" },
-          "2026-11-16T19:36:44Z",
+        changeOf(
+          topics.split(
+            state,
+            { from: "billing", name: "退款", goal: "g", id: "refunds", reason: "帳務太寬" },
+            "2026-11-16T19:36:44Z",
+          ),
         ),
         0,
         "command",
@@ -216,7 +224,11 @@ describe("findLines for working out what happened", () => {
     );
     state = done(topics.closePropose(state, "refunds", "都做完了", "2026-11-17T00:00:00Z"));
     state = done(
-      topics.stampHistory(topics.archive(state, "refunds", "2026-11-17T03:26:21Z"), 1, "page"),
+      topics.stampHistory(
+        changeOf(topics.archive(state, "refunds", "2026-11-17T03:26:21Z")),
+        1,
+        "page",
+      ),
     );
     state = done(topics.merge(state, "login", "billing", "2026-11-18T00:00:00Z"));
     expect(findLines(state, "退款", [])).toEqual([
@@ -256,14 +268,14 @@ describe("findLines for working out what happened", () => {
     let state = fixture();
     state = done(
       topics.stampHistory(
-        topics.move(state, "login", "high", { first: true }, "2026-11-19T00:00:00Z"),
+        changeOf(topics.move(state, "login", "high", { first: true }, "2026-11-19T00:00:00Z")),
         state.doc.history.length,
         "command",
       ),
     );
     state = done(
       topics.stampHistory(
-        topics.setGoal(state, "login", "只做扣款", "2026-11-19T00:00:01Z"),
+        changeOf(topics.setGoal(state, "login", "只做扣款", "2026-11-19T00:00:01Z")),
         state.doc.history.length,
         "page",
       ),

@@ -13,13 +13,20 @@ TMP_ROOT=$(fm_test_tmproot fm-board-stage-1-tag)
 . "$ROOT/dispatch-plan/test/helpers.sh"
 
 test_tag_writes_and_is_idempotent() {
-  local home out
+  local home out written now
   home=$(tb_make_home tag-basic)
   tb_write_topics "$home"
   out=$(tb_run "$home" "$BOARD" tag task-1 billing)
   assert_contains "$out" "ok task-1" "tag did not report success"
   grep -Eq '^billing [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$' "$home/data/task-1/topic" ||
     fail "tag line has the wrong shape: $(cat "$home/data/task-1/topic")"
+  # The line is the tag's record (the board derives a line on the topic page
+  # from it), so its time must be a real time, and now.
+  written=$(cut -d' ' -f2 "$home/data/task-1/topic" | jq -Rr 'fromdateiso8601') ||
+    fail "tag line's time does not parse: $(cat "$home/data/task-1/topic")"
+  now=$(date -u +%s)
+  [ $((now - written)) -ge 0 ] && [ $((now - written)) -lt 600 ] ||
+    fail "tag line's time is not when it was written: $written, now $now"
   tb_run "$home" "$BOARD" tag task-1 billing >/dev/null
   assert_equals 1 "$(wc -l < "$home/data/task-1/topic" | tr -d ' ')" "re-tagging the same topic appended a line"
   tb_run "$home" "$BOARD" tag task-1 t2 >/dev/null

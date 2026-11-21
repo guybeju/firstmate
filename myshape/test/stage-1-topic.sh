@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Behavior of myshape.sh without the board service: list, the token guard,
-# the old forms, and usage.
+# the old forms, usage, and that every write goes to the board service.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -110,6 +110,74 @@ test_variables_are_braced_before_wide_characters() {
   pass "no variable is directly followed by a non-ASCII character"
 }
 
+# Guard 3.6: myshape.sh cannot change an item behind the board's back, as
+# todo add and todo done once did through the backlog. Every subcommand its
+# usage names, except list, is handed to the board's client (a node stand-in
+# here that records its argv and starts nothing), nothing under data/ changes
+# without the board, and every one that changes the board is an operation in
+# the board's table (myshape/dist/ops.js OPERATIONS).
+test_every_write_reaches_the_board() {
+  local home fakebin log real_node sub op before ops subs case_args out
+  real_node=$(command -v node) || { pass "skip: node not found"; return 0; }
+  home=$(tb_make_home writes)
+  tb_free_port > "$home/config/myshape-port"
+  tb_board_has_run "$home"
+  tb_write_topics "$home"
+  fakebin=$(fm_fakebin "$home")
+  log="$home/node-argv.log"
+  cat > "$fakebin/node" <<SH
+#!/usr/bin/env bash
+if [ "\$1" = "-p" ]; then echo 22; exit 0; fi
+printf '%s\\n' "\$*" >> "$log"
+cat > /dev/null
+SH
+  chmod +x "$fakebin/node"
+  before=$(cd "$home/data" && find . -type f -exec cksum {} + | sort)
+  subs=$(tb_run "$home" "$TOPIC" --help |
+    sed -nE 's/^[[:space:]]+myshape\.sh (todo [a-z-]+|[a-z][a-z-]*( \| [a-z][a-z-]*)*).*/\1/p' |
+    tr '|' '\n' | sed 's/^ *//; s/ *$//' | sort -u)
+  [ -n "$subs" ] || fail "--help names no subcommand"
+  ops=$("$real_node" --input-type=module -e "import('$ROOT/myshape/dist/ops.js').then((m) => console.log(Object.keys(m.OPERATIONS).join('\\n')))") ||
+    fail "could not read the operation table from myshape/dist/ops.js"
+  while IFS= read -r sub; do
+    case "$sub" in
+      list) continue ;;
+      create) case_args='create N --goal g' ;;
+      merge) case_args='merge billing login' ;;
+      close-propose) case_args='close-propose billing --reason r' ;;
+      move) case_args='move billing high' ;;
+      rename) case_args='rename billing N' ;;
+      split) case_args='split billing P --goal g' ;;
+      goal) case_args='goal billing g' ;;
+      archive) case_args='archive billing' ;;
+      reopen) case_args='reopen gone' ;;
+      summary | retract) case_args="$sub task-1 ready -" ;;
+      which) case_args='which task-1' ;;
+      find) case_args='find billing' ;;
+      open | status | stop | restart | reset-token) case_args=$sub ;;
+      'todo add') case_args='todo add item-1 T --topic billing --do d' ;;
+      'todo done') case_args='todo done item-1' ;;
+      'todo failed') case_args='todo failed item-1 --reason r' ;;
+      'todo obsolete') case_args='todo obsolete item-1 --reason r' ;;
+      'todo adopt-done') case_args='todo adopt-done item-1' ;;
+      *) fail "myshape.sh $sub has no case here: add one, and an operation for it if it changes the board" ;;
+    esac
+    : > "$log"
+    # shellcheck disable=SC2086 # each case is a list of words.
+    out=$(printf 'text\n' | PATH="$fakebin:$PATH" tb_run "$home" "$TOPIC" $case_args 2>&1) ||
+      fail "myshape.sh $sub failed before reaching the board: $out"
+    op=${sub/todo /todo-}
+    assert_contains "$(cat "$log")" "-- $op" "myshape.sh $sub must hand $op to the board's client"
+    case "$sub" in
+      open | status | stop | restart | reset-token | summary | retract | which | find) ;;
+      *) printf '%s\n' "$ops" | grep -qxF "$op" || fail "myshape.sh $sub changes the board but $op is not an operation in OPERATIONS" ;;
+    esac
+  done <<< "$subs"
+  assert_equals "$before" "$(cd "$home/data" && find . -type f -exec cksum {} + | sort)" \
+    "myshape.sh must not change data/ without the board"
+  pass "every myshape.sh write is handed to the board, and every change is a board operation"
+}
+
 test_usage() {
   local home out
   home=$(tb_make_home usage)
@@ -121,4 +189,5 @@ test_usage() {
 }
 
 fm_test_run test_list test_list_without_jq test_refused_where_no_board_has_run \
-  test_old_forms_name_the_new_command test_variables_are_braced_before_wide_characters test_usage
+  test_old_forms_name_the_new_command test_variables_are_braced_before_wide_characters test_usage \
+  test_every_write_reaches_the_board

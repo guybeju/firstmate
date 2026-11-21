@@ -67,3 +67,6 @@ pre.q{white-space:pre-wrap;font:inherit;margin:0 0 4px}
 .todo .guide{white-space:pre-wrap;color:var(--mute);margin:2px 0}
 .todo .cmd-row{margin:4px 0}
 details>summary{cursor:pointer;color:var(--mute)}
+details.closed{margin:4px 0 4px 12px}
+details.closed>summary{color:var(--ink)}
+details.closed>summary .t{color:var(--mute);font-size:12px;margin-right:6px}

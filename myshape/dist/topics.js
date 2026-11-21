@@ -1,5 +1,3 @@
-// The topic model and every change the board can make to it. Pure: no I/O, no
-// clock. Callers pass the current time and persist the returned state.
 export const QUEUES = ["high", "normal", "later"];
 export const HISTORY_KINDS = [
     "merged",
@@ -52,10 +50,10 @@ function refuse(line) {
     return { ok: false, code: "refused", line };
 }
 function unchanged(state, line) {
-    return { ok: true, state, line, changed: false, events: [], dispatchable: [] };
+    return { ok: true, changed: false, state, line };
 }
-function changed(state, line, events = [], dispatchable = []) {
-    return { ok: true, state, line, changed: true, events, dispatchable };
+function changed(state, line, records, dispatchable = []) {
+    return { ok: true, changed: true, state, line, records, dispatchable };
 }
 function clone(state) {
     return structuredClone(state);
@@ -301,7 +299,7 @@ export function move(state, rawId, queue, position, now) {
     }
     const next = clone(state);
     removeFromQueues(next.doc, id);
-    next.doc.queues[queue] = target;
+    next.doc.queues[queue] = [...target];
     const place = target.indexOf(id) + 1;
     const name = found.topic.name;
     next.doc.history.push({ at: now, kind: "moved", topic: id, name, queue, position: place });
@@ -400,11 +398,13 @@ export function keepOpen(state, rawId) {
         return unchanged(state, `ok ${id} 沒有關閉的提議`);
     const next = clone(state);
     delete next.doc.topics[id].close_proposal;
-    return changed(next, `ok ${id} 先不關`);
+    return changed(next, `ok ${id} 先不關`, [
+        { kind: "topic.kept", topic: id, text: `議題「${topic.name}」先不關` },
+    ]);
 }
 /** Marks the history entries a change just added with where the change was made. */
 export function stampHistory(result, before, by) {
-    if (!result.ok || !result.changed || result.state.doc.history.length <= before)
+    if (result.state.doc.history.length <= before)
         return result;
     const state = clone(result.state);
     for (const entry of state.doc.history.slice(before))

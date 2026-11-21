@@ -13,6 +13,53 @@ export const DEFAULT_WRITE_TIMINGS = {
     resumeWindowMs: 30 * 60_000,
     commandTimeoutMs: 400_000,
 };
+/**
+ * The record a delivered write leaves, by its kind: an answer and a tag change
+ * the aggregator's side, so the board records them; a message, a direct
+ * message and a notice are communication, not a change, and leave none. A new
+ * kind does not compile until it is listed here.
+ */
+export const ON_DELIVERED = {
+    answer: "hold.answered",
+    tag: "agent.tagged",
+    message: null,
+    direct: null,
+    notice: null,
+};
+/**
+ * The record a write handled elsewhere leaves: an answer found its decision
+ * already ended, which the board records; a tag found the task filed by
+ * someone else, which is that filing's own record.
+ */
+export const ON_HANDLED_ELSEWHERE = {
+    answer: "hold.closed",
+    tag: null,
+    message: null,
+    direct: null,
+    notice: null,
+};
+/** The record of how a write ended, or null when it leaves none. */
+export function deliveryRecord(record) {
+    const kinds = record.state === "delivered" ? ON_DELIVERED : ON_HANDLED_ELSEWHERE;
+    const kind = record.state === "delivered" || record.state === "handled_elsewhere"
+        ? kinds[record.action.kind]
+        : null;
+    if (kind === null)
+        return null;
+    const where = { topic: record.topic, home: record.home, task: record.task };
+    const who = `${record.home}/${record.task ?? ""}`;
+    if (record.action.kind !== "answer")
+        return { kind, ...where, text: `${who} ${record.text}` };
+    const outcome = record.action.label === "" ? record.action.answer : record.action.label;
+    if (kind === "hold.answered")
+        return { kind, ...where, outcome, text: `在看板回答 ${who}：${record.text}` };
+    return {
+        kind,
+        ...where,
+        outcome: "elsewhere",
+        text: `待決事項 ${who} 已在別處結束，看板上的回答「${record.text}」沒有送出`,
+    };
+}
 const AUDIT_MODE = 0o600;
 const ERROR_MAX = 600;
 const UNFINISHED = ["sending", "retrying"];
@@ -209,8 +256,8 @@ export class WriteEngine {
             reconcile = true;
             if (outcome.kind !== "retry") {
                 this.setState(record, outcome.kind, outcome.kind === "failed" ? outcome.error : null);
-                if (outcome.kind === "delivered")
-                    this.host.onDelivered(record);
+                if (outcome.kind !== "failed")
+                    this.host.onFinished(record);
                 return;
             }
             const delay = this.timings.retryDelaysMs[record.attempt];

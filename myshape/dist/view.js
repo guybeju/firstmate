@@ -1,7 +1,15 @@
 import { orNull } from "./files.js";
 import { QUEUES, resolveTopicId } from "./topics.js";
 import { itemTopic } from "./todos.js";
-const MAX_UPDATES = 2000;
+/**
+ * How many ledger lines the view keeps per topic, and for lines with no topic.
+ * Board records and lines derived from tags are never cut: they are the
+ * topic's history, however busy the rest of the fleet is.
+ */
+export const LEDGER_PER_TOPIC = 500;
+/** How long after a tag line its agent.tagged record may be saved and still be its record. */
+const TAG_RECORD_SKEW_S = 300;
+const CLOSING_KINDS = new Set(["todo.done", "todo.dropped", "todo.taken_down"]);
 // Upstream keeps a hold reason on the backlog item's title line, so a reason
 // written as several lines may reach the board as one. The marker is therefore
 // accepted anywhere in the last line, not only at its start.
@@ -318,32 +326,114 @@ function ledgerText(event) {
     }
     return "";
 }
-function updatesOf(input, placer) {
-    const updates = input.events.map((event) => {
-        if (event.src === "board") {
-            return {
-                ts: event.ts,
-                source: "board",
-                home: event.home,
-                task: event.task,
-                event: event.kind,
-                text: event.text,
-                pr: null,
-                topic: event.topic === null ? null : resolveTopicId(input.topics.doc, event.topic),
-            };
-        }
-        return {
-            ts: event.ts,
-            source: "ledger",
-            home: event.home,
-            task: event.task,
-            event: event.event,
-            text: ledgerText(event),
-            pr: prOf(event),
-            topic: placer.at(event.home, event.task, event.ts * 1000).topic,
-        };
+function boardUpdate(event, input) {
+    return {
+        ts: event.ts,
+        source: "board",
+        home: event.home,
+        task: event.task,
+        event: event.kind,
+        text: event.text,
+        pr: null,
+        topic: event.topic === null ? null : resolveTopicId(input.topics.doc, event.topic),
+    };
+}
+/** Each ledger line with the topic its task had then, the newest LEDGER_PER_TOPIC per topic. */
+function ledgerUpdates(input, placer) {
+    const lines = ledgerEvents(input)
+        .map((event) => ({
+        ts: event.ts,
+        source: "ledger",
+        home: event.home,
+        task: event.task,
+        event: event.event,
+        text: ledgerText(event),
+        pr: prOf(event),
+        topic: placer.at(event.home, event.task, event.ts * 1000).topic,
+    }))
+        .toSorted((a, b) => b.ts - a.ts);
+    const kept = new Map();
+    return lines.filter((line) => {
+        const count = kept.get(line.topic) ?? 0;
+        kept.set(line.topic, count + 1);
+        return count < LEDGER_PER_TOPIC;
     });
-    return updates.toSorted((a, b) => b.ts - a.ts).slice(0, MAX_UPDATES);
+}
+/**
+ * The tag lines of one task that no agent.tagged record accounts for. A page
+ * tag writes its line first and its record once delivered, so each record
+ * takes the latest earlier line of the same topic.
+ */
+function unmatchedTags(tags, records) {
+    const unmatched = [...tags];
+    for (const record of records) {
+        const limitMs = (record.ts + TAG_RECORD_SKEW_S) * 1000;
+        const match = unmatched.findLastIndex((tag) => tag.topic === record.topic && tag.atMs <= limitMs);
+        if (match !== -1)
+            unmatched.splice(match, 1);
+    }
+    return unmatched;
+}
+/** The line a tag made by command shows, or null when its topic is not one the board knows. */
+function tagLine(input, home, task, tag) {
+    const topic = resolveTopicId(input.topics.doc, tag.topic);
+    const name = input.topics.doc.topics[topic]?.name ?? input.topics.archive.topics[topic]?.name;
+    if (name === undefined)
+        return null;
+    return {
+        ts: Math.floor(tag.atMs / 1000),
+        source: "tag",
+        home,
+        task,
+        event: "agent.tagged",
+        text: `歸到「${name}」（${input.label} 用指令）`,
+        pr: null,
+        topic,
+    };
+}
+/** The tags made by command: every tag line with a time that no agent.tagged record accounts for. */
+function tagUpdates(input) {
+    const records = input.events.filter((event) => event.src === "board" && event.kind === "agent.tagged");
+    return input.homes.flatMap((home) => Object.entries(home.report?.topics ?? {}).flatMap(([task, text]) => {
+        const own = records.filter((record) => record.home === home.id && record.task === task);
+        const timed = parseTags(text).filter((tag) => tag.atMs > 0);
+        return unmatchedTags(timed, own).flatMap((tag) => tagLine(input, home.id, task, tag) ?? []);
+    }));
+}
+function updatesOf(input, placer) {
+    const board = input.events
+        .filter((event) => event.src === "board")
+        .map((event) => boardUpdate(event, input));
+    return [...board, ...tagUpdates(input), ...ledgerUpdates(input, placer)].toSorted((a, b) => b.ts - a.ts);
+}
+/**
+ * The hands-on items that closed, from their records: each closing record
+ * ends one life of its item, with every record of the item since its last
+ * close. An id put on the board again starts a new life.
+ */
+function closedTodos(input) {
+    const lives = new Map();
+    const closed = [];
+    for (const event of input.events) {
+        if (event.src !== "board" || event.item === undefined)
+            continue;
+        const update = boardUpdate(event, input);
+        const life = [...(lives.get(event.item) ?? []), update];
+        if (!CLOSING_KINDS.has(event.kind)) {
+            lives.set(event.item, life);
+            continue;
+        }
+        lives.delete(event.item);
+        closed.push({
+            item: event.item,
+            topic: update.topic,
+            ts: event.ts,
+            text: event.text,
+            outcome: event.outcome ?? null,
+            records: life.toReversed(),
+        });
+    }
+    return closed.toReversed();
 }
 /** The PR a `ready` or `landed` summary refers to: the task's latest PR event at or before it. */
 function prForSummary(summary, events) {
@@ -394,6 +484,7 @@ export function buildView(input) {
         queued: [],
         holds: [],
         todos: [],
+        closed_todos: closedTodos(input),
         questions: [],
         updates: updatesOf(input, placer),
         summaries: input.summaries
@@ -443,7 +534,7 @@ function todoViews(input, view) {
             topic: itemTopic(input.topics, item),
             what: item.action,
             guidance: item.guidance,
-            commands: item.commands,
+            commands: [...item.commands],
             state: item.state,
             reason: item.reason,
         },

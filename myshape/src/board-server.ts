@@ -39,17 +39,19 @@ import type { Dispatchable } from "./notifier.js";
 import { DEFAULT_TIMINGS, Poller } from "./poller.js";
 import type { PollTimings } from "./poller.js";
 import type { Aggregator } from "./report.js";
-import { loadTodos, loadTopicState, saveTodos, saveTopicState } from "./store.js";
-import type { LeftoverProposal } from "./store.js";
+import { applyOperation, operationOf } from "./ops.js";
+import type { PageNotice } from "./ops.js";
+import type { Draft } from "./records.js";
+import { commitChange, loadBoard } from "./store.js";
+import type { CommitTarget, LeftoverProposal, StoredBoard } from "./store.js";
 import * as topics from "./topics.js";
-import type { MovePosition, Queue, TopicResult, TopicState } from "./topics.js";
-import * as todos from "./todos.js";
-import type { CloseWords, TodoNotice, TodoResult, TodoStore } from "./todos.js";
+import type { TodoNotice } from "./todos.js";
 import { buildView, parseTags, placeTask } from "./view.js";
 import { findLines } from "./lineage.js";
 import type { TaskTags } from "./lineage.js";
 import { DEFAULT_WRITE_TIMINGS, WriteEngine } from "./writes.js";
-import type { Action, NoticeEvent, TopicRef, WriteRecord, WriteTimings } from "./writes.js";
+import { deliveryRecord } from "./writes.js";
+import type { Action, TopicRef, WriteRecord, WriteTimings } from "./writes.js";
 
 const PRIVATE_FILE = 0o600;
 const HEALTH_PROBE_MS = 3000;
@@ -59,8 +61,6 @@ const WRITE_HISTORY_MS = 24 * 60 * 60 * 1000;
 const TEST_MODE = process.env["MYSHAPE_TEST"] === "1";
 /** What the page and the board's texts call the agent side when its report names none. */
 const DEFAULT_LABEL = "aggregator";
-/** The captain's own presses: the page may send them, the socket may not. */
-const PAGE_ONLY_OPS = ["todo-claim", "todo-drop", "todo-takedown", "keep"];
 // sizeof(sun_path) minus the terminating NUL. Node silently truncates a longer
 // path instead of failing, so the length is checked before listening.
 const SOCKET_PATH_MAX = os.platform() === "darwin" ? 103 : 107;
@@ -75,10 +75,11 @@ interface Boot {
 }
 
 interface Service extends Boot {
-  state: TopicState;
-  /** The hands-on items, kept in data/myshape/todos.json. */
-  todos: TodoStore;
+  /** The topics, the hands-on items (data/myshape/todos.json), and their last commits' records. */
+  board: StoredBoard;
   journal: Journal;
+  /** How many records this process has stamped, for the next record id. */
+  records: number;
   summaries: Summaries;
   poller: Poller;
   writes: WriteEngine;
@@ -126,237 +127,28 @@ function usage(line: string): BoardResponse {
   return { ok: false, code: "usage", line };
 }
 
-function optionalQueue(args: Record<string, unknown>): Queue | undefined | null {
-  const value = args["queue"];
-  if (value === undefined) return undefined;
-  return topics.isQueue(value) ? value : null;
-}
-
-/** Persists a topic change and turns it into the response for the caller. */
-function commit(service: Service, result: TopicResult): BoardResponse {
-  if (!result.ok) return refused(result.line);
-  if (result.changed) {
-    saveTopicState(service.paths, service.state, result.state);
-    service.notifier.observe(service.state, result.state, result.dispatchable);
-    service.state = result.state;
-    for (const event of result.events) {
-      service.journal.appendBoard({ ts: epochSeconds(), home: null, task: null, ...event });
-    }
-    service.version += 1;
-  }
-  return { ok: true, line: result.line };
-}
-
-/** A handler either rejects malformed arguments or returns the topic change to persist. */
-type TopicHandler = (
-  service: Service,
-  args: Record<string, unknown>,
-) => TopicResult | { usage: string };
-
-function movePosition(args: Record<string, unknown>): MovePosition | null {
-  const before = args["before"];
-  if (args["first"] === true) return before === undefined ? { first: true } : null;
-  if (args["last"] === true) return before === undefined ? { last: true } : null;
-  if (before === undefined) return undefined;
-  return typeof before === "string" ? { before } : null;
-}
-
-/** The `reason` argument: absent, a string, or null when it is something else. */
-function optionalReason(args: Record<string, unknown>): string | undefined | null {
-  const reason = args["reason"];
-  if (reason === undefined) return undefined;
-  return typeof reason === "string" ? reason : null;
-}
-
-const TOPIC_HANDLERS: Record<string, TopicHandler> = {
-  create: (service, args) => {
-    const name = stringField(args, "name");
-    const goal = stringField(args, "goal");
-    const queue = optionalQueue(args);
-    const id = args["id"];
-    if (name === null || goal === null) return { usage: "create 需要名稱與 --goal。" };
-    if (queue === null) return { usage: "--queue 只能是 high、normal、later。" };
-    if (id !== undefined && typeof id !== "string") return { usage: "--id 要是字串。" };
-    return topics.create(
-      service.state,
-      {
-        name,
-        goal,
-        ...(id === undefined ? {} : { id }),
-        ...(queue === undefined ? {} : { queue }),
-      },
-      now(),
-    );
-  },
-  merge: (service, args) => {
-    const from = stringField(args, "from");
-    const into = stringField(args, "into");
-    const reason = optionalReason(args);
-    if (from === null || into === null) return { usage: "merge 需要兩個議題 id。" };
-    if (reason === null) return { usage: "--reason 要是一行文字。" };
-    return topics.merge(service.state, from, into, now(), reason);
-  },
-  "close-propose": (service, args) => {
-    const id = stringField(args, "id");
-    const reason = stringField(args, "reason");
-    if (id === null || reason === null) return { usage: "close-propose 需要議題 id 與 --reason。" };
-    return topics.closePropose(service.state, id, reason, now());
-  },
-  move: (service, args) => {
-    const id = stringField(args, "id");
-    const queue = optionalQueue(args);
-    const position = movePosition(args);
-    if (id === null || queue === null || queue === undefined || position === null) {
-      return { usage: "move 需要議題 id 與佇列（high、normal、later）。" };
-    }
-    return topics.move(service.state, id, queue, position, now());
-  },
-  split: (service, args) => {
-    const from = stringField(args, "from");
-    const name = stringField(args, "name");
-    const goal = stringField(args, "goal");
-    const id = args["id"];
-    if (from === null || name === null || goal === null)
-      return { usage: "split 需要來源議題、新名稱與 --goal。" };
-    const reason = optionalReason(args);
-    if (id !== undefined && typeof id !== "string") return { usage: "--id 要是字串。" };
-    if (reason === null) return { usage: "--reason 要是一行文字。" };
-    const input = {
-      from,
-      name,
-      goal,
-      ...(id === undefined ? {} : { id }),
-      ...(reason === undefined ? {} : { reason }),
-    };
-    const result = topics.split(service.state, input, now());
-    // --dry answers what the split would do, so the caller can check its tasks first.
-    if (args["dry"] !== true || !result.ok) return result;
-    return { ...result, state: service.state, changed: false, events: [] };
-  },
-  rename: (service, args) => {
-    const id = stringField(args, "id");
-    const value = stringField(args, "value");
-    if (id === null || value === null) return { usage: "rename 需要議題 id 與名稱。" };
-    return topics.rename(service.state, id, value, now());
-  },
-  goal: (service, args) => {
-    const id = stringField(args, "id");
-    const value = stringField(args, "value");
-    if (id === null || value === null) return { usage: "goal 需要議題 id 與一行目標。" };
-    return topics.setGoal(service.state, id, value, now());
-  },
-  archive: (service, args) => {
-    const id = stringField(args, "id");
-    if (id === null) return { usage: "archive 需要議題 id。" };
-    return topics.archive(service.state, id, now());
-  },
-  keep: (service, args) => {
-    const id = stringField(args, "id");
-    return id === null ? { usage: "keep 需要議題 id。" } : topics.keepOpen(service.state, id);
-  },
-  reopen: (service, args) => {
-    const id = stringField(args, "id");
-    const queue = optionalQueue(args);
-    if (id === null || queue === null) return { usage: "reopen 需要議題 id。" };
-    return topics.reopen(service.state, id, queue, now());
-  },
-};
-
-type TodoHandler = (service: Service, args: Record<string, unknown>) => TodoResult;
-
-function todoUsage(line: string): TodoResult {
-  return { ok: false, code: "usage", line };
-}
-
-/** What a `todo-add` request asks for, or why it is malformed. */
-function todoInput(args: Record<string, unknown>): todos.TodoInput | string {
-  const commands = args["commands"];
-  const topic = args["topic"];
-  const id = stringField(args, "id");
-  const title = stringField(args, "title");
-  const action = stringField(args, "action");
-  if (id === null || title === null || action === null)
-    return "todo add 需要 task id、標題與 --do。";
-  if (!Array.isArray(commands) || !commands.every((command) => typeof command === "string"))
-    return "--cmd 要是文字。";
-  if (topic !== null && typeof topic !== "string") return "--topic 要是議題 id。";
+/** Where this service's commits go: its files and its journal. */
+function commitTarget(
+  service: Pick<Service, "paths" | "journal" | "bootId" | "records">,
+): CommitTarget {
   return {
-    id,
-    title,
-    topic,
-    action,
-    guidance: typeof args["guidance"] === "string" ? args["guidance"] : "",
-    commands,
-    ref: typeof args["ref"] === "string" ? args["ref"] : "",
-    captainCloses: args["captain_closes"] === true,
-    adopt: args["adopt"] === true,
-    ...(typeof args["since"] === "string" ? { since: args["since"] } : {}),
+    paths: service.paths,
+    sink: {
+      has: (rid) => service.journal.hasRecord(rid),
+      append: (record) => service.journal.appendRecord(record),
+    },
+    nextRid: () => {
+      service.records += 1;
+      return `r-${service.bootId}-${service.records}`;
+    },
+    nowSeconds: epochSeconds,
   };
 }
 
-/** The item id and one-line reason of a verdict, or why they are missing. */
-function verdictArgs(args: Record<string, unknown>): { task: string; reason: string } | TodoResult {
-  const task = stringField(args, "task");
-  const reason = stringField(args, "reason");
-  if (task === null) return todoUsage("需要 task id。");
-  if (reason === null) return todoUsage("需要 --reason <一行>。");
-  return { task, reason };
-}
-
-function closeByCaptain(
-  service: Service,
-  args: Record<string, unknown>,
-  words: CloseWords,
-): TodoResult {
-  const task = stringField(args, "task");
-  if (task === null) return todoUsage("需要 task id。");
-  return todos.closeByCaptain(service.todos, task, words, labelOf(service), now());
-}
-
-/** The hands-on operations: the aggregator's over the socket, the captain's on the page. */
-const TODO_HANDLERS: Record<string, TodoHandler> = {
-  "todo-add": (service, args) => {
-    const input = todoInput(args);
-    if (typeof input === "string") return todoUsage(input);
-    const agent = { name: service.aggregator?.name ?? DEFAULT_LABEL, label: labelOf(service) };
-    return todos.addItem(service.todos, service.state, input, now(), agent);
-  },
-  "todo-done": (service, args) => {
-    const task = stringField(args, "task");
-    return task === null
-      ? todoUsage("需要 task id。")
-      : todos.doneItem(service.todos, task, labelOf(service), now());
-  },
-  "todo-failed": (service, args) => {
-    const verdict = verdictArgs(args);
-    if (!("task" in verdict)) return verdict;
-    return todos.rejectItem(service.todos, verdict.task, verdict.reason, now(), labelOf(service));
-  },
-  "todo-obsolete": (service, args) => {
-    const verdict = verdictArgs(args);
-    if (!("task" in verdict)) return verdict;
-    return todos.obsoleteItem(service.todos, verdict.task, verdict.reason, now(), labelOf(service));
-  },
-  "todo-adopt-done": (service, args) => {
-    const open = args["open"];
-    if (!Array.isArray(open) || !open.every((id) => typeof id === "string"))
-      return todoUsage("adopt-done 需要還開著的項目 id。");
-    return todos.adoptDone(service.todos, open, labelOf(service));
-  },
-  "todo-claim": (service, args) => {
-    const task = stringField(args, "task");
-    return task === null
-      ? todoUsage("需要 task id。")
-      : todos.claimItem(service.todos, task, now(), labelOf(service));
-  },
-  "todo-drop": (service, args) => closeByCaptain(service, args, "不做了"),
-  "todo-takedown": (service, args) => closeByCaptain(service, args, "撤下"),
-};
-
 /** Hands the aggregator one notice about a hands-on item. */
 function submitTodoNotice(service: Service, notice: TodoNotice): void {
-  const topic =
-    notice.topic === null ? null : topics.resolveTopicId(service.state.doc, notice.topic);
+  const doc = service.board.topics.doc;
+  const topic = notice.topic === null ? null : topics.resolveTopicId(doc, notice.topic);
   submitNotice(
     service,
     {
@@ -370,35 +162,6 @@ function submitTodoNotice(service: Service, notice: TodoNotice): void {
     },
     topic,
   );
-}
-
-/**
- * Persists a change to the hands-on items: todos.json first, then the marks
- * topics.json publishes, then the records and the notices.
- */
-function commitTodos(service: Service, result: TodoResult): BoardResponse {
-  if (!result.ok) return result.code === "usage" ? usage(result.line) : refused(result.line);
-  if (!result.changed) return { ok: true, line: result.line };
-  saveTodos(service.paths, result.store);
-  service.todos = result.store;
-  const next = structuredClone(service.state);
-  next.doc.todos = todos.projectMarks(result.store);
-  saveTopicState(service.paths, service.state, next);
-  service.state = next;
-  // A hands-on record names its item, not a task, so the page prints no home/task in front of it.
-  for (const { topic, ...event } of result.events) {
-    const placed = topic === null ? null : topics.resolveTopicId(next.doc, topic);
-    service.journal.appendBoard({
-      ts: epochSeconds(),
-      home: null,
-      task: null,
-      topic: placed,
-      ...event,
-    });
-  }
-  service.version += 1;
-  for (const notice of result.notices) submitTodoNotice(service, notice);
-  return { ok: true, line: result.line };
 }
 
 function healthData(service: Service): HealthData {
@@ -463,12 +226,12 @@ async function homeArg(
  */
 async function reminderPrefix(service: Service, home: string, task: string): Promise<string> {
   const read = await withTimeout(service.poller.readFresh(home), LOOKUP_WAIT_MS, false);
-  const placement = placeTask(service.state, service.poller.snapshots(), home, task);
+  const placement = placeTask(service.board.topics, service.poller.snapshots(), home, task);
   if (!read && placement.reason === "no-tag") return `議題不明（${task}）：`;
   if (placement.topic === null) return "未分類：";
   const name =
-    service.state.doc.topics[placement.topic]?.name ??
-    service.state.archive.topics[placement.topic]?.name;
+    service.board.topics.doc.topics[placement.topic]?.name ??
+    service.board.topics.archive.topics[placement.topic]?.name;
   return `${name ?? placement.topic}：`;
 }
 
@@ -550,7 +313,7 @@ async function find(service: Service, args: Record<string, unknown>): Promise<Bo
   if (isTask) await withTimeout(service.poller.readFresh(MAIN_HOME), LOOKUP_WAIT_MS, false);
   const tasks = isTask ? taskTags(service, query) : [];
   const everything = args["all"] === true;
-  return { ok: true, line: findLines(service.state, query, tasks, everything).join("\n") };
+  return { ok: true, line: findLines(service.board.topics, query, tasks, everything).join("\n") };
 }
 
 function writeView(record: WriteRecord): Record<string, unknown> {
@@ -580,7 +343,7 @@ function visibleWrites(service: Service): Record<string, unknown>[] {
 
 function actionContext(service: Service): ActionContext {
   return {
-    topics: service.state,
+    topics: service.board.topics,
     homes: service.poller.snapshots(),
     writes: service.writes,
   };
@@ -624,13 +387,14 @@ function boardView(service: Service): Record<string, unknown> {
     polling: service.poller.active,
     writes: visibleWrites(service),
     ...buildView({
-      topics: service.state,
-      todos: service.todos,
+      topics: service.board.topics,
+      todos: service.board.todos,
       homes: service.poller.snapshots(),
       events: service.journal.events,
       summaries: service.summaries.all,
       nowMs: Date.now(),
       staleMs: service.timings.staleMs,
+      label: labelOf(service),
     }),
   };
 }
@@ -711,11 +475,10 @@ async function handle(service: Service, request: BoardRequest): Promise<BoardRes
     ? SERVICE_HANDLERS[request.op]
     : undefined;
   if (serviceHandler !== undefined) return serviceHandler(service, request.args);
-  // A hands-on op never waits for a read: the aggregator may be asking from inside one.
-  if (Object.hasOwn(TODO_HANDLERS, request.op)) return topicOp(service, request.op, request.args);
   // The records a command writes name the agent side; a board that never read
   // the root home asks it once, so they do not say "aggregator" for Firstmate.
-  if (service.aggregator === null && Object.hasOwn(TOPIC_HANDLERS, request.op))
+  // A hands-on op never waits for a read: the aggregator may be asking from inside one.
+  if (service.aggregator === null && operationOf(request.op)?.commitFile === "topics")
     await withTimeout(service.poller.readNow(MAIN_HOME), LOOKUP_WAIT_MS, false);
   return topicOp(service, request.op, request.args);
 }
@@ -834,7 +597,8 @@ function submitNotice(
 }
 
 function topicRef(service: Service, id: string): TopicRef {
-  const name = service.state.doc.topics[id]?.name ?? service.state.archive.topics[id]?.name;
+  const name =
+    service.board.topics.doc.topics[id]?.name ?? service.board.topics.archive.topics[id]?.name;
   return { id, name: name ?? id };
 }
 
@@ -844,9 +608,9 @@ function topicRef(service: Service, id: string): TopicRef {
  */
 function notifyDispatchable(service: Service, ready: Dispatchable[]): void {
   for (const { id, reason } of ready) {
-    const queue = topics.QUEUES.find((name) => service.state.doc.queues[name].includes(id));
+    const queue = topics.QUEUES.find((name) => service.board.topics.doc.queues[name].includes(id));
     if (queue === undefined || queue === "later") continue;
-    const list = service.state.doc.queues[queue];
+    const list = service.board.topics.doc.queues[queue];
     const index = list.indexOf(id);
     const place = index === list.length - 1 ? "最後" : `第 ${index + 1}`;
     const ref = topicRef(service, id);
@@ -856,27 +620,31 @@ function notifyDispatchable(service: Service, ready: Dispatchable[]): void {
   }
 }
 
-/** Records a delivered answer or tag as a system record and re-reads the home it changed. */
-function recordDelivery(service: Service, record: WriteRecord): void {
-  const kinds: Partial<Record<Action["kind"], string>> = {
-    answer: "hold.answered",
-    tag: "agent.tagged",
-  };
-  const kind = kinds[record.action.kind];
-  if (kind === undefined) return;
-  const text =
-    record.action.kind === "answer"
-      ? `在看板回答 ${record.home}/${record.task ?? ""}：${record.text}`
-      : `${record.home}/${record.task ?? ""} ${record.text}`;
-  service.journal.appendBoard({
-    ts: epochSeconds(),
-    kind,
-    topic: record.topic,
-    home: record.home,
-    task: record.task,
-    text,
+/** Saves records only, through the same commit as every change; a failure is logged, not thrown. */
+function saveRecords(
+  service: Service,
+  records: [Draft, ...Draft[]],
+  by: "captain" | "board",
+): void {
+  const change = { file: "topics" as const, next: service.board.topics, records };
+  const saved = commitChange(commitTarget(service), service.board, change, {
+    by,
+    label: labelOf(service),
   });
+  if (!saved.ok) {
+    log(`could not save a record: ${saved.line}`);
+    return;
+  }
+  service.board = saved.board;
+  if (saved.appendError !== null) log(`records wait in the outbox: ${saved.appendError}`);
   service.version += 1;
+}
+
+/** Records how a page write that changes another home ended, and re-reads that home. */
+function recordFinished(service: Service, record: WriteRecord): void {
+  const draft = deliveryRecord(record);
+  if (draft === null) return;
+  saveRecords(service, [draft], record.state === "delivered" ? "captain" : "board");
   void service.poller.readNow(record.home);
 }
 
@@ -925,8 +693,11 @@ function loadService(boot: Boot): Service {
     for (const name of removeStaleTemps(dir)) log(`removed stale temp file ${name} in ${dir}`);
   }
   const timings = pollTimings();
-  const loaded = loadTopicState(paths);
   const journal = new Journal(paths.events);
+  const aggregator = loadAggregator(paths.aggregator);
+  const starting = { ...boot, journal, records: 0 };
+  const loaded = loadBoard(commitTarget(starting), aggregator?.label ?? DEFAULT_LABEL);
+  for (const problem of loaded.appendErrors) log(`records wait in the outbox: ${problem}`);
   const run = commandRunner(boot.config);
   const unavailable = programProblem(boot.config.root);
   if (unavailable !== null) log(`not connected to an aggregator: ${unavailable}`);
@@ -935,15 +706,15 @@ function loadService(boot: Boot): Service {
   };
   const service: Service = {
     ...boot,
-    state: loaded.state,
-    todos: loadTodos(paths, loaded.state.doc),
+    board: loaded.board,
     journal,
+    records: starting.records,
     summaries: new Summaries(paths.summaries),
     timings,
     version: 1,
     ipc: null,
     unavailable,
-    aggregator: loadAggregator(paths.aggregator),
+    aggregator,
     poller: new Poller(
       run,
       journal,
@@ -951,7 +722,7 @@ function loadService(boot: Boot): Service {
       timings,
       {
         onChange: bump,
-        onAggregator: (aggregator) => rememberAggregator(service, aggregator),
+        onAggregator: (reported) => rememberAggregator(service, reported),
       },
       unavailable,
     ),
@@ -966,71 +737,30 @@ function loadService(boot: Boot): Service {
         unavailable,
         readTags: (home, task) => readTags(service, home, task),
         onChange: bump,
-        onDelivered: (record) => recordDelivery(service, record),
+        onFinished: (record) => recordFinished(service, record),
       },
       writeTimings(),
     ),
   };
   service.writes.resumeUnfinished();
   announceConfirmed(service, loaded.confirmed);
-  service.notifier.start(service.state);
+  service.notifier.start(service.board.topics);
   return service;
 }
 
 /**
- * Records the leftover proposals this start confirmed and tells the agent
- * side, which may still be waiting for the captain to confirm them.
+ * Tells the agent side which leftover proposals this start confirmed (their
+ * records were saved with the change); it may still be waiting for the
+ * captain to confirm them.
  */
 function announceConfirmed(service: Service, confirmed: LeftoverProposal[]): void {
   if (confirmed.length === 0) return;
-  const lines = confirmed.map((proposal) => {
-    const text = `議題「${proposal.name}」已確認，排在「${topics.QUEUE_LABEL[proposal.queue]}」最後`;
-    service.journal.appendBoard({
-      ts: epochSeconds(),
-      home: null,
-      task: null,
-      kind: "topic.confirmed",
-      topic: proposal.id,
-      text,
-    });
-    return `${text}（id：${proposal.id}）`;
-  });
+  const lines = confirmed.map(
+    (proposal) =>
+      `議題「${proposal.name}」已確認，排在「${topics.QUEUE_LABEL[proposal.queue]}」最後（id：${proposal.id}）`,
+  );
   const text = `看板不再等確認，還在提議中的議題已確認：${lines.join("；")}`;
   submitNotice(service, { kind: "notice", event: "topic.confirmed", text }, null);
-}
-
-/** One notice the page's press should send, before the board says who did it. */
-interface PageNotice {
-  event: NoticeEvent;
-  topic: string | null;
-  line: string;
-}
-
-// Decisions the agent side is waiting on or has to act on. A reopening is
-// left out: the dispatchable notice already covers it.
-const DECISION_EVENTS: Partial<Record<string, NoticeEvent>> = {
-  "topic.merged": "topic.merged",
-  "topic.archived": "topic.archived",
-};
-
-/** What the captain just decided on the page; empty when it needs no notice. */
-function decisionNotices(
-  op: string,
-  args: Record<string, unknown>,
-  result: Extract<TopicResult, { ok: true }>,
-): PageNotice[] {
-  if (!result.changed) return [];
-  const notices: PageNotice[] = [];
-  for (const event of result.events) {
-    const kind = DECISION_EVENTS[event.kind];
-    if (kind === undefined) continue;
-    notices.push({ event: kind, topic: event.topic, line: `${event.text}（id：${event.topic}）` });
-  }
-  const id = stringField(args, "id");
-  if (op !== "keep" || id === null) return notices;
-  const kept = topics.resolveTopicId(result.state.doc, id);
-  const name = result.state.doc.topics[kept]?.name ?? kept;
-  return [{ event: "topic.kept", topic: kept, line: `議題「${name}」先不關（id：${kept}）` }];
 }
 
 /**
@@ -1054,19 +784,12 @@ function notifyDecision(service: Service, notices: PageNotice[]): void {
   }
 }
 
-/** The records a change writes, each saying whether it came from the page or a command. */
-function withActor(result: TopicResult, actor: string): TopicResult {
-  if (!result.ok || result.events.length === 0) return result;
-  return {
-    ...result,
-    events: result.events.map((event) => ({ ...event, text: `${event.text}（${actor}）` })),
-  };
-}
-
 /**
- * Runs one topic operation. `fromPage` is true for the browser API: only then
- * is the agent side told, since over the socket it is the agent itself asking.
- * The captain's own presses are refused over the socket.
+ * Runs one operation from the table (ops.ts). `fromPage` is true for the
+ * browser API: only then is the agent side told what the captain decided,
+ * since over the socket it is the agent itself asking. Once a change is
+ * saved it is in effect, so its notices go out even when its records could
+ * not be appended yet.
  */
 function topicOp(
   service: Service,
@@ -1074,21 +797,23 @@ function topicOp(
   args: Record<string, unknown>,
   fromPage = false,
 ): BoardResponse {
-  if (!fromPage && PAGE_ONLY_OPS.includes(op))
-    return refused(`${op} 是使用者在頁面上按的，不能從指令送。`);
-  const todoHandler = Object.hasOwn(TODO_HANDLERS, op) ? TODO_HANDLERS[op] : undefined;
-  if (todoHandler !== undefined) return commitTodos(service, todoHandler(service, args));
-  const handler = Object.hasOwn(TOPIC_HANDLERS, op) ? TOPIC_HANDLERS[op] : undefined;
-  if (handler === undefined) return usage(`不認得的 op：${op}`);
-  const recorded = service.state.doc.history.length;
-  const handled = handler(service, args);
-  if ("usage" in handled) return usage(handled.usage);
-  const result = topics.stampHistory(handled, recorded, fromPage ? "page" : "command");
-  const notices: PageNotice[] = fromPage && result.ok ? decisionNotices(op, args, result) : [];
-  const actor = fromPage ? "在頁面上" : `${labelOf(service)} 用指令`;
-  const response = commit(service, withActor(result, actor));
-  notifyDecision(service, notices);
-  return response;
+  const before = service.board;
+  const who = {
+    label: labelOf(service),
+    agent: service.aggregator?.name ?? DEFAULT_LABEL,
+    now: now(),
+  };
+  const applied = applyOperation(commitTarget(service), before, { op, args, fromPage }, who);
+  if (applied.committed !== null) {
+    if (applied.committed === "topics")
+      service.notifier.observe(before.topics, applied.board.topics, applied.dispatchable);
+    service.board = applied.board;
+    service.version += 1;
+    if (applied.appendError !== null) log(`records wait in the outbox: ${applied.appendError}`);
+  }
+  notifyDecision(service, applied.decisions);
+  for (const notice of applied.notices) submitTodoNotice(service, notice);
+  return applied.response;
 }
 
 /** Starts answering browser requests on the port this process already holds. */

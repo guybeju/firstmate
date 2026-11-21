@@ -53,6 +53,18 @@ export function appendLine(file, line, mode) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.appendFileSync(file, `${line}\n`, { mode });
 }
+/** Appends one line and waits until it is on disk, so a record saved is a record kept. */
+export function appendLineDurable(file, line, mode) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const fd = fs.openSync(file, "a", mode);
+    try {
+        fs.writeSync(fd, `${line}\n`);
+        fs.fsyncSync(fd);
+    }
+    finally {
+        fs.closeSync(fd);
+    }
+}
 export function fileSize(file) {
     return fs.existsSync(file) ? fs.statSync(file).size : 0;
 }

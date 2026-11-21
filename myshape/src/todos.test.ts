@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { boardPaths } from "./layout.js";
-import { loadTodos, saveTodos } from "./store.js";
+import { commitChange, loadBoard, readBoard } from "./store.js";
+import type { CommitTarget } from "./store.js";
+import type { StoredRecord } from "./records.js";
 import * as todos from "./todos.js";
 import type { TodoInput, TodoResult, TodoStore } from "./todos.js";
 import { emptyState } from "./topics.js";
@@ -43,9 +45,15 @@ function input(extra: Partial<TodoInput> = {}): TodoInput {
   };
 }
 
-function ok(result: TodoResult): Extract<TodoResult, { ok: true }> {
+/** A successful result, with its records and notices (none when nothing changed). */
+function ok(result: TodoResult) {
   if (!result.ok) throw new Error(`expected success, got: ${result.line}`);
-  return result;
+  return {
+    ...result,
+    store: result.store as TodoStore,
+    events: result.changed ? result.records : [],
+    notices: result.changed ? result.notices : [],
+  };
 }
 
 function refusal(result: TodoResult): string {
@@ -61,17 +69,11 @@ function added(extra: Partial<TodoInput> = {}, store: TodoStore = todos.emptyTod
   return ok(add(extra, store)).store;
 }
 
-/** A record of the item vpn-login under topic solo, from the aggregator unless `by` says. */
+/** A record of the item vpn-login under topic solo; who made it is added when it is saved. */
 function rec(kind: string, text: string, extra: Record<string, unknown> = {}) {
-  return {
-    kind,
-    topic: "solo",
-    item: "vpn-login",
-    by: "aggregator",
-    label: "plain",
-    ...extra,
-    text,
-  };
+  const { by: _by, ...rest } = extra;
+  void _by;
+  return { kind, topic: "solo", item: "vpn-login", ...rest, text };
 }
 
 describe("adding an item", () => {
@@ -359,10 +361,14 @@ describe("ending an adoption pass", () => {
         kind: "todo.taken_down",
         topic: "solo",
         item: "adopted",
-        by: "aggregator",
-        label: "plain",
         outcome: "elsewhere",
         text: "要你動手「登入 VPN」已關：hold 已在別處關掉（plain 用指令）",
+      },
+      {
+        kind: "todo.forgotten",
+        topic: null,
+        item: "lost",
+        text: "要你動手 lost 沒搬上看板，hold 已在別處關掉，清掉它的舊狀態（說做完了）（plain 用指令）",
       },
     ]);
     expect(result.notices).toEqual([]);
@@ -381,7 +387,14 @@ describe("an adopted item closed on the board", () => {
     expect(ok(todos.adoptDone(closed, ["vpn-login"], "plain")).changed).toBe(false);
     const settled = ok(todos.adoptDone(closed, [], "plain"));
     expect(settled.store.closed).toEqual({});
-    expect(settled.events).toEqual([]);
+    expect(settled.events).toEqual([
+      {
+        kind: "todo.settled",
+        topic: null,
+        item: "vpn-login",
+        text: "要你動手 vpn-login 的 hold 已關掉，之後可以再放上看板（plain 用指令）",
+      },
+    ]);
     expect(
       ok(todos.doneItem(added({ ref: "hold" }), "vpn-login", "plain", NOW)).store.closed,
     ).toEqual({});
@@ -410,32 +423,65 @@ describe("the file", () => {
     if (dir !== "") fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("is created at the first start with topics.json's marks, and read back as written", () => {
+  function target(): { target: CommitTarget; saved: StoredRecord[] } {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "tb-todos-"));
     const paths = boardPaths({ state: path.join(dir, "state"), data: path.join(dir, "data") });
-    const doc = emptyState().doc;
-    doc.todos = { old: { state: "rejected", at: "T", reason: "沒起來" } };
-    expect(loadTodos(paths, emptyState().doc)).toEqual(todos.emptyTodos());
+    const saved: StoredRecord[] = [];
+    let n = 0;
+    const sink = {
+      has: (rid: string) => saved.some((record) => record.rid === rid),
+      append: (record: StoredRecord) => void saved.push(record),
+    };
+    return { target: { paths, sink, nextRid: () => `r-${(n += 1)}`, nowSeconds: () => 1 }, saved };
+  }
+
+  it("is created at the first start with topics.json's marks, with a record, and read back", () => {
+    const { target: at, saved } = target();
+    const { paths } = at;
+    expect(loadBoard(at, "plain").board.todos).toEqual(todos.emptyTodos());
     expect(fs.existsSync(paths.todos)).toBe(false);
-    const first = loadTodos(paths, doc);
-    expect(first).toEqual({ v: 1, items: {}, marks: doc.todos, closed: {} });
+    expect(saved).toEqual([]);
+    const doc = {
+      ...emptyState().doc,
+      todos: { old: { state: "rejected", at: "T", reason: "沒起來" } },
+    };
+    fs.mkdirSync(paths.dataDir, { recursive: true });
+    fs.writeFileSync(paths.topics, JSON.stringify(doc));
+    const first = loadBoard(at, "plain").board;
+    expect(first.todos).toEqual({ v: 1, items: {}, marks: doc.todos, closed: {} });
     expect(fs.statSync(paths.todos).mode & 0o777).toBe(0o644);
-    const store = added({ adopt: true, ref: "hold" }, first);
-    saveTodos(paths, store);
-    expect(loadTodos(paths, emptyState().doc)).toEqual(store);
+    expect(saved).toMatchObject([
+      { kind: "todo.marks_carried", by: "board", label: "plain", topic: null },
+    ]);
+    expect(saved[0]?.text).toBe(
+      "看板開始自己存「要你動手」：從 topics.json 帶過來 1 個舊狀態（old）",
+    );
+    const result = todos.addItem(
+      first.todos,
+      board(),
+      input({ adopt: true, ref: "hold" }),
+      NOW,
+      AGENT,
+    );
+    if (!result.ok || !result.changed) throw new Error("expected a change");
+    const store = result.store;
+    const change = { file: "todos" as const, next: store, records: result.records };
+    expect(commitChange(at, first, change, { by: "aggregator", label: "plain" }).ok).toBe(true);
+    expect(readBoard(paths).board.todos).toEqual(store);
+    expect(loadBoard(at, "plain").board.todos).toEqual(store);
+    expect(saved).toHaveLength(2);
   });
 
   it("skips an item it cannot read and refuses a file that is not v1", () => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "tb-todos-"));
-    const paths = boardPaths({ state: path.join(dir, "state"), data: path.join(dir, "data") });
+    const { paths } = target().target;
     fs.mkdirSync(paths.boardDataDir, { recursive: true });
     const good = added().items["vpn-login"];
     fs.writeFileSync(
       paths.todos,
       JSON.stringify({ v: 1, items: { ok: good, bad: { title: 1 }, "bad id": good }, marks: {} }),
     );
-    expect(Object.keys(loadTodos(paths, emptyState().doc).items)).toEqual(["ok"]);
+    expect(Object.keys(readBoard(paths).board.todos.items)).toEqual(["ok"]);
     fs.writeFileSync(paths.todos, JSON.stringify({ v: 2 }));
-    expect(() => loadTodos(paths, emptyState().doc)).toThrow("讀不懂");
+    expect(() => readBoard(paths)).toThrow("讀不懂");
   });
 });

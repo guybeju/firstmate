@@ -1,5 +1,5 @@
 // One topic's page: pending decisions, updates, its agents, and the message box.
-import type { AgentView, SummaryView, UpdateView } from "#board/view.js";
+import type { AgentView, ClosedTodoView, SummaryView, UpdateView } from "#board/view.js";
 import { h } from "./dom.js";
 import type { Child } from "./dom.js";
 import { mergeConfirm, mergeMenu } from "./home.js";
@@ -19,6 +19,7 @@ import {
 import { QUEUE_LABEL, agentName } from "./state.js";
 import type { Actions, Page, View } from "./state.js";
 
+/** Ledger lines and summaries shown before the rest fold into 更早的更新; board records always show. */
 const MAX_UPDATES = 200;
 
 /** A line of text with an edit button that swaps it for an input in place. */
@@ -138,14 +139,33 @@ function header(page: Page, view: View, actions: Actions, id: string): Child {
   ];
 }
 
+/** One closed item: its closing line, opening to every record of its life on the board. */
+function closedRow(id: string, closed: ClosedTodoView): Child {
+  return h(
+    "details",
+    { class: "closed", "data-key": `closed:${id}:${closed.item}:${closed.ts}` },
+    h("summary", {}, h("span", { class: "t" }, when(closed.ts)), closed.text),
+    closed.records.map(updateRow),
+  );
+}
+
 function handsOn(page: Page, view: View, actions: Actions, id: string): Child {
   const todos = liveTodos(view, id);
-  if (todos.length === 0) return null;
+  const closed = view.closed_todos.filter((entry) => entry.topic === id);
+  if (todos.length === 0 && closed.length === 0) return null;
   return h(
     "section",
     {},
     h("h2", {}, "要你動手"),
     todos.map((todo) => todoCard(page, view, actions, todo, false)),
+    closed.length === 0
+      ? null
+      : h(
+          "details",
+          { "data-key": `closed:${id}` },
+          h("summary", {}, `已關 ${closed.length}`),
+          closed.map((entry) => closedRow(id, entry)),
+        ),
   );
 }
 
@@ -186,18 +206,39 @@ function decisions(page: Page, view: View, actions: Actions, id: string): Child 
   );
 }
 
-type Entry = { ts: number; row: Child };
+type Entry = { ts: number; row: Child; record: boolean };
 
-function updates(view: View, actions: Actions, id: string): Child {
+/**
+ * The topic's updates, newest first. Every board record shows; ledger lines
+ * and summaries past the newest MAX_UPDATES fold into 更早的更新.
+ */
+function updateRows(view: View, actions: Actions, id: string): { rows: Entry[]; older: Entry[] } {
   const entries: Entry[] = [
     ...view.summaries
       .filter((summary: SummaryView) => summary.topic === id)
-      .map((summary) => ({ ts: summary.ts, row: summaryRow(view, actions, summary, false) })),
+      .map((summary) => ({
+        ts: summary.ts,
+        row: summaryRow(view, actions, summary, false),
+        record: false,
+      })),
     ...view.updates
       .filter((update: UpdateView) => update.topic === id)
-      .map((update) => ({ ts: update.ts, row: updateRow(update) })),
+      .map((update) => ({
+        ts: update.ts,
+        row: updateRow(update),
+        record: update.source !== "ledger",
+      })),
   ];
-  const rows = entries.toSorted((a, b) => b.ts - a.ts).slice(0, MAX_UPDATES);
+  const sorted = entries.toSorted((a, b) => b.ts - a.ts);
+  const cut = sorted.filter((entry) => !entry.record)[MAX_UPDATES];
+  const older =
+    cut === undefined ? [] : sorted.filter((entry) => !entry.record && entry.ts <= cut.ts);
+  const folded = new Set(older);
+  return { rows: sorted.filter((entry) => !folded.has(entry)), older };
+}
+
+function updates(view: View, actions: Actions, id: string): Child {
+  const { rows, older } = updateRows(view, actions, id);
   const ledgerOff = view.homes
     .filter((home) => home.ledger_enabled === false)
     .map((home) => home.id);
@@ -213,6 +254,14 @@ function updates(view: View, actions: Actions, id: string): Child {
           `帳本未開的 home：${ledgerOff.join("、")}。它們的 task 不會有更新；開帳本的指令見頁首的說明。`,
         ),
     rows.length === 0 ? h("p", { class: "note" }, "還沒有更新。") : rows.map((entry) => entry.row),
+    older.length === 0
+      ? null
+      : h(
+          "details",
+          { "data-key": `older:${id}` },
+          h("summary", {}, `更早的更新 ${older.length}`),
+          older.map((entry) => entry.row),
+        ),
   );
 }
 

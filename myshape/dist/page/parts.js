@@ -182,8 +182,9 @@ export function summaryRow(view, actions, summary, showTopic) {
     return h("div", { class: summary.kind === "failed" ? "upd summary failed" : "upd summary" }, h("span", { class: "t" }, when(summary.ts)), h("span", { class: "pill" }, SUMMARY_LABEL[summary.kind] ?? summary.kind), " ", showTopic ? [topicLink(view, summary.topic, actions), " "] : null, h("span", { class: "note" }, `${summary.home}/${summary.task}`), h("div", {}, summary.text), prLink(summary.pr));
 }
 export function updateRow(update) {
-    const label = update.source === "board" ? "" : (EVENT_LABEL[update.event] ?? update.event);
-    return h("div", { class: update.source === "board" ? "upd system" : "upd" }, h("span", { class: "t" }, when(update.ts)), update.task === null
+    const ledger = update.source === "ledger";
+    const label = ledger ? (EVENT_LABEL[update.event] ?? update.event) : "";
+    return h("div", { class: ledger ? "upd" : "upd system" }, h("span", { class: "t" }, when(update.ts)), update.task === null
         ? null
         : h("span", { class: "note" }, `${update.home ?? ""}/${update.task} `), [label, update.text].filter((part) => part !== "").join(" "), update.pr === null ? null : [" ", prLink(update.pr)]);
 }

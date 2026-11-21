@@ -1,7 +1,3 @@
-// Tells the aggregator when a topic becomes dispatchable: it left the "later"
-// queue or was reopened, and then stayed put for the delay. Dragging it back
-// cancels; moving it again restarts the wait. The waits are kept in the
-// board's data, so a restart inside one neither drops nor repeats its notice.
 import { isRecord, readJsonFile, writeFileAtomic } from "./files.js";
 import { QUEUES } from "./topics.js";
 const BATCH_WINDOW_MS = 1000;

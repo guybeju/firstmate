@@ -411,10 +411,11 @@ export function summaryRow(
 }
 
 export function updateRow(update: UpdateView): Child {
-  const label = update.source === "board" ? "" : (EVENT_LABEL[update.event] ?? update.event);
+  const ledger = update.source === "ledger";
+  const label = ledger ? (EVENT_LABEL[update.event] ?? update.event) : "";
   return h(
     "div",
-    { class: update.source === "board" ? "upd system" : "upd" },
+    { class: ledger ? "upd" : "upd system" },
     h("span", { class: "t" }, when(update.ts)),
     update.task === null
       ? null

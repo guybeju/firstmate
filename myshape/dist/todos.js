@@ -1,7 +1,3 @@
-// The hands-on items the board keeps for the captain (要你動手): what an
-// aggregator puts on the page, where each item stands, and every way it leaves.
-// Pure: each operation takes the store and returns the next one with the
-// records and notices the change calls for; board-server.ts persists them.
 import { GOAL_MAX, oneLine, resolveTopicId } from "./topics.js";
 const ID_MAX = 128;
 const REF_MAX = 128;
@@ -23,10 +19,10 @@ function usage(line) {
     return { ok: false, code: "usage", line };
 }
 function unchanged(store, line) {
-    return { ok: true, store, line, changed: false, events: [], notices: [] };
+    return { ok: true, changed: false, store, line };
 }
-function changed(store, line, events = [], notices = []) {
-    return { ok: true, store, line, changed: true, events, notices };
+function changed(store, line, records, notices = []) {
+    return { ok: true, changed: true, store, line, records, notices };
 }
 function itemOf(store, id) {
     return Object.hasOwn(store.items, id) ? store.items[id] : undefined;
@@ -41,8 +37,6 @@ function record(kind, item, id, actor, what, extra = {}) {
         kind,
         topic: item.topic,
         item: id,
-        by: actor.by,
-        label: actor.label,
         ...extra,
         text: `要你動手「${item.title}」${what}${suffix}`,
     };
@@ -278,30 +272,88 @@ export function closeByCaptain(store, id, words, label, now) {
 }
 /**
  * Ends an adoption pass. `open` is every item the aggregator still reports
- * open on its side: a waiting mark of anything else is dropped, and an adopted
- * item that is no longer open there leaves the page with a record and no
- * notice, since it was already closed elsewhere.
+ * open on its side. Each change leaves a record: an adopted item that is no
+ * longer open there leaves the page (no notice: it was already closed
+ * elsewhere), a waiting mark of an item never adopted is forgotten, and an
+ * item closed on the board whose hold has now closed stops being held back.
  */
 export function adoptDone(store, open, label) {
     const still = new Set(open);
-    const marks = Object.keys(store.marks).filter((id) => !still.has(id));
-    const settled = Object.keys(store.closed).filter((id) => !still.has(id));
-    const gone = Object.entries(store.items).filter(([id, item]) => item.adopted && !still.has(id));
-    if (marks.length === 0 && settled.length === 0 && gone.length === 0)
-        return unchanged(store, "ok adopt-done 沒有要清的");
     const next = structuredClone(store);
-    for (const id of marks)
-        delete next.marks[id];
-    for (const id of settled)
-        delete next.closed[id];
+    const records = [
+        ...retireAdopted(store, next, still, label),
+        ...forgetMarks(store, next, still, label),
+        ...settleClosed(store, next, still, label),
+    ];
+    const [first, ...rest] = records;
+    if (first === undefined)
+        return unchanged(store, "ok adopt-done 沒有要清的");
+    const gone = records.filter((entry) => entry.kind === "todo.taken_down").length;
+    const marks = records.filter((entry) => entry.kind === "todo.forgotten").length;
+    return changed(next, `ok adopt-done 清掉 ${marks} 個等著的狀態，拿掉 ${gone} 個已在別處關掉的項目`, [first, ...rest]);
+}
+/** Takes the adopted items no longer open on the aggregator's side out of `next`. */
+function retireAdopted(store, next, still, label) {
     const actor = { by: "aggregator", label };
-    const events = gone.map(([id, item]) => {
+    return Object.entries(store.items).flatMap(([id, item]) => {
+        if (!item.adopted || still.has(id))
+            return [];
         delete next.items[id];
-        return record("todo.taken_down", item, id, actor, "已關：hold 已在別處關掉", {
-            outcome: "elsewhere",
-        });
+        return [
+            record("todo.taken_down", item, id, actor, "已關：hold 已在別處關掉", {
+                outcome: "elsewhere",
+            }),
+        ];
     });
-    return changed(next, `ok adopt-done 清掉 ${marks.length} 個等著的狀態，拿掉 ${gone.length} 個已在別處關掉的項目`, events);
+}
+/** Forgets in `next` the waiting marks of items never adopted whose hold is gone. */
+function forgetMarks(store, next, still, label) {
+    return Object.entries(store.marks).flatMap(([id, mark]) => {
+        if (still.has(id))
+            return [];
+        delete next.marks[id];
+        const why = mark.reason === undefined ? {} : { reason: mark.reason };
+        const text = `要你動手 ${id} 沒搬上看板，hold 已在別處關掉，清掉它的舊狀態（${MARK_LABEL[mark.state]}）（${label} 用指令）`;
+        return [{ kind: "todo.forgotten", topic: null, item: id, ...why, text }];
+    });
+}
+/** Stops holding back in `next` the items closed on the board whose hold has now closed. */
+function settleClosed(store, next, still, label) {
+    return Object.keys(store.closed).flatMap((id) => {
+        if (still.has(id))
+            return [];
+        delete next.closed[id];
+        const text = `要你動手 ${id} 的 hold 已關掉，之後可以再放上看板（${label} 用指令）`;
+        return [{ kind: "todo.settled", topic: null, item: id, text }];
+    });
+}
+const MARK_LABEL = {
+    claimed: "說做完了",
+    rejected: "驗證沒過",
+    obsolete: "不再需要",
+};
+/**
+ * The first start of a board that keeps items itself: topics.json's marks
+ * become waiting marks in a new store, with a record that says so.
+ */
+export function carryMarks(marks) {
+    const ids = Object.keys(marks);
+    const store = {
+        ...emptyTodos(),
+        marks: structuredClone(marks),
+    };
+    if (ids.length === 0)
+        return unchanged(store, "ok 沒有舊狀態要帶過來");
+    const text = `看板開始自己存「要你動手」：從 topics.json 帶過來 ${ids.length} 個舊狀態（${ids.join("、")}）`;
+    return changed(store, `ok 帶過來 ${ids.length} 個舊狀態`, [
+        { kind: "todo.marks_carried", topic: null, text },
+    ]);
+}
+/** The topics with topics.json's `todos` rewritten as the projection of `store`. */
+export function withProjection(topics, store) {
+    const next = structuredClone(topics);
+    next.doc.todos = projectMarks(store);
+    return next;
 }
 /**
  * What topics.json's `todos` keeps publishing: the mark of every item that is

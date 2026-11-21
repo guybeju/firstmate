@@ -1,5 +1,6 @@
 // The four things the captain can send from the board, checked and turned into
 // writes. The socket's test ops and the browser API both come through here.
+import type { Frozen } from "./records.js";
 import crypto from "node:crypto";
 import { directTextProblem } from "./commands.js";
 import type { HomeReport, ReportHold } from "./report.js";
@@ -11,7 +12,7 @@ import type { HomeSnapshot } from "./view.js";
 import type { TopicRef, WriteEngine, WriteRecord } from "./writes.js";
 
 export interface ActionContext {
-  topics: TopicState;
+  topics: Frozen<TopicState>;
   /** Every home the board reads: the root home and the further homes its report lists. */
   homes: HomeSnapshot[];
   writes: WriteEngine;
@@ -28,7 +29,7 @@ function refuse(line: string): ActionResult {
   return { ok: false, line };
 }
 
-function topicName(topics: TopicState, id: string): string | null {
+function topicName(topics: Frozen<TopicState>, id: string): string | null {
   return topics.doc.topics[id]?.name ?? topics.archive.topics[id]?.name ?? null;
 }
 
@@ -122,13 +123,13 @@ export function findHold(
 }
 
 /** The name to show for a topic id; "未分類" when there is none. */
-function topicLabel(topics: TopicState, topic: string | null): string {
+function topicLabel(topics: Frozen<TopicState>, topic: string | null): string {
   if (topic === null) return "未分類";
   const name = topicName(topics, topic);
   return name === null ? topic : name;
 }
 
-function topicRef(topics: TopicState, topic: string | null): TopicRef | null {
+function topicRef(topics: Frozen<TopicState>, topic: string | null): TopicRef | null {
   return topic === null ? null : { id: topic, name: topicLabel(topics, topic) };
 }
 

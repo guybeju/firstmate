@@ -1,7 +1,8 @@
 // The hands-on items the board keeps for the captain (要你動手): what an
 // aggregator puts on the page, where each item stands, and every way it leaves.
 // Pure: each operation takes the store and returns the next one with the
-// records and notices the change calls for; board-server.ts persists them.
+// records and notices the change calls for; store.ts commitChange saves them.
+import type { Draft, Frozen, RecordKind } from "./records.js";
 import { GOAL_MAX, oneLine, resolveTopicId } from "./topics.js";
 import type { TodoMark, TodoState, TopicState } from "./topics.js";
 
@@ -46,35 +47,15 @@ export interface TodoStore {
 
 export type CloseWords = "不做了" | "撤下";
 
-export type RecordKind =
-  | "todo.opened"
-  | "todo.rewritten"
-  | "todo.adopted"
-  | "todo.claimed"
-  | "todo.rejected"
-  | "todo.obsolete"
-  | "todo.done"
-  | "todo.dropped"
-  | "todo.taken_down";
-
 /** How an item left the page, on a closing record. */
 export type Outcome = "done" | "dropped" | "taken_down" | "elsewhere";
 
 /**
- * One system record about an item: every step writes one, under the item's
- * topic (none for an item without one), saying who made it. `text` is the
- * line the page shows, with its actor suffix.
+ * One record about an item: every step writes one, under the item's topic
+ * (none for an item without one). `text` is the line the page shows, with its
+ * actor suffix; commitChange adds who made it.
  */
-export interface TodoEvent {
-  kind: RecordKind;
-  topic: string | null;
-  item: string;
-  by: "captain" | "aggregator";
-  label: string;
-  outcome?: Outcome;
-  reason?: string;
-  text: string;
-}
+export type TodoRecord = Draft & { outcome?: Outcome };
 
 export interface TodoNotice {
   event: "todo.claimed" | "todo.closed";
@@ -87,15 +68,17 @@ export interface TodoNotice {
   words?: string;
 }
 
+/** What a hands-on operation did; a change carries at least one record, like a topic change. */
 export type TodoResult =
   | {
       ok: true;
+      changed: true;
       store: TodoStore;
       line: string;
-      changed: boolean;
-      events: TodoEvent[];
+      records: readonly [TodoRecord, ...TodoRecord[]];
       notices: TodoNotice[];
     }
+  | { ok: true; changed: false; store: Frozen<TodoStore>; line: string }
   | { ok: false; code: "refused" | "usage"; line: string };
 
 /** What `todo add` asks for. */
@@ -145,20 +128,20 @@ function usage(line: string): TodoResult {
   return { ok: false, code: "usage", line };
 }
 
-function unchanged(store: TodoStore, line: string): TodoResult {
-  return { ok: true, store, line, changed: false, events: [], notices: [] };
+function unchanged(store: Frozen<TodoStore>, line: string): TodoResult {
+  return { ok: true, changed: false, store, line };
 }
 
 function changed(
   store: TodoStore,
   line: string,
-  events: TodoEvent[] = [],
+  records: readonly [TodoRecord, ...TodoRecord[]],
   notices: TodoNotice[] = [],
 ): TodoResult {
-  return { ok: true, store, line, changed: true, events, notices };
+  return { ok: true, changed: true, store, line, records, notices };
 }
 
-function itemOf(store: TodoStore, id: string): TodoItem | undefined {
+function itemOf(store: Frozen<TodoStore>, id: string): Frozen<TodoItem> | undefined {
   return Object.hasOwn(store.items, id) ? store.items[id] : undefined;
 }
 
@@ -169,19 +152,17 @@ function notOpen(id: string): TodoResult {
 /** The record of one step: `what` follows the item's name, the actor's suffix ends it. */
 function record(
   kind: RecordKind,
-  item: TodoItem,
+  item: Frozen<TodoItem>,
   id: string,
   actor: Actor,
   what: string,
   extra: { outcome?: Outcome; reason?: string } = {},
-): TodoEvent {
+): TodoRecord {
   const suffix = actor.by === "captain" ? "（你在頁面上）" : `（${actor.label} 用指令）`;
   return {
     kind,
     topic: item.topic,
     item: id,
-    by: actor.by,
-    label: actor.label,
     ...extra,
     text: `要你動手「${item.title}」${what}${suffix}`,
   };
@@ -203,7 +184,10 @@ function shortTime(iso: string): string | null {
  * one keeps where today's page shows it: a merged id is followed, an archived
  * topic is kept, and an id the board does not know, or none, is no topic.
  */
-function placeItem(topics: TopicState, input: TodoInput): { topic: string | null } | string {
+function placeItem(
+  topics: Frozen<TopicState>,
+  input: TodoInput,
+): { topic: string | null } | string {
   if (input.topic === null) return input.adopt ? { topic: null } : "需要 --topic <議題 id>。";
   const id = resolveTopicId(topics.doc, input.topic);
   if (topics.doc.topics[id] !== undefined) return { topic: id };
@@ -226,7 +210,7 @@ function inputProblem(input: TodoInput): string | null {
   return null;
 }
 
-function sameText(item: TodoItem, input: TodoInput, topic: string | null): boolean {
+function sameText(item: Frozen<TodoItem>, input: TodoInput, topic: string | null): boolean {
   return (
     item.title === input.title.trim() &&
     item.topic === topic &&
@@ -247,7 +231,7 @@ function addRecord(
   input: TodoInput,
   actor: Actor,
   rewrite: boolean,
-): TodoEvent {
+): TodoRecord {
   if (input.adopt) {
     const since = input.since === undefined ? null : shortTime(input.since);
     const when = since === null ? "" : `（原本 ${since} 開）`;
@@ -264,8 +248,8 @@ function addRecord(
  * on the board.
  */
 export function addItem(
-  store: TodoStore,
-  topics: TopicState,
+  store: Frozen<TodoStore>,
+  topics: Frozen<TopicState>,
   input: TodoInput,
   now: string,
   agent: { name: string; label: string },
@@ -280,7 +264,7 @@ export function addItem(
     return unchanged(store, `ok ${input.id} 已在看板上關掉，等它的 hold 關掉`);
   if (current !== undefined && (input.adopt || sameText(current, input, placed.topic)))
     return unchanged(store, line);
-  const next = structuredClone(store);
+  const next = structuredClone(store) as TodoStore;
   const mark =
     input.adopt && Object.hasOwn(store.marks, input.id) ? store.marks[input.id] : undefined;
   delete next.marks[input.id];
@@ -305,27 +289,27 @@ export function addItem(
 }
 
 function withState(
-  store: TodoStore,
+  store: Frozen<TodoStore>,
   id: string,
   state: ItemState,
   now: string,
   reason: string | null,
 ): TodoStore {
-  const next = structuredClone(store);
+  const next = structuredClone(store) as TodoStore;
   next.items[id] = { ...(next.items[id] as TodoItem), state, reason, at: now };
   return next;
 }
 
 /** The store without the item; an adopted one is remembered as closed until its hold is. */
-function without(store: TodoStore, id: string, now: string): TodoStore {
-  const next = structuredClone(store);
+function without(store: Frozen<TodoStore>, id: string, now: string): TodoStore {
+  const next = structuredClone(store) as TodoStore;
   if (next.items[id]?.adopted === true) next.closed[id] = now;
   delete next.items[id];
   return next;
 }
 
 function closing(
-  item: TodoItem,
+  item: Frozen<TodoItem>,
   id: string,
   text: string,
   by: "captain" | "aggregator",
@@ -344,7 +328,12 @@ function closing(
 }
 
 /** The captain's 做完了 on the page: the aggregator is told, and checks. */
-export function claimItem(store: TodoStore, id: string, now: string, label: string): TodoResult {
+export function claimItem(
+  store: Frozen<TodoStore>,
+  id: string,
+  now: string,
+  label: string,
+): TodoResult {
   const item = itemOf(store, id);
   if (item === undefined) return notOpen(id);
   if (item.state === "obsolete") return refused(`${id} 已經被 ${label} 標成不再需要，請直接撤下。`);
@@ -370,7 +359,7 @@ export function claimItem(store: TodoStore, id: string, now: string, label: stri
 
 /** The aggregator checked and it was not done: back in front of the captain with the reason. */
 export function rejectItem(
-  store: TodoStore,
+  store: Frozen<TodoStore>,
   id: string,
   reason: string,
   now: string,
@@ -399,7 +388,7 @@ export function rejectItem(
  * for the captain's 好，撤下 instead.
  */
 export function obsoleteItem(
-  store: TodoStore,
+  store: Frozen<TodoStore>,
   id: string,
   reason: string,
   now: string,
@@ -437,7 +426,12 @@ export function obsoleteItem(
 }
 
 /** The aggregator checked that the captain did it: the item is closed. */
-export function doneItem(store: TodoStore, id: string, label: string, now: string): TodoResult {
+export function doneItem(
+  store: Frozen<TodoStore>,
+  id: string,
+  label: string,
+  now: string,
+): TodoResult {
   const item = itemOf(store, id);
   if (item === undefined)
     return refused(`${id} 不是開著的「要你動手」項目，沒有關任何東西（已經關過的話不用再跑）。`);
@@ -465,7 +459,7 @@ export function doneItem(store: TodoStore, id: string, label: string, now: strin
  * the item leaves the page with the captain's words in its topic's updates.
  */
 export function closeByCaptain(
-  store: TodoStore,
+  store: Frozen<TodoStore>,
   id: string,
   words: CloseWords,
   label: string,
@@ -494,32 +488,108 @@ export function closeByCaptain(
 
 /**
  * Ends an adoption pass. `open` is every item the aggregator still reports
- * open on its side: a waiting mark of anything else is dropped, and an adopted
- * item that is no longer open there leaves the page with a record and no
- * notice, since it was already closed elsewhere.
+ * open on its side. Each change leaves a record: an adopted item that is no
+ * longer open there leaves the page (no notice: it was already closed
+ * elsewhere), a waiting mark of an item never adopted is forgotten, and an
+ * item closed on the board whose hold has now closed stops being held back.
  */
-export function adoptDone(store: TodoStore, open: string[], label: string): TodoResult {
+export function adoptDone(store: Frozen<TodoStore>, open: string[], label: string): TodoResult {
   const still = new Set(open);
-  const marks = Object.keys(store.marks).filter((id) => !still.has(id));
-  const settled = Object.keys(store.closed).filter((id) => !still.has(id));
-  const gone = Object.entries(store.items).filter(([id, item]) => item.adopted && !still.has(id));
-  if (marks.length === 0 && settled.length === 0 && gone.length === 0)
-    return unchanged(store, "ok adopt-done 沒有要清的");
-  const next = structuredClone(store);
-  for (const id of marks) delete next.marks[id];
-  for (const id of settled) delete next.closed[id];
-  const actor: Actor = { by: "aggregator", label };
-  const events: TodoEvent[] = gone.map(([id, item]) => {
-    delete next.items[id];
-    return record("todo.taken_down", item, id, actor, "已關：hold 已在別處關掉", {
-      outcome: "elsewhere",
-    });
-  });
+  const next = structuredClone(store) as TodoStore;
+  const records = [
+    ...retireAdopted(store, next, still, label),
+    ...forgetMarks(store, next, still, label),
+    ...settleClosed(store, next, still, label),
+  ];
+  const [first, ...rest] = records;
+  if (first === undefined) return unchanged(store, "ok adopt-done 沒有要清的");
+  const gone = records.filter((entry) => entry.kind === "todo.taken_down").length;
+  const marks = records.filter((entry) => entry.kind === "todo.forgotten").length;
   return changed(
     next,
-    `ok adopt-done 清掉 ${marks.length} 個等著的狀態，拿掉 ${gone.length} 個已在別處關掉的項目`,
-    events,
+    `ok adopt-done 清掉 ${marks} 個等著的狀態，拿掉 ${gone} 個已在別處關掉的項目`,
+    [first, ...rest],
   );
+}
+
+/** Takes the adopted items no longer open on the aggregator's side out of `next`. */
+function retireAdopted(
+  store: Frozen<TodoStore>,
+  next: TodoStore,
+  still: Set<string>,
+  label: string,
+): TodoRecord[] {
+  const actor: Actor = { by: "aggregator", label };
+  return Object.entries(store.items).flatMap(([id, item]) => {
+    if (!item.adopted || still.has(id)) return [];
+    delete next.items[id];
+    return [
+      record("todo.taken_down", item, id, actor, "已關：hold 已在別處關掉", {
+        outcome: "elsewhere",
+      }),
+    ];
+  });
+}
+
+/** Forgets in `next` the waiting marks of items never adopted whose hold is gone. */
+function forgetMarks(
+  store: Frozen<TodoStore>,
+  next: TodoStore,
+  still: Set<string>,
+  label: string,
+): TodoRecord[] {
+  return Object.entries(store.marks).flatMap(([id, mark]) => {
+    if (still.has(id)) return [];
+    delete next.marks[id];
+    const why = mark.reason === undefined ? {} : { reason: mark.reason };
+    const text = `要你動手 ${id} 沒搬上看板，hold 已在別處關掉，清掉它的舊狀態（${MARK_LABEL[mark.state]}）（${label} 用指令）`;
+    return [{ kind: "todo.forgotten" as const, topic: null, item: id, ...why, text }];
+  });
+}
+
+/** Stops holding back in `next` the items closed on the board whose hold has now closed. */
+function settleClosed(
+  store: Frozen<TodoStore>,
+  next: TodoStore,
+  still: Set<string>,
+  label: string,
+): TodoRecord[] {
+  return Object.keys(store.closed).flatMap((id) => {
+    if (still.has(id)) return [];
+    delete next.closed[id];
+    const text = `要你動手 ${id} 的 hold 已關掉，之後可以再放上看板（${label} 用指令）`;
+    return [{ kind: "todo.settled" as const, topic: null, item: id, text }];
+  });
+}
+
+const MARK_LABEL: Record<TodoState, string> = {
+  claimed: "說做完了",
+  rejected: "驗證沒過",
+  obsolete: "不再需要",
+};
+
+/**
+ * The first start of a board that keeps items itself: topics.json's marks
+ * become waiting marks in a new store, with a record that says so.
+ */
+export function carryMarks(marks: Frozen<Record<string, TodoMark>>): TodoResult {
+  const ids = Object.keys(marks);
+  const store: TodoStore = {
+    ...emptyTodos(),
+    marks: structuredClone(marks) as Record<string, TodoMark>,
+  };
+  if (ids.length === 0) return unchanged(store, "ok 沒有舊狀態要帶過來");
+  const text = `看板開始自己存「要你動手」：從 topics.json 帶過來 ${ids.length} 個舊狀態（${ids.join("、")}）`;
+  return changed(store, `ok 帶過來 ${ids.length} 個舊狀態`, [
+    { kind: "todo.marks_carried", topic: null, text },
+  ]);
+}
+
+/** The topics with topics.json's `todos` rewritten as the projection of `store`. */
+export function withProjection(topics: Frozen<TopicState>, store: Frozen<TodoStore>): TopicState {
+  const next = structuredClone(topics) as TopicState;
+  next.doc.todos = projectMarks(store);
+  return next;
 }
 
 /**
@@ -527,7 +597,7 @@ export function adoptDone(store: TodoStore, open: string[], label: string): Todo
  * not "open", plus every waiting mark, so a reader of that file (or an older
  * board after a rollback) still sees them.
  */
-export function projectMarks(store: TodoStore): Record<string, TodoMark> {
+export function projectMarks(store: Frozen<TodoStore>): Record<string, TodoMark> {
   const marks: Record<string, TodoMark> = { ...store.marks };
   for (const [id, item] of Object.entries(store.items)) {
     if (item.state === "open") continue;
@@ -540,6 +610,6 @@ export function projectMarks(store: TodoStore): Record<string, TodoMark> {
 }
 
 /** Where an item shows now: its topic with merges followed, or none. */
-export function itemTopic(topics: TopicState, item: TodoItem): string | null {
+export function itemTopic(topics: Frozen<TopicState>, item: Frozen<TodoItem>): string | null {
   return item.topic === null ? null : resolveTopicId(topics.doc, item.topic);
 }

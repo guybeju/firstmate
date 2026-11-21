@@ -2,6 +2,7 @@
 // history kept in the topic file. Pure, and bounded: the answer is meant to be
 // read by firstmate without filling its context. Asked for everything, it
 // drops the bounds and prints exact times, for working out what went wrong.
+import type { Frozen } from "./records.js";
 import { QUEUES, resolveTopicId } from "./topics.js";
 import type { HistoryEntry, TopicState } from "./topics.js";
 
@@ -16,17 +17,17 @@ export interface TaskTags {
   tags: { topic: string; atMs: number }[];
 }
 
-function nameOf(state: TopicState, id: string): string | null {
+function nameOf(state: Frozen<TopicState>, id: string): string | null {
   return state.doc.topics[id]?.name ?? state.archive.topics[id]?.name ?? null;
 }
 
 /** Where a live topic sits now. */
-function placeOf(state: TopicState, id: string): string {
+function placeOf(state: Frozen<TopicState>, id: string): string {
   const queue = QUEUES.find((name) => state.doc.queues[name].includes(id));
   return queue === undefined ? "沒有排進佇列" : QUEUE_LABEL[queue];
 }
 
-function header(state: TopicState, id: string): string {
+function header(state: Frozen<TopicState>, id: string): string {
   const archived = state.archive.topics[id];
   if (archived !== undefined) return `${id}　${archived.name}（已封存）`;
   const topic = state.doc.topics[id];
@@ -75,7 +76,7 @@ function describe(entry: HistoryEntry, everything: boolean): string {
 }
 
 /** True when the entry is part of how `id` came to be what it is. */
-function concerns(state: TopicState, entry: HistoryEntry, id: string): boolean {
+function concerns(state: Frozen<TopicState>, entry: HistoryEntry, id: string): boolean {
   if (resolveTopicId(state.doc, entry.topic) === id) return true;
   return entry.from !== undefined && resolveTopicId(state.doc, entry.from) === id;
 }
@@ -85,7 +86,7 @@ function matches(needle: string, ...texts: (string | undefined)[]): boolean {
 }
 
 /** Current ids of every topic the query touches: by id, name, goal, an old id, or an old name. */
-function matchingTopics(state: TopicState, needle: string): string[] {
+function matchingTopics(state: Frozen<TopicState>, needle: string): string[] {
   const found = new Set<string>();
   for (const topics of [state.doc.topics, state.archive.topics]) {
     for (const [id, topic] of Object.entries(topics)) {
@@ -105,7 +106,7 @@ function matchingTopics(state: TopicState, needle: string): string[] {
 /** Moves and goal changes are listed only when everything is asked for, so they never crowd out a merge or a split. */
 const DETAIL_KINDS = ["moved", "goal"];
 
-function topicLines(state: TopicState, id: string, everything: boolean): string[] {
+function topicLines(state: Frozen<TopicState>, id: string, everything: boolean): string[] {
   const history = state.doc.history.filter(
     (entry) => concerns(state, entry, id) && (everything || !DETAIL_KINDS.includes(entry.kind)),
   );
@@ -125,7 +126,7 @@ function topicLines(state: TopicState, id: string, everything: boolean): string[
   ];
 }
 
-function taskLine(state: TopicState, entry: TaskTags, everything: boolean): string {
+function taskLine(state: Frozen<TopicState>, entry: TaskTags, everything: boolean): string {
   const steps = entry.tags.map((tag) => {
     const id = resolveTopicId(state.doc, tag.topic);
     const name = nameOf(state, id);
@@ -154,7 +155,7 @@ function taskLine(state: TopicState, entry: TaskTags, everything: boolean): stri
  *   its current id with its history. Never empty.
  */
 export function findLines(
-  state: TopicState,
+  state: Frozen<TopicState>,
   query: string,
   tasks: TaskTags[],
   everything = false,

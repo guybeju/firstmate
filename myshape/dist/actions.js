@@ -1,5 +1,3 @@
-// The four things the captain can send from the board, checked and turned into
-// writes. The socket's test ops and the browser API both come through here.
 import crypto from "node:crypto";
 import { directTextProblem } from "./commands.js";
 import { MAIN_HOME } from "./journal.js";

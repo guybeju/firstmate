@@ -288,6 +288,119 @@ test_quiet_polling_is_not_a_change() {
   pass "the page is told about changes, including staleness, and nothing else"
 }
 
+# board_lines: how many system records the board has saved, besides todo.settled.
+board_lines() {
+  grep '"src":"board"' "$MAIN/data/myshape/events.jsonl" | grep -vc '"kind":"todo.settled"' || true
+}
+
+# records_after <kinds> <what> <command...>: run the command and require that
+# exactly these record kinds ("-" for none) were saved, in order, each with a
+# record id and who made it. A write's record lands when it is delivered.
+# todo.settled is left out: the adoption pass of any read of the main home
+# (one follows every delivered write) writes it for an adopted item closed
+# earlier, at a moment no step controls; the test checks it once at the end.
+records_after() {
+  local kinds=$1 what=$2 before want got expected waited=0
+  shift 2
+  before=$(board_lines)
+  "$@" >/dev/null || fail "$what: the command failed"
+  want=$before
+  # shellcheck disable=SC2086 # the kinds are a list of words.
+  [ "$kinds" = - ] || want=$((before + $(printf '%s\n' $kinds | wc -l)))
+  while [ "$(board_lines)" -lt "$want" ] && [ "$waited" -lt 100 ]; do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  sleep 0.5
+  got=$(grep '"src":"board"' "$MAIN/data/myshape/events.jsonl" | grep -v '"kind":"todo.settled"' | tail -n +$((before + 1)) |
+    jq -r 'if .rid != null and .by != null then .kind else "no-rid-or-by" end' | tr '\n' ' ')
+  expected=""
+  # shellcheck disable=SC2086 # the kinds are a list of words.
+  [ "$kinds" = - ] || expected=$(printf '%s ' $kinds)
+  assert_equals "$expected" "$got" "$what must save exactly its records"
+}
+
+# two_step <route> <json body without confirm>: both requests of a page action that takes two.
+two_step() {
+  local code
+  code=$(api "$1" "$2" | jq -r '.confirm')
+  api "$1" "${2%\}},\"confirm\":\"$code\"}" | jq -e '.ok == true' >/dev/null
+}
+
+# Guard 3.5: every socket operation and every page route, sent once, saves
+# the records it should, and only those; a new operation or route without a
+# case here fails.
+test_every_change_leaves_a_record() {
+  local covered_ops covered_routes ops routes id
+  ops=$(node --input-type=module -e "import('$ROOT/myshape/dist/ops.js').then((m) => console.log(Object.entries(m.OPERATIONS).filter(([, op]) => op.channel !== 'page').map(([name]) => name).sort().join(' ')))")
+  routes=$(node --input-type=module -e "import('$ROOT/myshape/dist/api.js').then((m) => console.log(Object.keys(m.ROUTES).sort().join('|')))")
+  covered_ops="archive close-propose create goal merge move rename reopen split todo-add todo-adopt-done todo-done todo-failed todo-obsolete"
+  covered_routes="GET state|POST agents/tag|POST direct|POST holds/answer|POST messages|POST refresh|POST todos/claim|POST todos/drop|POST todos/takedown|POST topics/archive|POST topics/goal|POST topics/keep|POST topics/merge|POST topics/move|POST topics/rename|POST topics/reopen|POST writes/ignore|POST writes/resend"
+  assert_equals "$covered_ops" "$ops" "every socket operation needs a case here"
+  assert_equals "$covered_routes" "$routes" "every page route needs a case here"
+
+  records_after topic.created "create" t create "Rec" --goal "g" --id rec
+  records_after topic.created "create" t create "Rec two" --goal "g" --id rec2
+  records_after topic.merged "merge" t merge rec2 rec
+  records_after topic.close_proposed "close-propose" t close-propose rec --reason "done"
+  records_after topic.moved "move" t move rec high
+  records_after topic.split "split" t split rec "Part" --goal "g" --id recpart
+  records_after topic.renamed "rename" t rename recpart "Part two"
+  records_after topic.goal_changed "goal" t goal recpart "g2"
+  records_after topic.archived "archive" t archive recpart
+  records_after topic.reopened "reopen" t reopen recpart
+  records_after todo.opened "todo add" t todo add it1 "買 ASUS 路由器" --topic rec --do "到店家下單 ASUS 路由器"
+  records_after todo.claimed "todos/claim" api todos/claim '{"task":"it1"}'
+  records_after todo.rejected "todo failed" t todo failed it1 --reason "路由器還沒送到"
+  records_after todo.claimed "todos/claim" api todos/claim '{"task":"it1"}'
+  records_after todo.done "todo done" t todo "done" it1
+  records_after todo.opened "todo add" t todo add it2 "Item two" --topic rec --do "do it"
+  records_after todo.taken_down "todo obsolete" t todo obsolete it2 --reason "not needed"
+  records_after todo.adopted "todo add --adopt" t todo add it3 "Item three" --do "do it" --adopt --captain-closes
+  records_after todo.taken_down "todo adopt-done" t todo adopt-done
+
+  records_after topic.moved "topics/move" api topics/move '{"id":"rec","queue":"normal"}'
+  records_after topic.renamed "topics/rename" api topics/rename '{"id":"rec","value":"Rec three"}'
+  records_after topic.goal_changed "topics/goal" api topics/goal '{"id":"rec","value":"g3"}'
+  records_after topic.kept "topics/keep" api topics/keep '{"id":"rec"}'
+  records_after topic.archived "topics/archive" api topics/archive '{"id":"recpart"}'
+  records_after topic.reopened "topics/reopen" api topics/reopen '{"id":"recpart"}'
+  records_after topic.merged "topics/merge" two_step topics/merge '{"from":"recpart","into":"rec"}'
+  t todo add it4 "Item four" --topic rec --do "do it" >/dev/null
+  records_after todo.claimed "todos/claim" api todos/claim '{"task":"it4"}'
+  t todo add it5 "Item five" --topic rec --do "do it" >/dev/null
+  records_after todo.dropped "todos/drop" two_step todos/drop '{"task":"it5"}'
+  t todo add it6 "Item six" --topic rec --do "do it" --adopt --captain-closes >/dev/null
+  t todo obsolete it6 --reason "not needed" >/dev/null
+  records_after todo.taken_down "todos/takedown" two_step todos/takedown '{"task":"it6"}'
+  records_after agent.tagged "agents/tag" api agents/tag '{"home":"main","task":"loose","topic":"rec"}'
+  api refresh '{}' >/dev/null
+  records_after hold.answered "holds/answer" two_step holds/answer '{"home":"main","task":"call-1","answer":"合併","label":"合併"}'
+  records_after - "messages" api messages '{"topic":"rec","text":"hi"}'
+  printf '1\n1\n' > "$TB_PLAY/fm-send.sh"
+  records_after - "direct" api direct '{"home":"main","task":"ship-a","text":"look"}'
+  id=$(state '[.writes[] | select(.kind == "direct" and .state == "failed")][-1].id')
+  records_after - "writes/resend" api writes/resend "{\"write_id\":\"$id\"}"
+  id=$(state '[.writes[] | select(.kind == "direct" and .state == "failed")][-1].id')
+  records_after - "writes/ignore" api writes/ignore "{\"write_id\":\"$id\"}"
+  records_after - "refresh" api refresh '{}'
+  records_after - "GET state" state '.version'
+  # The adopted item closed on the board (it6) is settled once by the next reads;
+  # it3 left with its hold already gone, so nothing holds it back.
+  api refresh '{}' >/dev/null
+  assert_equals "it6" \
+    "$(grep '"kind":"todo.settled"' "$MAIN/data/myshape/events.jsonl" | jq -r '.item' | sort | tr '\n' ' ' | sed 's/ $//')" \
+    "each adopted item closed on the board must be settled once, when its hold is gone"
+  assert_equals "todo.done todo.claimed todo.rejected todo.claimed todo.opened" \
+    "$(state '.closed_todos[] | select(.item == "it1") | .records | map(.event) | join(" ")')" \
+    "the closed item must list every step of its life, newest first"
+  # The page's lines for that item, as the topic page prints them, when asked for.
+  [ -z "${FM_TEST_RECORD_LINES:-}" ] ||
+    state '.closed_todos[] | select(.item == "it1") | .records[] | "\(.ts | strflocaltime("%m-%d %H:%M"))  \(.text)"' \
+      > "$FM_TEST_RECORD_LINES"
+  pass "every socket operation and page route saves exactly its records, each with an id and who made it"
+}
+
 test_reset_token() {
   t reset-token >/dev/null
   assert_equals 401 "$(status -H "$AUTH" "$BASE/api/state")" "the old token must stop working after a reset"
@@ -296,5 +409,6 @@ test_reset_token() {
 }
 
 fm_test_run test_request_checks test_response_headers_and_exposure test_topic_routes test_merge_takes_two_steps \
-  test_answer_takes_two_steps test_messages_and_writes test_quiet_polling_is_not_a_change test_reset_token
+  test_answer_takes_two_steps test_messages_and_writes test_quiet_polling_is_not_a_change \
+  test_every_change_leaves_a_record test_reset_token
 t stop >/dev/null

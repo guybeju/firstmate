@@ -9,6 +9,7 @@ import crypto from "node:crypto";
 import type { CommandResult, CommandRunner } from "./commands.js";
 import { appendLine, isRecord, readCompleteLines, stringField } from "./files.js";
 import { legacyRecord } from "./legacy.js";
+import type { Draft, RecordKind } from "./records.js";
 
 export type WriteState =
   | "waiting"
@@ -117,8 +118,60 @@ export interface WriteHost {
   readTags: (home: string, task: string) => Promise<string | null>;
   /** Called when a write changes what the board shows. */
   onChange: () => void;
-  /** Called once when a write is delivered, so the service can record it and refresh. */
-  onDelivered: (record: WriteRecord) => void;
+  /**
+   * Called once when a write is delivered or turns out to be handled
+   * elsewhere, so the service can record how it ended (deliveryRecord) and refresh.
+   */
+  onFinished: (record: WriteRecord) => void;
+}
+
+/**
+ * The record a delivered write leaves, by its kind: an answer and a tag change
+ * the aggregator's side, so the board records them; a message, a direct
+ * message and a notice are communication, not a change, and leave none. A new
+ * kind does not compile until it is listed here.
+ */
+export const ON_DELIVERED = {
+  answer: "hold.answered",
+  tag: "agent.tagged",
+  message: null,
+  direct: null,
+  notice: null,
+} as const satisfies Record<Action["kind"], RecordKind | null>;
+
+/**
+ * The record a write handled elsewhere leaves: an answer found its decision
+ * already ended, which the board records; a tag found the task filed by
+ * someone else, which is that filing's own record.
+ */
+export const ON_HANDLED_ELSEWHERE = {
+  answer: "hold.closed",
+  tag: null,
+  message: null,
+  direct: null,
+  notice: null,
+} as const satisfies Record<Action["kind"], RecordKind | null>;
+
+/** The record of how a write ended, or null when it leaves none. */
+export function deliveryRecord(record: WriteRecord): Draft | null {
+  const kinds = record.state === "delivered" ? ON_DELIVERED : ON_HANDLED_ELSEWHERE;
+  const kind =
+    record.state === "delivered" || record.state === "handled_elsewhere"
+      ? kinds[record.action.kind]
+      : null;
+  if (kind === null) return null;
+  const where = { topic: record.topic, home: record.home, task: record.task };
+  const who = `${record.home}/${record.task ?? ""}`;
+  if (record.action.kind !== "answer") return { kind, ...where, text: `${who} ${record.text}` };
+  const outcome = record.action.label === "" ? record.action.answer : record.action.label;
+  if (kind === "hold.answered")
+    return { kind, ...where, outcome, text: `在看板回答 ${who}：${record.text}` };
+  return {
+    kind,
+    ...where,
+    outcome: "elsewhere",
+    text: `待決事項 ${who} 已在別處結束，看板上的回答「${record.text}」沒有送出`,
+  };
 }
 
 const AUDIT_MODE = 0o600;
@@ -339,7 +392,7 @@ export class WriteEngine {
       reconcile = true;
       if (outcome.kind !== "retry") {
         this.setState(record, outcome.kind, outcome.kind === "failed" ? outcome.error : null);
-        if (outcome.kind === "delivered") this.host.onDelivered(record);
+        if (outcome.kind !== "failed") this.host.onFinished(record);
         return;
       }
       const delay = this.timings.retryDelaysMs[record.attempt];

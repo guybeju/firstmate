@@ -6,19 +6,61 @@ import * as files from "./files.js";
 import { Journal, Offsets, Summaries } from "./journal.js";
 import { boardPaths, parseConfigArgs } from "./layout.js";
 import type { BoardPaths } from "./layout.js";
-import { loadTopicState, saveTopicState } from "./store.js";
-import { archive, create, emptyState } from "./topics.js";
+import type { StoredRecord } from "./records.js";
+import { commitChange, loadBoard, readBoard } from "./store.js";
+import type { CommitTarget, StoredBoard } from "./store.js";
+import { addItem, claimItem, emptyTodos, withProjection } from "./todos.js";
+import { archive, create, emptyState, reopen } from "./topics.js";
 import type { TopicResult, TopicState } from "./topics.js";
 
 let dir: string;
 let paths: BoardPaths;
+let saved: StoredRecord[];
+let target: CommitTarget;
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "tb-storage-"));
   paths = boardPaths({ state: path.join(dir, "state"), data: path.join(dir, "data") });
   fs.mkdirSync(paths.boardDataDir, { recursive: true });
+  saved = [];
+  let n = 0;
+  target = {
+    paths,
+    sink: {
+      has: (rid) => saved.some((record) => record.rid === rid),
+      append: (record) => void saved.push(record),
+    },
+    nextRid: () => `r-test-${(n += 1)}`,
+    nowSeconds: () => 100,
+  };
 });
 afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+/** What the files hold, read without writing anything. */
+function loadTopicState(at: BoardPaths): { state: TopicState; confirmed: unknown[] } {
+  const read = readBoard(at);
+  return { state: read.board.topics as TopicState, confirmed: read.confirmed };
+}
+
+function boardOf(state: TopicState): StoredBoard {
+  return { topics: state, todos: emptyTodos(), outbox: { topics: [], todos: [] } };
+}
+
+/** Saves `next` over `previous` as one topic change with one record. */
+function saveTopicState(at: BoardPaths, previous: TopicState, next: TopicState): void {
+  void at;
+  const records = [{ kind: "topic.moved" as const, topic: "a", text: "moved" }] as const;
+  const result = commitChange(
+    target,
+    boardOf(previous),
+    { file: "topics", next, records },
+    {
+      by: "aggregator",
+      label: "plain",
+    },
+  );
+  if (!result.ok) throw new Error(result.line);
+}
 
 const mode = (file: string): number => fs.statSync(file).mode & 0o777;
 
@@ -163,7 +205,7 @@ describe("layout", () => {
 
 function done(result: TopicResult): TopicState {
   if (!result.ok) throw new Error(result.line);
-  return result.state;
+  return result.state as TopicState;
 }
 
 describe("store", () => {
@@ -189,13 +231,16 @@ describe("store", () => {
     expect(mode(paths.topics)).toBe(0o644);
   });
 
-  it("writes only the file that changed", () => {
+  it("writes the archive only when it changes, and never todos.json for a topic change", () => {
     const state = done(create(emptyState(), { name: "A", goal: "g", id: "a" }, "T"));
     saveTopicState(paths, emptyState(), state);
-    const before = fs.statSync(paths.topics).mtimeMs;
-    saveTopicState(paths, state, state);
-    expect(fs.statSync(paths.topics).mtimeMs).toBe(before);
     expect(fs.existsSync(paths.archive)).toBe(false);
+    const archived = done(archive(state, "a", "T2"));
+    saveTopicState(paths, state, archived);
+    const inode = fs.statSync(paths.archive).ino;
+    saveTopicState(paths, archived, archived);
+    expect(fs.statSync(paths.archive).ino).toBe(inode);
+    expect(fs.existsSync(paths.todos)).toBe(false);
   });
 
   it("writes the file that gains the topic first, so a crash never loses it", () => {
@@ -310,7 +355,7 @@ describe("store", () => {
       merged: { old: "a", bad: 3 },
     };
     fs.writeFileSync(paths.topics, JSON.stringify(raw));
-    const { doc } = loadTopicState(paths).state;
+    const { doc } = loadBoard(target, "plain").board.topics;
     // A proposal listed in a queue by hand is not in it; it is confirmed like any other.
     expect(doc.queues).toEqual({ high: ["a"], normal: ["p"], later: [] });
     expect(doc.merged).toEqual({ old: "a" });
@@ -365,7 +410,8 @@ describe("store", () => {
     };
     fs.writeFileSync(paths.topics, JSON.stringify(raw));
     fs.writeFileSync(paths.archive, JSON.stringify(gone));
-    const first = loadTopicState(paths);
+    const loaded = loadBoard(target, "plain");
+    const first = { state: loaded.board.topics as TopicState, confirmed: loaded.confirmed };
     expect(first.state.doc.queues).toEqual({
       high: ["h", "hot"],
       normal: ["n1", "n2", "early", "late"],
@@ -394,16 +440,34 @@ describe("store", () => {
       archived_at: "T",
     });
 
-    // Written back at once: the files no longer hold a proposal, so the next load confirms nothing.
-    const onDisk = JSON.parse(fs.readFileSync(paths.topics, "utf8")) as { topics: object };
+    // Written back at once, by the board, with a record for each, the archived one too:
+    // the files no longer hold a proposal, so the next load confirms nothing.
+    const { outbox, ...onDisk } = JSON.parse(fs.readFileSync(paths.topics, "utf8")) as {
+      outbox: StoredRecord[];
+    };
     expect(JSON.stringify(onDisk)).not.toContain("proposed");
     expect(fs.readFileSync(paths.archive, "utf8")).not.toContain("proposed");
     expect(onDisk).toEqual(first.state.doc);
+    expect(saved.map((record) => [record.kind, record.topic, record.by, record.text])).toEqual([
+      ["topic.confirmed", "early", "board", "議題「Early」已確認，排在「一般」最後"],
+      ["topic.confirmed", "hot", "board", "議題「Hot」已確認，排在「高」最後"],
+      ["topic.confirmed", "late", "board", "議題「Late」已確認，排在「一般」最後"],
+      ["topic.confirmed", "dropped", "board", "議題「D」已確認，留在已封存"],
+      [
+        "todo.marks_carried",
+        null,
+        "board",
+        "看板開始自己存「要你動手」：從 topics.json 帶過來 1 個舊狀態（x）",
+      ],
+    ]);
+    expect(outbox).toEqual(saved.slice(0, 4));
     // A rewrite replaces the file, so an unchanged inode means it was left alone.
     const written = [fs.statSync(paths.topics).ino, fs.statSync(paths.archive).ino];
-    const second = loadTopicState(paths);
-    expect(second).toEqual({ state: first.state, confirmed: [] });
+    const second = loadBoard(target, "plain");
+    expect(second.board.topics).toEqual(first.state);
+    expect(second.confirmed).toEqual([]);
     expect([fs.statSync(paths.topics).ino, fs.statSync(paths.archive).ino]).toEqual(written);
+    expect(saved).toHaveLength(5);
   });
 
   it("orders leftover proposals made at the same moment by id", () => {
@@ -421,7 +485,7 @@ describe("store", () => {
     expect(loadTopicState(paths).state.doc.queues.normal).toEqual(["a", "b", "c"]);
   });
 
-  it("rewrites only the archive when only the archive holds a proposal", () => {
+  it("records an archived proposal's confirmation through topics.json", () => {
     const live = {
       v: 1,
       queues: { normal: ["a"] },
@@ -433,11 +497,15 @@ describe("store", () => {
       topics: { d: { name: "D", goal: "g", status: "proposed", archived_at: "T" } },
     };
     fs.writeFileSync(paths.archive, JSON.stringify(gone));
-    const loaded = loadTopicState(paths);
+    const loaded = loadBoard(target, "plain");
     expect(loaded.confirmed).toEqual([]);
-    expect(fs.readFileSync(paths.topics, "utf8")).toBe(JSON.stringify(live));
+    const { outbox, ...doc } = JSON.parse(fs.readFileSync(paths.topics, "utf8")) as {
+      outbox: StoredRecord[];
+    };
+    expect(doc).toEqual(loaded.board.topics.doc);
+    expect(outbox.map((record) => record.text)).toEqual(["議題「D」已確認，留在已封存"]);
     expect(fs.readFileSync(paths.archive, "utf8")).not.toContain("proposed");
-    expect(loaded.state.archive.topics["d"]?.status).toBe("confirmed");
+    expect(loaded.board.topics.archive.topics["d"]?.status).toBe("confirmed");
   });
 
   it("refuses a file it cannot understand, naming it", () => {
@@ -512,36 +580,38 @@ describe("journal", () => {
 
   it("stores board events and skips junk lines on reload", () => {
     const journal = new Journal(paths.events);
-    journal.appendBoard({
+    const record = {
+      src: "board" as const,
+      rid: "r-1",
       ts: 9,
       kind: "topic.confirmed",
       topic: "a",
       home: null,
       task: null,
+      by: "board",
+      label: "plain",
       text: "confirmed",
-    });
+    };
+    journal.appendRecord(record);
     fs.appendFileSync(
       paths.events,
       `junk\n[]\n${JSON.stringify({ src: "other" })}\n${JSON.stringify({ src: "board", kind: "k" })}\n${JSON.stringify({ src: "board", ts: 1 })}\n${JSON.stringify({ src: "ledger", home: "h" })}\n${JSON.stringify({ src: "ledger", raw: "r" })}\n${JSON.stringify({ src: "board", ts: 3, kind: "k" })}\n`,
     );
-    expect(new Journal(paths.events).events).toEqual([
-      {
-        src: "board",
-        ts: 9,
-        kind: "topic.confirmed",
-        topic: "a",
-        home: null,
-        task: null,
-        text: "confirmed",
-      },
+    const reloaded = new Journal(paths.events);
+    expect(reloaded.events).toEqual([
+      record,
       { src: "board", ts: 3, kind: "k", topic: null, home: null, task: null, text: "" },
     ]);
+    expect(reloaded.hasRecord("r-1")).toBe(true);
+    expect(reloaded.hasRecord("r-2")).toBe(false);
     expect(mode(paths.events)).toBe(0o644);
   });
 
   it("reads back a hands-on record's item, actor, label, outcome and reason", () => {
     const journal = new Journal(paths.events);
     const event = {
+      src: "board" as const,
+      rid: "r-1",
       ts: 9,
       kind: "todo.taken_down",
       topic: null,
@@ -554,8 +624,8 @@ describe("journal", () => {
       reason: "不用了",
       text: "要你動手「登入 VPN」已撤下：不再需要，不用了（plain 用指令）",
     };
-    journal.appendBoard(event);
-    expect(new Journal(paths.events).events).toEqual([{ src: "board", ...event }]);
+    journal.appendRecord(event);
+    expect(new Journal(paths.events).events).toEqual([event]);
   });
 
   it("stores a summary once and reloads valid ones", () => {
@@ -653,5 +723,292 @@ describe("journal", () => {
     expect(new Offsets(paths).get("ok")).toEqual({ offset: 0, sha: "-" });
     fs.writeFileSync(file, "[]");
     expect(new Offsets(paths).get("ok")).toEqual({ offset: 0, sha: "-" });
+  });
+});
+
+// Guard 3.2: the crash matrix of the commit path (design 2.3), one test per
+// row. A crash is a failing append or write passed in; a restart is a fresh
+// Journal and loadBoard on the same files. No process is started or signalled.
+describe("a change and its record survive a crash between them", () => {
+  const ACTOR = { by: "aggregator" as const, label: "plain" };
+  let failing: boolean;
+  let journal: Journal;
+
+  beforeEach(() => {
+    failing = false;
+    journal = new Journal(paths.events);
+    target = { ...target, sink: sinkOf(() => journal) };
+  });
+
+  function sinkOf(current: () => Journal): CommitTarget["sink"] {
+    return {
+      has: (rid) => current().hasRecord(rid),
+      append: (record) => {
+        if (failing) throw new Error("disk full");
+        current().appendRecord(record);
+      },
+    };
+  }
+
+  function restart(): StoredBoard {
+    journal = new Journal(paths.events);
+    return loadBoard(target, "plain").board;
+  }
+
+  function boardLines(): StoredRecord[] {
+    return new Journal(paths.events).events.filter(
+      (event): event is StoredRecord => event.src === "board",
+    );
+  }
+
+  function commitTopic(board: StoredBoard, result: TopicResult) {
+    if (!result.ok || !result.changed) throw new Error("expected a change");
+    return commitChange(
+      target,
+      board,
+      { file: "topics", next: result.state, records: result.records },
+      ACTOR,
+    );
+  }
+
+  function liveBoard(): StoredBoard {
+    const state = done(create(emptyState(), { name: "A", goal: "g", id: "a" }, "T"));
+    const commit = commitTopic(
+      boardOf(emptyState()),
+      create(emptyState(), { name: "A", goal: "g", id: "a" }, "T"),
+    );
+    if (!commit.ok) throw new Error(commit.line);
+    expect(commit.board.topics).toEqual(state);
+    return commit.board;
+  }
+
+  it("nothing renamed: no change and no new record", () => {
+    const board = liveBoard();
+    fs.rmSync(paths.topics);
+    fs.mkdirSync(paths.topics);
+    expect(() => commitTopic(board, archive(board.topics, "a", "T2"))).toThrow();
+    fs.rmSync(paths.topics, { recursive: true });
+    expect(fs.existsSync(paths.archive)).toBe(true);
+    const after = restart();
+    expect(after.topics.doc.topics).toEqual({});
+    expect(boardLines().map((line) => line.kind)).toEqual(["topic.created"]);
+  });
+
+  it("an archive with only the archive file renamed: the topic stays live, no record", () => {
+    const board = liveBoard();
+    const archived = done(archive(board.topics as TopicState, "a", "T2"));
+    fs.writeFileSync(paths.archive, `${JSON.stringify(archived.archive, null, 2)}\n`);
+    const after = restart();
+    expect(Object.keys(after.topics.doc.topics)).toEqual(["a"]);
+    expect(after.topics.archive.topics).toEqual({});
+    expect(boardLines().map((line) => line.kind)).toEqual(["topic.created"]);
+  });
+
+  it("an archive with topics.json renamed and the append lost: replayed once at the start", () => {
+    const board = liveBoard();
+    failing = true;
+    const commit = commitTopic(board, archive(board.topics, "a", "T2"));
+    expect(commit).toMatchObject({ ok: true, appendError: "disk full" });
+    failing = false;
+    expect(boardLines().map((line) => line.kind)).toEqual(["topic.created"]);
+    const after = restart();
+    expect(Object.keys(after.topics.archive.topics)).toEqual(["a"]);
+    expect(boardLines().map((line) => line.kind)).toEqual(["topic.created", "topic.archived"]);
+    restart();
+    expect(boardLines()).toHaveLength(2);
+  });
+
+  it("a reopen with topics.json renamed and the archive not: live wins, the record is replayed", () => {
+    let board = liveBoard();
+    const commit = commitTopic(board, archive(board.topics, "a", "T2"));
+    if (!commit.ok) throw new Error(commit.line);
+    board = commit.board;
+    fs.rmSync(paths.archive);
+    fs.mkdirSync(paths.archive);
+    fs.writeFileSync(path.join(paths.archive, "in-the-way"), "");
+    expect(() => commitTopic(board, reopen(board.topics, "a", undefined, "T3"))).toThrow();
+    fs.rmSync(paths.archive, { recursive: true });
+    fs.writeFileSync(paths.archive, `${JSON.stringify(board.topics.archive, null, 2)}\n`);
+    const after = restart();
+    expect(Object.keys(after.topics.doc.topics)).toEqual(["a"]);
+    expect(after.topics.archive.topics).toEqual({});
+    expect(boardLines().map((line) => line.kind)).toEqual([
+      "topic.created",
+      "topic.archived",
+      "topic.reopened",
+    ]);
+  });
+
+  function itemChange(board: StoredBoard, adopt = false) {
+    const input = {
+      id: "vpn",
+      title: "登入 VPN",
+      topic: "a",
+      action: "登入",
+      guidance: "",
+      commands: [],
+      ref: "",
+      captainCloses: false,
+      adopt,
+    };
+    const added = addItem(board.todos, board.topics, input, "T", { name: "fm", label: "plain" });
+    if (!added.ok || !added.changed) throw new Error("expected a change");
+    const claimed = claimItem(added.store, "vpn", "T", "plain");
+    if (!claimed.ok || !claimed.changed) throw new Error("expected a change");
+    return { added, claimed };
+  }
+
+  it("an item change with only the projection renamed: rebuilt from todos.json, no record", () => {
+    const board = liveBoard();
+    const { added, claimed } = itemChange(board);
+    const commit = commitChange(
+      target,
+      board,
+      { file: "todos", next: added.store, records: added.records },
+      ACTOR,
+    );
+    if (!commit.ok) throw new Error(commit.line);
+    const projected = withProjection(commit.board.topics, claimed.store);
+    fs.writeFileSync(
+      paths.topics,
+      `${JSON.stringify({ ...projected.doc, outbox: [] }, null, 2)}\n`,
+    );
+    const after = restart();
+    expect(after.todos.items["vpn"]?.state).toBe("open");
+    expect(after.topics.doc.todos).toEqual({});
+    expect(boardLines().map((line) => line.kind)).toEqual(["topic.created", "todo.opened"]);
+  });
+
+  it("an item change with todos.json renamed and the append lost: replayed, projection rebuilt", () => {
+    const board = liveBoard();
+    const { added, claimed } = itemChange(board);
+    let commit = commitChange(
+      target,
+      board,
+      { file: "todos", next: added.store, records: added.records },
+      ACTOR,
+    );
+    if (!commit.ok) throw new Error(commit.line);
+    failing = true;
+    const captain = { by: "captain" as const, label: "plain" };
+    commit = commitChange(
+      target,
+      commit.board,
+      { file: "todos", next: claimed.store, records: claimed.records },
+      captain,
+    );
+    expect(commit).toMatchObject({ ok: true, appendError: "disk full" });
+    failing = false;
+    // A crash before topics.json's projection would have caught up.
+    const raw = JSON.parse(fs.readFileSync(paths.topics, "utf8")) as Record<string, unknown>;
+    fs.writeFileSync(paths.topics, `${JSON.stringify({ ...raw, todos: {} }, null, 2)}\n`);
+    const after = restart();
+    expect(after.topics.doc.todos).toEqual({ vpn: { state: "claimed", at: "T" } });
+    expect(boardLines().map((line) => [line.kind, line.by])).toEqual([
+      ["topic.created", "aggregator"],
+      ["todo.opened", "aggregator"],
+      ["todo.claimed", "captain"],
+    ]);
+  });
+
+  it("a journal line cut off mid-write: truncated, then the record is replayed once", () => {
+    const board = liveBoard();
+    failing = true;
+    commitTopic(board, archive(board.topics, "a", "T2"));
+    failing = false;
+    fs.appendFileSync(paths.events, '{"src":"board","rid":"r-test-2","ts":100,"ki');
+    restart();
+    expect(boardLines().map((line) => line.kind)).toEqual(["topic.created", "topic.archived"]);
+    expect(fs.readFileSync(paths.events, "utf8").endsWith("\n")).toBe(true);
+  });
+
+  it("a failed append with no crash: the next change saves it first, or is refused", () => {
+    let board = liveBoard();
+    failing = true;
+    const commit = commitTopic(board, archive(board.topics, "a", "T2"));
+    if (!commit.ok) throw new Error(commit.line);
+    board = commit.board;
+    const before = fs.readFileSync(paths.topics, "utf8");
+    const refused = commitTopic(board, reopen(board.topics, "a", undefined, "T3"));
+    expect(refused).toEqual({ ok: false, line: "看板寫不進紀錄（disk full），這次的修改沒有做" });
+    expect(fs.readFileSync(paths.topics, "utf8")).toBe(before);
+    failing = false;
+    // A hands-on change next: topics.json's waiting record still reaches the journal first.
+    const { added } = itemChange(board, true);
+    const next = commitChange(
+      target,
+      board,
+      { file: "todos", next: added.store, records: added.records },
+      ACTOR,
+    );
+    expect(next).toMatchObject({ ok: true, appendError: null });
+    expect(boardLines().map((line) => line.kind)).toEqual([
+      "topic.created",
+      "topic.archived",
+      "todo.adopted",
+    ]);
+  });
+
+  it("an append that was done: a restart dedupes by record id and adds nothing", () => {
+    const board = liveBoard();
+    commitTopic(board, archive(board.topics, "a", "T2"));
+    const lines = fs.readFileSync(paths.events, "utf8");
+    restart();
+    restart();
+    expect(fs.readFileSync(paths.events, "utf8")).toBe(lines);
+  });
+
+  it("replays only whole records from an outbox, with every field they carry", () => {
+    const record = {
+      src: "board",
+      rid: "r-x",
+      ts: 7,
+      kind: "todo.done",
+      topic: "a",
+      home: null,
+      task: null,
+      item: "i",
+      by: "aggregator",
+      label: "plain",
+      outcome: "done",
+      reason: "r",
+      text: "t",
+    };
+    const junk = [
+      5,
+      { ...record, rid: "r-ledger", src: "ledger" },
+      { ...record, rid: undefined },
+      { ...record, rid: "r-kind", kind: undefined },
+      { ...record, rid: "r-by", by: undefined },
+      { ...record, rid: "r-ts", ts: "7" },
+    ];
+    fs.writeFileSync(
+      paths.topics,
+      JSON.stringify({ ...emptyState().doc, outbox: [...junk, record] }),
+    );
+    restart();
+    expect(boardLines()).toEqual([record]);
+  });
+
+  it("starts with the start's own records waiting when they cannot be appended", () => {
+    const raw = { v: 1, queues: {}, topics: { p: { name: "P", goal: "g", status: "proposed" } } };
+    fs.writeFileSync(paths.topics, JSON.stringify(raw));
+    failing = true;
+    journal = new Journal(paths.events);
+    const loaded = loadBoard(target, "plain");
+    expect(loaded.appendErrors).toEqual(["disk full"]);
+    expect(boardLines()).toEqual([]);
+    failing = false;
+    restart();
+    expect(boardLines().map((line) => [line.kind, line.by])).toEqual([
+      ["topic.confirmed", "board"],
+    ]);
+  });
+
+  it("refuses to start when a waiting record cannot be saved", () => {
+    const board = liveBoard();
+    failing = true;
+    commitTopic(board, archive(board.topics, "a", "T2"));
+    expect(() => restart()).toThrow("看板寫不進紀錄（disk full）");
   });
 });

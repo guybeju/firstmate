@@ -139,7 +139,8 @@ const resend: Route = (host, body) => {
   return unknown ? twoStep(host, body, bindingOf("resend", id), act) : act();
 };
 
-const ROUTES: Record<string, Route> = {
+/** Every browser API route, as "<method> <path>". */
+export const ROUTES: Record<string, Route> = {
   "GET state": state,
   "POST refresh": refresh,
   "POST topics/move": move,
