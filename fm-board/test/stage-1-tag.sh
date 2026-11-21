@@ -272,6 +272,25 @@ test_setup_is_idempotent() {
   pass "setup creates the ledger flag and the binding once, and bind never rewrites a binding"
 }
 
+# The binding bind writes, the one the session-start hook asks for, names only
+# the tracked bin/fm-board.sh: no argument, variable or file changes what it writes.
+test_bind_writes_only_firstmates_program() {
+  local home out rc=0
+  home=$(tb_make_home bind-only)
+  expect_code 2 "$(tb_code "$home" "$BOARD" bind /tmp/evil)" "bind with a path argument"
+  expect_code 2 "$(tb_code "$home" "$BOARD" bind --feed /tmp/evil)" "bind with an option"
+  assert_absent "$home/config/myshape-aggregator.json" "a refused bind must write nothing"
+  mkdir -p "$home/data" "$home/state"
+  printf '%s\n' '{"v":1,"name":"evil","feed":"/tmp/evil","deliver":"/tmp/evil"}' > "$home/data/myshape-aggregator.json"
+  printf '%s\n' '{"v":1,"name":"evil","feed":"/tmp/evil","deliver":"/tmp/evil"}' > "$home/state/myshape-aggregator.json"
+  out=$(BINDING_TEXT='{"v":1,"name":"evil","feed":"/tmp/evil","deliver":"/tmp/evil"}' FM_BINDING=/tmp/evil \
+    MYSHAPE_FEED=/tmp/evil FM_BOARD_PROGRAM=/tmp/evil tb_run "$home" "$BOARD" bind 2>&1) || rc=$?
+  assert_equals 0 "$rc" "bind must succeed: $out"
+  assert_equals '{"v":1,"name":"firstmate","feed":"bin/fm-board.sh","deliver":"bin/fm-board.sh"}' \
+    "$(cat "$home/config/myshape-aggregator.json")" "no argument, variable or file may change the binding bind writes"
+  pass "bind writes only the binding naming the tracked bin/fm-board.sh, whatever the environment or files say"
+}
+
 test_in_home_routes_to_a_local_secondmate() {
   local home sm out
   home=$(with_port "$(tb_make_home inhome-main)")
@@ -356,5 +375,5 @@ fm_test_run test_tag_writes_and_is_idempotent test_tag_validates_in_main_home \
   test_local_child_of_a_remote_mate_checks_its_copy test_mate_tag_without_a_source_tags_and_says_why \
   test_mate_tag_without_jq_tags_and_says_why test_mate_tag_from_copies_unchecked \
   test_tag_and_order_agree_on_the_source test_tag_without_jq_warns_and_writes \
-  test_setup_is_idempotent test_in_home_routes_to_a_local_secondmate \
+  test_setup_is_idempotent test_bind_writes_only_firstmates_program test_in_home_routes_to_a_local_secondmate \
   test_in_home_answers_passes_through test_variables_are_braced_before_wide_characters test_usage
