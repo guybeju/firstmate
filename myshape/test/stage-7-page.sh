@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The page in a real browser with an aggregator on the other side (AT10 of the
-# board-interface test plan, as it stands for B2): a headless Firefox walks
-# the page of a board-only root whose other side is stub-plain, and of a root
-# with nothing on the other side (stage-7-page.mjs). Both run in the hardened
+# board-interface test plan, as it stands for B4): a headless Firefox walks
+# the page of a board-only root whose other side is stub-plain, bound outside
+# the root and confirmed on the page, and of a root with nothing on the other
+# side (stage-7-page.mjs). Both run in the hardened
 # environment of stage-7-standalone.sh.
 # shellcheck disable=SC2016 # jq filters are literal text.
 set -u
@@ -44,14 +45,15 @@ topic_wrapper() {
 }
 
 test_the_page_with_an_aggregator() {
-  local home agg out rc=0
+  local home agg program out rc=0
   agg=$TMP_ROOT/agg
   SA_ROOT=$TMP_ROOT/root/board
   tb_make_board_root "$SA_ROOT" >/dev/null
   SA_ENV=("${BASE_ENV[@]}")
-  sa_install_stub plain "$agg"
+  program=$(sa_install_stub plain "$agg")
   home=$(sa_home main)
   sa_decoys "$home"
+  sa_bind "$home" "$program" plain
   cat > "$agg/plain/main.json" <<'JSON'
 {
   "tasks": [
@@ -83,12 +85,12 @@ SH
   sa "$home" create "建置" --goal "把 x 建起來" --id solo >/dev/null
   sa "$home" create "之後" --goal "g" --id later-one --queue later >/dev/null
   printf '建好了。\n' | sa "$home" summary j1 ready - >/dev/null
-  out=$(TB_TOPIC="$TMP_ROOT/topic" TB_AGG="$agg" TB_RECOMMIT="$TMP_ROOT/recommit" TB_PAGE_MODE=connected \
+  out=$(TB_TOPIC="$TMP_ROOT/topic" TB_AGG="$agg" TB_PROGRAM="$program" TB_RECOMMIT="$TMP_ROOT/recommit" TB_PAGE_MODE=connected \
     node "$ROOT/myshape/test/browser.mjs" "$(sa "$home" open)" "$ROOT/myshape/test/stage-7-page.mjs" 2>&1) || rc=$?
   assert_equals 0 "$rc" "the browser walk with an aggregator failed: $out"
   sa "$home" stop >/dev/null
   sa_check_decoys "$home"
-  pass "drag, topic page, answer, banners, the agent's name and the reload all work with stub-plain on the other side (AT10.1-10.5, 10.7, 10.8)"
+  pass "the program's confirmation, drag, topic page, answer, banners, the agent's name and the reload all work with stub-plain on the other side (AT9.2, AT10.1-10.5, 10.7, 10.8)"
 }
 
 test_the_page_with_nothing_connected() {

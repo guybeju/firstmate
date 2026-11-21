@@ -14,10 +14,10 @@
 #     the end.
 # shellcheck disable=SC2034 # the globals are read by the sourcing scripts.
 
-# The one program this build of the board runs (design 7.1, B2): absent from
-# every board-only root instead of tripwired, so the board finds nobody on the
-# other side until a test installs a stub aggregator under that name.
-SA_NO_TRIPWIRE="fm-board.sh"
+# The Firstmate names absent from a board-only root instead of tripwired. Since
+# the board reaches its aggregator through the home's binding file, it names
+# no Firstmate program at all, so every name is tripwired.
+SA_NO_TRIPWIRE=""
 LIVE_BOARD_PORT=47819
 
 # sa_init: build the PATH, the tripwire directory, and the trip log. Stops the
@@ -174,22 +174,73 @@ sa_assert_no_boards() {
   ! pgrep -f "board-server.js.*--state $TMP_ROOT/" >/dev/null || fail "a board under $TMP_ROOT is still running"
 }
 
-# sa_install_stub <stub> <agg-dir>: put a stub aggregator (fm or plain) in the
-# board-only root under the one name the board runs, bin/fm-board.sh, commit
-# it, and point the clean environment at it and at <agg-dir>, where it keeps
-# its data and logs (myshape/test/stub-aggregator/stub-lib.sh).
-sa_install_stub() {
-  local stub=$1 agg=$2 name
-  mkdir -p "$agg/fm" "$agg/plain" "$agg/control"
-  : > "$agg/calls.log"
-  : > "$agg/received.jsonl"
-  : > "$agg/play"
-  cp "$ROOT/myshape/test/stub-aggregator/dispatch" "$SA_ROOT/bin/fm-board.sh"
+# sa_agg_dir <agg-dir>: the data and logs of a stub aggregator, empty
+# (myshape/test/stub-aggregator/stub-lib.sh).
+sa_agg_dir() {
+  mkdir -p "$1/fm" "$1/plain" "$1/control"
+  : > "$1/calls.log"
+  : > "$1/received.jsonl"
+  : > "$1/play"
+}
+
+# sa_stub_files <stub> <bin-dir> <agg-dir>: copy the stubs into <bin-dir> with
+# modes set here (this PC's umask would leave them group-writable), and
+# tb-stub.conf naming <stub> and <agg-dir>.
+sa_stub_files() {
+  local stub=$1 dir=$2 agg=$3 name
+  mkdir -p "$dir"
   for name in stub-fm stub-plain stub-lib.sh; do
-    cp "$ROOT/myshape/test/stub-aggregator/$name" "$SA_ROOT/bin/$name"
+    cp "$ROOT/myshape/test/stub-aggregator/$name" "$dir/$name"
   done
+  chmod 755 "$dir/stub-fm" "$dir/stub-plain"
+  chmod 644 "$dir/stub-lib.sh"
+  printf 'TB_STUB=%q\nTB_AGG=%q\n' "$stub" "$agg" > "$dir/tb-stub.conf"
+  chmod 644 "$dir/tb-stub.conf"
+}
+
+# sa_install_stub <stub> <agg-dir>: put a stub aggregator (fm or plain) outside
+# the board-only root, in <agg-dir>/bin, under its own name, with its data and
+# logs in <agg-dir>; print the program's path. A home reaches it once
+# sa_bind names it and the page confirms it (sa_confirm).
+sa_install_stub() {
+  sa_agg_dir "$2"
+  sa_stub_files "$1" "$2/bin" "$2"
+  printf '%s\n' "$2/bin/stub-$1"
+}
+
+# sa_install_old_stub <stub> <agg-dir>: for a board from before the binding
+# file, which runs only <root>/bin/fm-board.sh: the stub dispatcher committed
+# there, with the stubs beside it.
+sa_install_old_stub() {
+  sa_agg_dir "$2"
+  sa_stub_files "$1" "$SA_ROOT/bin" "$2"
+  cp "$ROOT/myshape/test/stub-aggregator/dispatch" "$SA_ROOT/bin/fm-board.sh"
+  chmod 755 "$SA_ROOT/bin/fm-board.sh"
   ROOT_COMMIT=$(tb_commit_root "$SA_ROOT" "stub aggregator")
-  SA_ENV+=("TB_STUB=$stub" "TB_AGG=$agg")
+}
+
+# sa_bind <home> <program> [<name>]: the home's binding naming <program> as both
+# its feed and its deliverer, under <name> (the program's file name by default).
+sa_bind() {
+  local name=${3:-${2##*/}}
+  jq -cn --arg name "$name" --arg program "$2" '{v: 1, name: $name, feed: $program, deliver: $program}' \
+    > "$1/config/myshape-aggregator.json"
+  chmod 644 "$1/config/myshape-aggregator.json"
+}
+
+# sa_confirm <home> [<role>]: confirm on the page, in its two steps, the
+# program the home's binding names for <role> (feed by default; one
+# confirmation covers both roles of one program). The board must be running.
+sa_confirm() {
+  local home=$1 role=${2:-feed} base token code
+  base="http://127.0.0.1:$(cat "$home/config/myshape-port")"
+  token=$(cat "$home/state/myshape/token")
+  code=$(curl -s -m 20 -H "Authorization: Bearer $token" -H "Origin: $base" -H 'Content-Type: application/json' \
+    -d "{\"role\":\"$role\"}" "$base/api/programs/confirm" | jq -r '.confirm // empty')
+  [ -n "$code" ] || fail "the page offered no confirmation for the $role program of $home"
+  curl -s -m 20 -H "Authorization: Bearer $token" -H "Origin: $base" -H 'Content-Type: application/json' \
+    -d "{\"role\":\"$role\",\"confirm\":\"$code\"}" "$base/api/programs/confirm" | jq -e '.ok == true' >/dev/null ||
+    fail "the page did not confirm the $role program of $home"
 }
 
 # sa_child_board <home>: start the home's board service the way myshape.sh
@@ -202,7 +253,8 @@ sa_child_board() {
   env -i HOME="$TMP_ROOT/h" PATH="$SA_PATH" LANG=C.UTF-8 TMPDIR="$SA_TMPDIR" FM_HOME="$home" \
     ${SA_ENV[@]+"${SA_ENV[@]}"} node "$SA_ROOT/myshape/dist/board-server.js" --home "$home" --root "$SA_ROOT" \
     --commit "$(git -C "$SA_ROOT" rev-parse HEAD)" --state "$home/state" --data "$home/data" \
-    --port "$(cat "$home/config/myshape-port")" >> "$home/state/myshape/service.log" 2>&1 &
+    --config "$home/config" --binding "$(node "$SA_ROOT/myshape/dist/binding-cli.js" "$home/config/myshape-aggregator.json" | head -n 1)" \
+    --exempt - --port "$(cat "$home/config/myshape-port")" >> "$home/state/myshape/service.log" 2>&1 &
   SA_CHILD=$!
   while [ "$(tb_board_pid "$home")" != "$SA_CHILD" ] || [ ! -S "$home/state/myshape/board.sock" ]; do
     [ "$i" -lt 100 ] || fail "the board started as this script's child did not come up in $home"

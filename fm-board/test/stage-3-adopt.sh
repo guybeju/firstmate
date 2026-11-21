@@ -46,6 +46,7 @@ git -C "$FAKE" add -A >/dev/null
 git -C "$FAKE" -c user.name=t -c user.email=t@example.invalid commit -qm "myshape.sh front" >/dev/null
 
 MAIN=$(tb_make_service_home main)
+tb_bind_home "$MAIN"
 tb_write_topics "$MAIN"
 
 t() {

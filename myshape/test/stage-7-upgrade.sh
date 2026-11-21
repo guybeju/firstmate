@@ -53,10 +53,26 @@
 # is read again without it. Going back to the earlier code, its board shows
 # the new lines as text and keeps changing the board.
 #
+# The aggregator under its own name, B3 to B4 (AT5.5): the B3 board, whose
+# one program is a stub under bin/fm-board.sh, is left with a message waiting
+# for a retry, and a second B3 root with no program at all is left with a
+# write waiting. Then this working tree's board files are committed on top of
+# each. The first home's binding names its tracked bin/fm-board.sh, which runs
+# without a confirmation: the next command replaces the service and the
+# message is delivered once. The second home's binding names a stub outside
+# its root: the write keeps waiting until the page confirms that program, then
+# it is delivered once.
+#
+# Since B4 the board no longer reads the audit lines of the writes boards made
+# before action records existed (B2's one-time mapping is gone): the rename
+# and B1-to-B2 steps check that those lines load without an error, are not
+# handed over again, and show nothing unsettled.
+#
 # Each base is pinned to carry's commit before its change, not computed as a
 # merge base: once the change is merged, the merge base is the change itself
-# and the step would test nothing. In both steps the new side runs with a stub
-# aggregator, since the new board hands writes only to bin/fm-board.sh.
+# and the step would test nothing. In every step the new side reaches the
+# stub under bin/fm-board.sh through the home's binding, where the older side
+# runs it as its one program; so that name holds the stub, not a tripwire.
 # shellcheck disable=SC2016 # jq filters are literal text.
 set -u
 
@@ -74,12 +90,15 @@ BASE_B2=990ffb88
 BASE_B3=c5a54085
 BASE_RECORDS=0c320a14
 BASE_DECISIONS=18f63f43
+BASE_B4=e01f25fe
+# The older sides run bin/fm-board.sh, where these steps put the stub.
+SA_NO_TRIPWIRE="fm-board.sh"
 # The board's files at the base, under the names they had before the rename.
 BASE_BOARD_FILES="bin/fm-topic.sh bin/fm-topic-lib.sh topic-board/dist topic-board/public topic-board/package.json"
 for tool in jq node curl git; do
   command -v "$tool" >/dev/null 2>&1 || { echo "skip: $tool not found"; exit 0; }
 done
-for rev in "$BASE" "$BASE_B2" "$BASE_B3" "$BASE_RECORDS" "$BASE_DECISIONS"; do
+for rev in "$BASE" "$BASE_B2" "$BASE_B3" "$BASE_RECORDS" "$BASE_DECISIONS" "$BASE_B4"; do
   git -C "$ROOT" cat-file -e "$rev^{commit}" 2>/dev/null || { echo "not ok - base $rev is not in this checkout" >&2; exit 1; }
 done
 TMP_ROOT=$(fm_test_tmproot tb-s7u)
@@ -106,6 +125,7 @@ chmod +x "$SA_ROOT/bin/fm-inbox.sh"
 tb_commit_root "$SA_ROOT" "the old note program's stand-in" >/dev/null
 SA_ENV=(MYSHAPE_TEST=1 MYSHAPE_RETRY_MS=600000 MYSHAPE_READ_MS=300)
 MAIN=$(sa_home main)
+sa_bind "$MAIN" bin/fm-board.sh stub
 # The old code reads its port under the old name: both names hold the same
 # free port, so neither side ever falls back to the live board's.
 cp "$MAIN/config/myshape-port" "$MAIN/config/topic-board-port"
@@ -201,7 +221,7 @@ test_the_new_code_refuses_until_the_move() {
     cp -R "$ROOT/$path" "$SA_ROOT/$path"
   done
   sa_trip_root "$SA_ROOT"
-  sa_install_stub plain "$TMP_ROOT/agg"
+  sa_install_old_stub plain "$TMP_ROOT/agg"
   printf '{}\n' > "$TMP_ROOT/agg/plain/main.json"
   new_commit=$ROOT_COMMIT
   NEW_COMMIT=$new_commit
@@ -253,16 +273,13 @@ test_the_next_command_after_the_move_replaces_the_board() {
 }
 
 test_the_note_in_flight_arrives_once() {
-  wait_for "the note to be delivered" write_is "$WRITE_ID" delivered
-  assert_equals "$WRITE_ID|message|$REQUEST_ID|old-a|還在路上" \
-    "$(jq -r -s 'map("\(.id)|\(.kind)|\(.legacy_request_id)|\(.topic.id)|\(.text)") | join(" ")' "$TMP_ROOT/agg/received.jsonl")" \
-    "the new code must hand the old note over once, as a message under its write id and request id"
   sleep 1
-  assert_equals 1 "$(grep -c '' "$TMP_ROOT/agg/received.jsonl")" "the note must not be sent again"
+  assert_equals "" "$(cat "$TMP_ROOT/agg/received.jsonl")" "a note recorded before action records must not be handed over"
   assert_equals 1 "$(grep -c '' "$INBOX_LOG")" "the old note program must not run again"
-  assert_equals 1 "$(api_state --arg id "$WRITE_ID" '[.writes[] | select(.id == $id)] | length')" \
-    "the write history must still list the old write"
-  pass "the message left in flight is handed over once by the new code, under the same write and request id"
+  assert_equals 0 "$(api_state --arg id "$WRITE_ID" '[.writes[] | select(.id == $id)] | length')" \
+    "a write recorded before action records must not show, so nothing is left unsettled"
+  assert_equals "true" "$(sa "$MAIN" status >/dev/null && printf true)" "the old audit lines must load without an error"
+  pass "the note the old code left in flight loads without an error, is not handed over, and shows nothing unsettled (AT5.5)"
 }
 
 test_the_new_side_reaches_no_firstmate_file() {
@@ -338,6 +355,7 @@ test_b2_the_b1_board_leaves_writes_settled_and_in_flight() {
   tb_commit_root "$SA_ROOT" "stand-ins for the programs B1 runs" >/dev/null
   SA_ENV=(MYSHAPE_TEST=1 MYSHAPE_RETRY_MS=600000 MYSHAPE_LOCAL_MS=300 MYSHAPE_READ_MS=300)
   MAIN=$(sa_home b2-main)
+  sa_bind "$MAIN" bin/fm-board.sh stub
   RUNTIME=$MAIN/state/myshape
   sa_decoys "$MAIN"
   sa "$MAIN" open >/dev/null || fail "the B1 board did not start"
@@ -382,7 +400,7 @@ test_b2_the_next_command_replaces_the_board() {
   find "$SA_ROOT/bin" -name 'fm-*.sh' -type l -delete
   rm -f "$SA_ROOT/bin/b2-standin"
   sa_trip_root "$SA_ROOT"
-  sa_install_stub plain "$B2_DIR/agg"
+  sa_install_old_stub plain "$B2_DIR/agg"
   printf '{}\n' > "$B2_DIR/agg/plain/main.json"
   ps -p "$B2_OLD_PID" >/dev/null 2>&1 || fail "the B1 board must still be running when B2 lands"
   sa "$MAIN" open >/dev/null || fail "the next command after B2 landed failed"
@@ -398,17 +416,13 @@ test_b2_the_next_command_replaces_the_board() {
 }
 
 test_b2_unfinished_writes_resume_or_show_once() {
-  wait_for "the note to be delivered" write_is "$B2_MESSAGE" delivered
   sleep 1
-  assert_equals "$B2_MESSAGE|message|$B2_REQUEST|old-a|Old A|還在路上" \
-    "$(jq -r -s 'map("\(.id)|\(.kind)|\(.legacy_request_id)|\(.topic.id)|\(.topic.name)|\(.text)") | join(" ")' "$B2_DIR/agg/received.jsonl")" \
-    "the note B1 left must reach the deliverer once, as a message under its write id and request id"
-  assert_equals "unknown" "$(api_state --arg id "$B2_SEND" '.writes[] | select(.id == $id) | .state')" \
-    "the direct message under way must become uncertain"
-  assert_equals "answer:delivered direct:delivered tag:delivered" \
-    "$(api_state --arg ids "$B2_SETTLED" '[.writes[] | select(.id as $id | $ids | split(" ") | index($id))] | map("\(.kind):\(.state)") | sort | join(" ")')" \
-    "the settled relay, answer and tag must still show in the history, under the new kinds"
-  pass "the unfinished note is handed over once, the unfinished direct message is not resent, and settled writes stay in the history"
+  assert_equals "" "$(cat "$B2_DIR/agg/received.jsonl")" "nothing B1 left must reach the deliverer"
+  assert_equals 0 "$(api_state --arg ids "$B2_MESSAGE $B2_SEND $B2_SETTLED" '[.writes[] | select(.id as $id | $ids | split(" ") | index($id))] | length')" \
+    "no write B1 recorded may show: neither the unfinished note and direct message nor the settled ones"
+  assert_equals 0 "$(api_state '[.writes[] | select(.state == "failed" or .state == "undelivered" or .state == "unknown" or .state == "waiting")] | length')" \
+    "nothing may be shown as unsettled"
+  pass "the writes B1 recorded load without an error, none is handed over, and none shows as unsettled (AT5.5)"
 }
 
 test_b2_the_new_side_reaches_no_firstmate_file() {
@@ -430,11 +444,12 @@ test_b3_the_b2_board_keeps_a_mark_and_a_message_in_flight() {
   SA_ROOT=$TMP_ROOT/root/b3-board
   tb_make_board_root "$SA_ROOT" "$BASE_B3" >/dev/null
   SA_ENV=(MYSHAPE_TEST=1 MYSHAPE_RETRY_MS=600000 MYSHAPE_READ_MS=300)
-  sa_install_stub plain "$B3_DIR/agg"
+  sa_install_old_stub plain "$B3_DIR/agg"
   jq -n '{holds: [{id: "h-todo", title: "Log in", question: "動手：登入 VPN", hold_bucket: "live", hold_until: null,
            unresolved_blocker_ids: [], hold_age_days: 0, origin: "", on_answer: "close"}],
           topics: {"h-todo": "old-a 2026-11-19T00:00:00Z"}}' > "$B3_DIR/agg/plain/main.json"
   MAIN=$(sa_home b3-main)
+  sa_bind "$MAIN" bin/fm-board.sh stub
   RUNTIME=$MAIN/state/myshape
   sa_decoys "$MAIN"
   sa "$MAIN" open >/dev/null || fail "the B2 board did not start"
@@ -469,7 +484,7 @@ test_b3_the_first_start_keeps_the_mark() {
     mkdir -p "$SA_ROOT/$(dirname "$path")"
     cp -R "$ROOT/$path" "$SA_ROOT/$path"
   done
-  sa_install_stub plain "$B3_DIR/agg"
+  sa_install_old_stub plain "$B3_DIR/agg"
   printf '{}\n' > "$B3_DIR/agg/plain/main.json"
   sa_trip_root "$SA_ROOT"
   ps -p "$B3_OLD_PID" >/dev/null 2>&1 || fail "the B2 board must still be running when B3 lands"
@@ -521,7 +536,7 @@ install_board_files() {
       git -C "$ROOT" archive "$1" $path | tar -x -C "$SA_ROOT"
     fi
   done
-  sa_install_stub "$stub" "$agg"
+  sa_install_old_stub "$stub" "$agg"
   [ -f "$agg/plain/main.json" ] || printf '{}\n' > "$agg/plain/main.json"
   sa_trip_root "$SA_ROOT"
 }
@@ -531,9 +546,10 @@ test_r_the_b3_board_leaves_lines_without_ids() {
   SA_ROOT=$TMP_ROOT/root/records-board
   tb_make_board_root "$SA_ROOT" "$BASE_RECORDS" >/dev/null
   SA_ENV=(MYSHAPE_TEST=1 MYSHAPE_READ_MS=300)
-  sa_install_stub plain "$R_DIR/agg"
+  sa_install_old_stub plain "$R_DIR/agg"
   printf '{}\n' > "$R_DIR/agg/plain/main.json"
   MAIN=$(sa_home records-main)
+  sa_bind "$MAIN" bin/fm-board.sh stub
   RUNTIME=$MAIN/state/myshape
   sa_decoys "$MAIN"
   sa "$MAIN" open >/dev/null || fail "the B3 board did not start"
@@ -628,8 +644,9 @@ test_d_the_earlier_board_runs_with_an_older_reader() {
   SA_ROOT=$TMP_ROOT/root/decisions-board
   tb_make_board_root "$SA_ROOT" "$BASE_DECISIONS" >/dev/null
   SA_ENV=(MYSHAPE_TEST=1 MYSHAPE_READ_MS=600000)
-  sa_install_stub fm "$D_DIR/agg"
+  sa_install_old_stub fm "$D_DIR/agg"
   MAIN=$(sa_home decisions-main)
+  sa_bind "$MAIN" bin/fm-board.sh stub
   RUNTIME=$MAIN/state/myshape
   sa_decoys "$MAIN"
   jq -n '{schema: 1, code_commit: "older-reader", ledger_enabled: false, tasks: [], queued: [],
@@ -733,6 +750,103 @@ test_d_going_back_shows_the_lines_as_text() {
   pass "going back keeps every decision record and the earlier board goes on changing"
 }
 
+# --- B3 to B4 -------------------------------------------------------------------
+
+B4_DIR=""
+B4_FLIGHT=""
+B4_OLD_PID=""
+B4_BARE_ROOT=""
+B4_BARE=""
+B4_WAITING=""
+B4_BARE_PID=""
+
+# in_home <home> <command...>: run a helper of this script against <home>.
+in_home() {
+  local MAIN=$1 RUNTIME=$1/state/myshape
+  shift
+  "$@"
+}
+
+test_b4_the_b3_boards_leave_a_write_in_flight_and_one_waiting() {
+  B4_DIR=$TMP_ROOT/b4
+  SA_ROOT=$TMP_ROOT/root/b4-board
+  tb_make_board_root "$SA_ROOT" "$BASE_B4" >/dev/null
+  SA_ENV=(MYSHAPE_TEST=1 MYSHAPE_RETRY_MS=600000 MYSHAPE_READ_MS=300)
+  sa_install_old_stub plain "$B4_DIR/agg"
+  printf '{}\n' > "$B4_DIR/agg/plain/main.json"
+  MAIN=$(sa_home b4-main)
+  RUNTIME=$MAIN/state/myshape
+  sa_decoys "$MAIN"
+  sa "$MAIN" open >/dev/null || fail "the B3 board did not start"
+  sa "$MAIN" create "B4 A" --goal "a" --id b4-a >/dev/null
+  printf '%s\n' '{"outcome":"retry","error":"later"}' > "$B4_DIR/agg/play"
+  B4_FLIGHT=$(api messages '{"topic":"b4-a","text":"還在路上"}' | jq -r '.write_id')
+  wait_for "the message to wait for a retry" write_is "$B4_FLIGHT" retrying
+  B4_OLD_PID=$(tb_board_pid "$MAIN")
+  B4_BARE_ROOT=$TMP_ROOT/root/b4-bare
+  tb_make_board_root "$B4_BARE_ROOT" "$BASE_B4" >/dev/null
+  B4_BARE=$(sa_home b4-bare)
+  sa_decoys "$B4_BARE"
+  SA_ROOT=$B4_BARE_ROOT sa "$B4_BARE" open >/dev/null || fail "the bare B3 board did not start"
+  SA_ROOT=$B4_BARE_ROOT sa "$B4_BARE" create "Bare" --goal "b" --id bare >/dev/null
+  B4_WAITING=$(in_home "$B4_BARE" api messages '{"topic":"bare","text":"等著"}' | jq -r '.write_id')
+  wait_for "the bare board's write to wait" in_home "$B4_BARE" write_is "$B4_WAITING" waiting
+  B4_BARE_PID=$(tb_board_pid "$B4_BARE")
+  pass "a B3 board left a message waiting for a retry, and a B3 board with no program a write waiting"
+}
+
+test_b4_the_write_in_flight_reaches_the_tracked_program_once() {
+  install_board_files "" plain "$B4_DIR/agg"
+  sa_bind "$MAIN" bin/fm-board.sh stub
+  ps -p "$B4_OLD_PID" >/dev/null 2>&1 || fail "the B3 board must still be running when B4 lands"
+  sa "$MAIN" open >/dev/null || fail "the next command after B4 landed failed"
+  : > "$SA_TRIP_LOG"
+  assert_equals 1 "$(tb_board_count "$MAIN")" "exactly one service must serve the home"
+  assert_not_equals "$B4_OLD_PID" "$(tb_board_pid "$MAIN")" "the next command must replace the B3 service"
+  assert_contains "$(sa "$MAIN" status)" "程式版本：$ROOT_COMMIT" "status must name the new commit"
+  assert_equals "true|0" "$(api_state '.aggregator | "\(.connected)|\(.confirm | length)"')" \
+    "the tracked bin/fm-board.sh must run with nothing to confirm"
+  wait_for "the message to be delivered" write_is "$B4_FLIGHT" delivered
+  sleep 1
+  assert_equals 1 "$(jq -s --arg id "$B4_FLIGHT" '[.[] | select(.id == $id)] | length' "$B4_DIR/agg/received.jsonl")" \
+    "the message must reach the stub once from B4"
+  pass "a message in flight under B3's bin/fm-board.sh is delivered once by B4 through the binding naming it (AT5.1, AT5.5)"
+}
+
+test_b4_the_waiting_write_goes_once_its_program_is_confirmed() {
+  local SA_ROOT=$B4_BARE_ROOT program
+  install_board_files "" plain "$B4_DIR/bare-in-root"
+  rm "$SA_ROOT/bin/fm-board.sh"
+  ROOT_COMMIT=$(tb_commit_root "$SA_ROOT" "no program in the root")
+  program=$(sa_install_stub plain "$B4_DIR/bare-agg")
+  printf '{}\n' > "$B4_DIR/bare-agg/plain/main.json"
+  sa_bind "$B4_BARE" "$program" plain
+  sa "$B4_BARE" open >/dev/null || fail "the next command after B4 landed failed"
+  : > "$SA_TRIP_LOG"
+  assert_not_equals "$B4_BARE_PID" "$(tb_board_pid "$B4_BARE")" "the next command must replace the bare B3 service"
+  sleep 1
+  assert_equals waiting "$(in_home "$B4_BARE" write_state_of "$B4_WAITING")" \
+    "the waiting write must keep waiting until the program outside the root is confirmed"
+  assert_equals "" "$(cat "$B4_DIR/bare-agg/received.jsonl")" "nothing may reach an unconfirmed program"
+  sa_confirm "$B4_BARE"
+  wait_for "the waiting write to go" in_home "$B4_BARE" write_is "$B4_WAITING" delivered
+  sa "$B4_BARE" restart >/dev/null
+  sleep 1
+  assert_equals 1 "$(jq -s --arg id "$B4_WAITING" '[.[] | select(.id == $id)] | length' "$B4_DIR/bare-agg/received.jsonl")" \
+    "the waiting write must be received once"
+  sa "$B4_BARE" stop >/dev/null
+  sa "$MAIN" stop >/dev/null
+  sa_check_decoys "$B4_BARE"
+  sa_check_decoys "$MAIN"
+  sa_assert_no_boards
+  sa_assert_no_trips
+  pass "a write a B3 board left waiting is delivered once after B4, once the bound program is confirmed (AT5.5)"
+}
+
+write_state_of() {  # <write-id>
+  api_state --arg id "$1" '.writes[] | select(.id == $id) | .state'
+}
+
 fm_test_run test_the_old_board_makes_its_data test_the_new_code_refuses_until_the_move \
   test_the_next_command_after_the_move_replaces_the_board test_the_note_in_flight_arrives_once test_the_new_side_reaches_no_firstmate_file \
   test_b2_the_b1_board_leaves_writes_settled_and_in_flight test_b2_the_next_command_replaces_the_board \
@@ -743,4 +857,7 @@ fm_test_run test_the_old_board_makes_its_data test_the_new_code_refuses_until_th
   test_r_changes_now_save_their_records test_r_going_back_drops_only_the_outbox \
   test_d_the_earlier_board_runs_with_an_older_reader test_d_the_first_reads_record_no_past_decision \
   test_d_new_decisions_open_and_close_once test_d_a_reader_that_refuses_the_cursor_is_read_without_it \
-  test_d_going_back_shows_the_lines_as_text
+  test_d_going_back_shows_the_lines_as_text \
+  test_b4_the_b3_boards_leave_a_write_in_flight_and_one_waiting \
+  test_b4_the_write_in_flight_reaches_the_tracked_program_once \
+  test_b4_the_waiting_write_goes_once_its_program_is_confirmed

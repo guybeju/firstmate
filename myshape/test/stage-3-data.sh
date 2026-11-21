@@ -52,8 +52,10 @@ fi
 SH
 chmod +x "$CODE_ROOT/bin/fm-on.sh"
 export TB_REMOTES="$TMP_ROOT/remotes"
+tb_fake_aggregator "$CODE_ROOT"
 
 MAIN=$(tb_make_service_home main)
+tb_bind_home "$MAIN"
 LOCAL_SM=$(tb_make_secondmate_home sm sm1)
 mkdir -p "$TB_REMOTES"
 REMOTE_SM="$TB_REMOTES/far1"

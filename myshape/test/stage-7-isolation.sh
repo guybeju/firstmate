@@ -56,17 +56,15 @@ scan() {
   done <<< "$(board_files)"
 }
 
-# The lines allowed to name a Firstmate file (the revised plan's B3 column):
+# The lines allowed to name a Firstmate file (the revised plan's B4 column):
 # the old-path refusal, which names Firstmate's move to the new names until
-# that move is gone; the split line naming the command that moves tasks; and
-# the one program the service runs, for its feed and its deliverer. The board
-# stores hands-on items itself, so todo add and todo done call nothing.
+# that move is gone, and the split line naming the command that moves tasks.
+# The service runs only the programs a home's binding file names, so the
+# board's code names none.
 pinned() {
   cat <<'PINS'
 bin/myshape.sh	service_unavailable "這個 home 還有改名前的 $1" "先跑 bin/fm-board.sh migrate-myshape 搬到新名字"
 bin/myshape.sh	usage_error "split 只建議題；要一起搬 task，改用 bin/fm-board.sh split <議題 id> <新名稱> --goal <一行> <task…>"
-myshape/dist/commands.js	export const AGGREGATOR_PROGRAM = path.join("bin", "fm-board.sh");
-myshape/src/commands.ts	export const AGGREGATOR_PROGRAM = path.join("bin", "fm-board.sh");
 PINS
 }
 
@@ -179,8 +177,8 @@ test_remote_means_nothing_to_the_board() {
   SA_ROOT=$TMP_ROOT/remote/board
   tb_make_board_root "$SA_ROOT" >/dev/null
   SA_ENV=(MYSHAPE_TEST=1 MYSHAPE_READ_MS=300 "MYSHAPE_RETRY_MS=100" MYSHAPE_STALE_MS=600000 MYSHAPE_IDLE_MS=600000)
-  sa_install_stub fm "$agg"
   REMOTE_HOME=$(sa_home remote-main)
+  sa_bind "$REMOTE_HOME" "$(sa_install_stub fm "$agg")"
   jq '.secondmates = [{id: "h1", remote: false, read_every_s: 1, read_timeout_s: 1}, {id: "h2", remote: true, read_every_s: 1, read_timeout_s: 1}]' \
     "$ROOT/myshape/test/contract/report-main.json" > "$agg/fm/main.json"
   for a in h1 h2; do
@@ -189,6 +187,7 @@ test_remote_means_nothing_to_the_board() {
                    hold_age_days: 0, origin: "", on_answer: "close"}]' "$ROOT/myshape/test/contract/report-sm1.json" > "$agg/fm/$a.json"
   done
   sa "$REMOTE_HOME" open >/dev/null || fail "the board did not start"
+  sa_confirm "$REMOTE_HOME"
   sa "$REMOTE_HOME" create T --goal g --id t >/dev/null
   remote_post refresh '{}' >/dev/null
   sleep 7

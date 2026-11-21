@@ -2,7 +2,9 @@
 # What both stub aggregators share: the call log, the controls that make a
 # feed misbehave, and the deliverer that records each action record and
 # answers from a play file. Sourced by stub-fm and stub-plain; everything lives
-# under $TB_AGG.
+# under $TB_AGG, which tb-stub.conf beside the stub names: the board hands its
+# programs a fixed, short environment, so a stub finds its files from its own
+# location, never from inherited variables.
 #
 #   $TB_AGG/calls.log        "feed <home> <offset> <sha> <time>" or "deliver <id> <kind> <time>"
 #   $TB_AGG/received.jsonl   every action record, as received
@@ -13,10 +15,14 @@
 #                            "sleep <seconds>", "exit4 <line>", "fail <line>",
 #                            "usage <line>" (exit 2, as a reader refusing its
 #                            arguments), "garbage", "schema2"
-#   $TB_AGG/env.<home>       written on every feed call when $TB_AGG/env-probe exists:
-#                            the names of the environment the program got
+#   $TB_AGG/env.<home>       written on every feed call (env.deliver on every
+#                            deliver call) when $TB_AGG/env-probe exists: the
+#                            names of the environment the program got; path.<…>
+#                            beside it holds the PATH it got
 
 set -euo pipefail
+# shellcheck source=/dev/null
+. "$(dirname "$0")/tb-stub.conf"
 
 stub_now() {
   date +%s.%N 2>/dev/null || date +%s
@@ -43,13 +49,16 @@ stub_control() {
 }
 
 stub_env_probe() {
-  [ ! -e "$TB_AGG/env-probe" ] || env | sed 's/=.*//' | LC_ALL=C sort > "$TB_AGG/env.$1"
+  [ -e "$TB_AGG/env-probe" ] || return 0
+  env | sed 's/=.*//' | LC_ALL=C sort > "$TB_AGG/env.$1"
+  printf '%s\n' "$PATH" > "$TB_AGG/path.$1"
 }
 
 # stub_deliver <apply-function>: one action record on stdin, one outcome line out.
 stub_deliver() {
   local record step outcome
   IFS= read -r record
+  stub_env_probe deliver
   printf '%s\n' "$record" >> "$TB_AGG/received.jsonl"
   stub_log deliver "$(jq -r .id <<< "$record")" "$(jq -r .kind <<< "$record")"
   step='{"outcome":"delivered"}'

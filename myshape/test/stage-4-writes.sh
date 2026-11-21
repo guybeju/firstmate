@@ -29,6 +29,7 @@ CODE_ROOT="$TMP_ROOT/root"
 tb_make_fake_root "$CODE_ROOT"
 
 MAIN=$(tb_make_service_home main)
+tb_bind_home "$MAIN"
 LOCAL_SM=$(tb_make_secondmate_home sm sm1)
 REMOTE_SM="$TB_REMOTES/far1"
 mkdir -p "$REMOTE_SM/state" "$REMOTE_SM/data" "$REMOTE_SM/config"
@@ -642,6 +643,7 @@ test_hands_on_item_with_the_real_hold_tool() {
   local home HOLD_TOOL="$ROOT/bin/fm-captain-hold.sh"
   command -v tasks-axi >/dev/null 2>&1 || { pass "skip: tasks-axi not found"; return 0; }
   home=$(tb_make_service_home real-todo)
+  tb_bind_home "$home"
   printf '## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
   printf '%s' '{"v":1,"next_seq":1,"queues":{"high":["t"],"normal":[],"later":[]},"topics":{"t":{"name":"T","goal":"g","status":"confirmed","created_at":""}},"merged":{}}' \
     > "$home/data/topics.json"

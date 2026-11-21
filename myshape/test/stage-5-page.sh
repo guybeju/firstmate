@@ -22,6 +22,7 @@ mkdir -p "$TB_PLAY" "$TB_REMOTES"
 CODE_ROOT="$TMP_ROOT/root"
 tb_make_fake_root "$CODE_ROOT"
 MAIN=$(tb_make_service_home main)
+tb_bind_home "$MAIN"
 
 cat > "$TMP_ROOT/topic" <<EOF
 #!/usr/bin/env bash
