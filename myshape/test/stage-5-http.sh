@@ -440,10 +440,13 @@ test_decisions_open_and_close_once() {
     '{"home":"main","task":"dec-page","answer":"要","label":"要"}'
   records_after hold.closed "both answers reaching the backlog" answer_both
   records_after - "a read that finds nothing new" api refresh '{}'
-  lines=$(state '[.updates[] | select(.topic == "billing" and (.event | startswith("hold.")))] | reverse | .[]
+  lines=$(state '[.updates[] | select((.task // "" | startswith("dec-")) and (.event | startswith("hold.")))] | reverse | .[]
     | "\(.task) \(.event)"' | sort | tr '\n' ' ')
   assert_equals "dec-chat hold.closed dec-chat hold.opened dec-page hold.answered dec-page hold.opened " "$lines" \
-    "each decision must have exactly one opening and one closing on its topic's page"
+    "each decision must have exactly one opening and one closing"
+  assert_equals "billing billing billing billing" \
+    "$(state '[.updates[] | select((.task // "" | startswith("dec-")) and (.event | startswith("hold.")))] | map(.topic) | join(" ")')" \
+    "every line of both decisions must be on their topic's page"
   chat_at=$(jq -r 'select(.task == "dec-chat" and .event == "resolved") | .ts' "$MAIN/state/captain-hold-events.jsonl" | head -n 1)
   assert_equals "$chat_at" "$(state '.updates[] | select(.task == "dec-chat" and .event == "hold.closed") | .ts')" \
     "the chat answer's close must carry the time fm-captain-hold.sh logged"
@@ -452,7 +455,7 @@ test_decisions_open_and_close_once() {
     "the chat answer's close must say what was answered and through where, with no 'at the latest'"
   # The page's lines for both decisions, as the topic page prints them, when asked for.
   [ -z "${FM_TEST_DECISION_LINES:-}" ] ||
-    state '.updates[] | select(.topic == "billing" and (.event | startswith("hold.")))
+    state '.updates[] | select((.task // "" | startswith("dec-")) and (.event | startswith("hold.")))
       | "\(.ts | strflocaltime("%m-%d %H:%M"))  \(.home)/\(.task) \(.text)"' > "$FM_TEST_DECISION_LINES"
   pass "a decision answered on the page and one answered in chat each leave one opening and one closing"
 }
