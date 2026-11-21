@@ -81,7 +81,7 @@ http_code() {  # <curl arguments...>
 test_the_environment_is_hardened() {
   local path
   assert_contains "$SA_PATH" "$SA_PATHTRIP:/usr/bin:/bin" "the board's PATH must be the tripwire directory and the system"
-  assert_absent "$SA_PATHTRIP/fm-board.sh" "the one program the board runs must be absent from the PATH"
+  [ -x "$SA_PATHTRIP/fm-board.sh" ] || fail "firstmate's adapter must have a tripwire on the PATH: the board names no program of its own"
   [ -x "$SA_PATHTRIP/fm-tasks-axi.sh" ] || fail "every other Firstmate script must have a tripwire on the PATH"
   [ -x "$SA_PATHTRIP/fm-inbox.sh" ] || fail "the programs the board ran before B2 must have tripwires on the PATH"
   # shellcheck disable=SC2086 # the file list is a list of words.
@@ -90,7 +90,9 @@ test_the_environment_is_hardened() {
     "the board-only root must hold exactly the board's files"
   assert_equals "" "$(cd "$SA_ROOT" && git ls-files | grep -v -e '^bin/myshape\.sh$' -e '^bin/myshape-lib\.sh$' -e '^myshape/' |
     grep -v -e '^bin/fm-' || true)" "the board-only root must hold nothing else"
-  assert_absent "$SA_ROOT/bin/fm-board.sh" "the board-only root must not hold firstmate's adapter"
+  # With tripwires around the board, the name holds a committed tripwire.
+  [ ! -e "$SA_ROOT/bin/fm-board.sh" ] || grep -q '^exit 97$' "$SA_ROOT/bin/fm-board.sh" ||
+    fail "the board-only root must not hold firstmate's adapter"
   [ "$ROOT_COMMIT" != "$(git -C "$ROOT" rev-parse HEAD)" ] || fail "the root must have its own commit"
   # No stage-7 script may reach the real checkout's board or its fixtures. The
   # patterns are split so this check cannot match its own text.
@@ -226,9 +228,9 @@ test_the_http_side() {
   assert_equals "main" "$(printf '%s' "$state" | jq -r '[.homes[].id] | join(" ")')" \
     "the board must know only home main, whatever firstmate's registry says"
   assert_not_contains "$state" "ship-a" "the board must not read firstmate's ledger"
-  assert_equals "false|沒有 bin/fm-board.sh|null" \
+  assert_equals "false|沒有 config/myshape-aggregator.json|null" \
     "$(printf '%s' "$state" | jq -r '"\(.aggregator.connected)|\(.aggregator.unavailable)|\(.homes[0].error)"')" \
-    "home main must show only that nothing is connected: no bin/fm-board.sh"
+    "home main must show only that nothing is connected: no binding"
   pass "the page's HTTP checks hold, and the board shows only its own data"
 }
 
@@ -351,13 +353,18 @@ test_waiting_survives_a_crash() {
   pass "waiting writes and a pending dispatchable notice survive a crash and a restart"
 }
 
-# AT8.4: once an aggregator is there, it gets every waiting write once, in order.
+# AT8.4: once an aggregator is there, it gets every waiting write once, in
+# order: bound outside the root, at the page's confirmation, without a restart.
 test_an_aggregator_receives_the_waiting_writes() {
   local waiting received later
   waiting=$(waiting_ids)
-  sa_install_stub plain "$AGG"
+  sa_bind "$MAIN" "$(sa_install_stub plain "$AGG")"
   printf '{}\n' > "$AGG/plain/main.json"
-  t restart >/dev/null || fail "restart with the stub failed"
+  t open >/dev/null || fail "open with the binding failed"
+  sleep 1
+  assert_equals "" "$(jq -r -s 'map(.id) | join(" ")' "$AGG/received.jsonl")" \
+    "a program outside the root must not get a write before the page confirms it"
+  sa_confirm "$MAIN"
   sleep 2
   received=$(jq -r -s 'map(.id) | join(" ")' "$AGG/received.jsonl")
   assert_equals "$waiting" "$received" "every waiting write must reach the aggregator once, oldest first"
@@ -418,7 +425,8 @@ test_only_the_boards_files() {
     case "$file" in
       config/myshape-port | data/topics.json | data/topics-archive.json | data/myshape/events.jsonl | \
         data/myshape/summaries.jsonl | data/myshape/offsets.json | data/myshape/notify-pending.json | \
-        data/myshape/aggregator.json | data/myshape/todos.json | data/myshape/decisions.json | state/myshape/token | \
+        data/myshape/aggregator.json | data/myshape/todos.json | data/myshape/decisions.json | \
+        data/myshape/confirmations.json | config/myshape-aggregator.json | state/myshape/token | \
         state/myshape/port | state/myshape/service.log | state/myshape/service.log.1 | \
         state/myshape/audit.jsonl | state/myshape/startup-error) ;;
       *) extra+=" $file" ;;

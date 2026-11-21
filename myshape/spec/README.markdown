@@ -31,19 +31,21 @@
                                    ├─ 看板服務（node，主 home，常駐）
 myshape.sh ──Unix socket（0600）──┘      │  獨家寫入 data/topics.json 等
    │                                      │
-   │ list（只讀檔）                       ├─ 讀：bin/fm-board.sh feed <home> <offset> <sha>
-   │                                      └─ 寫：bin/fm-board.sh deliver（一行動作紀錄）
+   │ list（只讀檔）                       ├─ 讀：<feed> feed <home> <offset> <sha>
+   │                                      └─ 寫：<deliver> deliver（一行動作紀錄）
+   │                                         <feed>、<deliver> 是 config/myshape-aggregator.json 寫的程式
    ▼
 data/topics.json（只讀）
 
-first mate 這一側：fm-board.sh（feed、deliver、tag、setup、帶 task 的 split、--in-home、install-rules、rules）、fm-dispatch-plan.sh（order）
+first mate 這一側：fm-board.sh（feed、deliver、bind、tag、setup、帶 task 的 split、--in-home、install-rules、rules）、fm-dispatch-plan.sh（order）
    ▼
 各 home 的 data/<task-id>/topic、config/fleet-ledger、偏好檔
 ```
 
 - **看板服務**只在主 home，按需啟動、獨立常駐；主 home 每次開 session 時，沒在跑的服務也會被啟動。它是議題資料唯一的寫入者。
 - **`bin/myshape.sh`** 是 first mate 與使用者用的看板指令，只 source 自己的 `myshape-lib.sh`。`list` 只讀檔，服務掛了也能用；其餘經 socket 找服務。讀寫 first mate 自己的檔的指令在 first mate 這一側（[adapter](../../fm-board/spec/adapter.markdown)）。
-- **另一邊的 aggregator** 只經 code root 的 `bin/fm-board.sh` 與看板往來：`feed` 印一個 home 的回報，`deliver` 收一行動作紀錄、回一行結果（[contracts](contracts.markdown) 第 4、7 節）。看板不知道 home 在哪台機器上。
+- **另一邊的 aggregator** 用自己的名字接上看板：home 的 `config/myshape-aggregator.json` 寫它的名稱與兩支程式的路徑，看板執行 `<feed> feed …` 印一個 home 的回報、`<deliver> deliver` 收一行動作紀錄、回一行結果（[contracts](contracts.markdown) 第 4、7 節）。在 code root 的 `bin/` 底下、git 追蹤而且和 HEAD 相同的程式不用確認，其他的要在頁面上確認一次；每支程式只拿到固定的幾個環境變數。看板不知道 home 在哪台機器上。
+- **first mate 的設定檔**讓兩支程式都是 `bin/fm-board.sh`，由 `fm-board.sh setup`、`bind` 或 session start 寫。
 - **first mate 的 `fm-board.sh feed`** 照 home 跑每個 home 都有的唯讀彙整腳本 `bin/fm-topic-board-read.sh`（主 home、同機、經 `fm-on.sh` 到遠端）；`deliver` 跑 `fm-inbox.sh`、`fm-send.sh`、`fm-captain-hold.sh` 與 `fm-board.sh tag`（[adapter](../../fm-board/spec/adapter.markdown) 第 3 節）。
 - **遠端 home** 只需要 `fm-topic-board-read.sh`、`fm-board.sh`、帳本旗標與 `jq`。
 

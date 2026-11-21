@@ -2,6 +2,7 @@
 // it, which file commits it, and how its arguments become a change. The
 // socket and the page both run operations only through applyOperation, which
 // saves each change with its records through store.ts commitChange.
+import * as confirmations from "./confirmations.js";
 import { stringField } from "./files.js";
 import { commitChange } from "./store.js";
 import * as topics from "./topics.js";
@@ -259,6 +260,21 @@ export const OPERATIONS = {
     },
     "todo-drop": { channel: "page", commitFile: "todos", run: closeByCaptain("不做了") },
     "todo-takedown": { channel: "page", commitFile: "todos", run: closeByCaptain("撤下") },
+    // The page's route computes every argument itself (api.ts); a page request never names them.
+    "program-confirm": {
+        channel: "page",
+        commitFile: "confirmations",
+        run: (ctx, args) => {
+            const roles = args["roles"];
+            const input = {
+                path: stringField(args, "path") ?? "",
+                sha256: stringField(args, "sha256") ?? "",
+                binding_sha256: stringField(args, "binding_sha256") ?? "",
+                roles: Array.isArray(roles) ? roles.filter((role) => typeof role === "string") : [],
+            };
+            return confirmations.confirmProgram(ctx.confirmations, input, ctx.now);
+        },
+    },
 };
 /** The operation called `name`, or undefined for anything else. */
 export function operationOf(name) {
@@ -369,6 +385,20 @@ function applyTodoOp(target, board, request, actor, result) {
     };
     return { ...commit(target, board, change, actor, result.line), notices: result.notices };
 }
+function applyConfirmOp(target, board, request, actor, result) {
+    if (!result.ok)
+        return answer(board, { ok: false, code: result.code, line: result.line });
+    if (!result.changed) {
+        assertUnchanged(request.op, board.confirmations, result.store);
+        return answer(board, { ok: true, line: result.line });
+    }
+    const change = {
+        file: "confirmations",
+        next: result.store,
+        records: withSuffix(result.records, "你在頁面上"),
+    };
+    return commit(target, board, change, actor, result.line);
+}
 /**
  * Runs one operation and saves what it changed. The page's requests are the
  * captain's, the socket's the agent side's; each channel may run only its own
@@ -381,7 +411,12 @@ export function applyOperation(target, board, request, who) {
     const problem = channelProblem(request.op, operation, request.fromPage);
     if (problem !== null)
         return answer(board, refused(problem));
-    const ctx = { topics: board.topics, todos: board.todos, ...who };
+    const ctx = {
+        topics: board.topics,
+        todos: board.todos,
+        confirmations: board.confirmations,
+        ...who,
+    };
     const actor = { by: request.fromPage ? "captain" : "aggregator", label: who.label };
     if (operation.commitFile === "topics") {
         const result = operation.run(ctx, request.args);
@@ -389,5 +424,7 @@ export function applyOperation(target, board, request, who) {
             return answer(board, { ok: false, code: "usage", line: result.usage });
         return applyTopicOp(target, board, request, actor, result);
     }
+    if (operation.commitFile === "confirmations")
+        return applyConfirmOp(target, board, request, actor, operation.run(ctx, request.args));
     return applyTodoOp(target, board, request, actor, operation.run(ctx, request.args));
 }

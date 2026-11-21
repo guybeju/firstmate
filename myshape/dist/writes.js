@@ -3,11 +3,12 @@
 // notices of what happened on the board. Each write is one action record
 // (contracts section 7.2), recorded in the audit log before it runs and at
 // every state change, retried only when the deliverer says so, and resumed
-// after a restart from the audit log alone. While the deliverer cannot be
-// started, writes wait and are handed over in record order at the next start.
+// after a restart from the audit log alone. While the deliverer may not run,
+// writes wait; they are handed over in record order, oldest first, when it may
+// again: at the next start, at the page's confirmation of the deliverer,
+// after a good read of the root home, and before any newer write is sent.
 import crypto from "node:crypto";
 import { appendLine, isRecord, readCompleteLines, stringField } from "./files.js";
-import { legacyRecord } from "./legacy.js";
 export const DEFAULT_WRITE_TIMINGS = {
     retryDelaysMs: [10_000, 30_000, 60_000, 300_000, 900_000],
     resumeWindowMs: 30 * 60_000,
@@ -130,9 +131,13 @@ export class WriteEngine {
         for (const line of readCompleteLines(this.auditFile))
             this.replay(line);
     }
-    /** True when writes go to the deliverer; false when they wait for the next start. */
+    /** True when writes go to the deliverer now; false when they wait. */
     get connected() {
-        return this.host.unavailable === null;
+        return this.host.blocked() === null;
+    }
+    /** The waiting writes, oldest first. */
+    waiting() {
+        return [...this.records.values()].filter((record) => record.state === "waiting");
     }
     /**
      * Hands over, in record order, every write a restart left waiting or
@@ -140,9 +145,10 @@ export class WriteEngine {
      * submitted afterwards can overtake them.
      */
     resumeUnfinished() {
+        const released = this.connected && this.recordRelease();
         for (const record of this.records.values()) {
             if (record.state === "waiting") {
-                if (this.connected)
+                if (released)
                     this.release(record);
             }
             else if (UNFINISHED.includes(record.state)) {
@@ -150,12 +156,31 @@ export class WriteEngine {
             }
         }
     }
+    /**
+     * Hands every waiting write over, oldest first, when the deliverer may run
+     * and the record of it was saved; returns how many went.
+     */
+    releaseWaiting() {
+        const waiting = this.waiting();
+        if (waiting.length === 0 || !this.connected || !this.recordRelease())
+            return 0;
+        for (const record of waiting)
+            this.release(record);
+        return waiting.length;
+    }
+    /** Saves the record of releasing the waiting writes; true when there are none. */
+    recordRelease() {
+        const ids = this.waiting().map((record) => record.id);
+        return ids.length === 0 || this.host.onRelease(ids);
+    }
     /** Records a new write and starts delivering it, or leaves it waiting. */
     submit(input) {
+        // Older writes waiting for the deliverer go first, or this one would overtake them.
+        const connected = this.connected && (this.waiting().length === 0 || this.releaseWaiting() > 0);
         const record = {
             ...input,
             id: `w-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`,
-            state: this.connected ? "sending" : "waiting",
+            state: connected ? "sending" : "waiting",
             attempt: 0,
             error: null,
             nextAt: null,
@@ -163,7 +188,7 @@ export class WriteEngine {
         };
         this.records.set(record.id, record);
         this.audit(record, { sending: record });
-        if (this.connected)
+        if (connected)
             this.enqueue(record, false);
         // A waiting write changes nothing else later, so the page must hear of it now.
         else
@@ -254,6 +279,10 @@ export class WriteEngine {
         for (;;) {
             const outcome = await this.exclusive(record.home, () => this.attempt(record, reconcile));
             reconcile = true;
+            if (outcome.kind === "wait") {
+                this.setState(record, "waiting", null);
+                return;
+            }
             if (outcome.kind !== "retry") {
                 this.setState(record, outcome.kind, outcome.kind === "failed" ? outcome.error : null);
                 if (outcome.kind !== "failed")
@@ -277,7 +306,7 @@ export class WriteEngine {
                 return settled;
         }
         const result = await this.host.run({ kind: "deliver", record: actionRecord(record) }, this.timings.commandTimeoutMs);
-        return parseOutcome(result);
+        return result.blocked === undefined ? parseOutcome(result) : { kind: "wait" };
     }
     /**
      * Before any attempt to file a task after the first, the home is read
@@ -298,13 +327,10 @@ export class WriteEngine {
         if (entry === null)
             return;
         const sending = entry.fields["sending"];
-        if (isRecord(sending)) {
-            const record = isRecord(sending["action"])
-                ? sending
-                : legacyRecord(sending);
-            if (record !== null)
-                this.records.set(entry.id, record);
-        }
+        // A write a board recorded before action records existed carries a plan
+        // instead; it is not loaded, so it is neither resumed nor shown.
+        if (isRecord(sending) && isRecord(sending["action"]))
+            this.records.set(entry.id, sending);
         const record = this.records.get(entry.id);
         if (record === undefined)
             return;

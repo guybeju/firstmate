@@ -116,10 +116,9 @@ async function start(config, paths) {
     const logFd = prepareRuntimeDir(paths);
     const child = spawn(process.execPath, [
         SERVER_SCRIPT,
-        ...["home", "root", "commit", "state", "data"].flatMap((name) => [
-            `--${name}`,
-            config[name],
-        ]),
+        ...["home", "root", "commit", "state", "data", "config", "binding"].flatMap((name) => [`--${name}`, config[name]]),
+        "--exempt",
+        config.exempt.length === 0 ? "-" : config.exempt.join(","),
         "--port",
         String(config.port),
     ], { detached: true, stdio: ["ignore", logFd, logFd], cwd: paths.runtimeDir });
@@ -175,8 +174,15 @@ async function stopAndWait(paths) {
         await sleep(POLL_MS);
     }
 }
+/**
+ * Whether the running board is the one this command would start: the same
+ * code, port and binding file. A board started before the binding was written,
+ * or with another one, is replaced.
+ */
 function matches(config, data) {
-    return data.code_commit === config.commit && data.port === config.port;
+    return (data.code_commit === config.commit &&
+        data.port === config.port &&
+        data.binding_sha256 === config.binding);
 }
 /** Creates the lock directory; false when another client holds it. */
 function tryLock(lock) {
@@ -322,12 +328,19 @@ const VERSION_LABEL = {
     unreported: "無法回報",
     unknown: "還沒讀到",
 };
-/** Whether the service reaches the agent side, and why not. */
-function aggregatorLine(raw) {
+/** Whether the service reaches the agent side, and why not; then the binding it runs. */
+function aggregatorLines(raw) {
     const aggregator = isRecord(raw) ? raw : {};
-    if (aggregator["connected"] === true)
-        return `aggregator：已接上（${String(aggregator["label"])}）`;
-    return `aggregator：沒有接上（${String(aggregator["unavailable"] ?? "看板沒有回報原因")}）`;
+    const binding = isRecord(aggregator["binding"]) ? aggregator["binding"] : null;
+    const reach = aggregator["connected"] === true
+        ? `aggregator：已接上（${String(aggregator["label"])}）`
+        : `aggregator：沒有接上（${String(aggregator["unavailable"] ?? "看板沒有回報原因")}）`;
+    if (binding === null)
+        return [reach];
+    return [
+        reach,
+        `aggregator 設定：${String(binding["name"])}，feed ${String(binding["feed"])}，deliver ${String(binding["deliver"])}`,
+    ];
 }
 /** One line per home with how its code version compares to the main home's. */
 function homeLines(homes) {
@@ -351,9 +364,11 @@ async function status(config, paths) {
     if (state.kind === "running") {
         const outcome = await exchange(paths.socket, request("status"), HEALTH_TIMEOUT_MS);
         const data = outcome.kind === "answer" ? (outcome.response.data ?? {}) : {};
-        lines.push("看板服務：在跑", `pid：${state.data.pid}`, `埠：${state.data.port}`, `程式版本：${state.data.code_commit}`, ...(state.data.code_commit === config.commit
+        lines.push("看板服務：在跑", `pid：${state.data.pid}`, `埠：${state.data.port}`, `程式版本：${state.data.code_commit}`, `程式目錄：${state.data.root}`, ...(state.data.code_commit === config.commit
             ? []
-            : [`目前的程式是 ${config.commit}；下一個指令或 restart 會換成新版`]), `啟動時間：${state.data.started_at}`, `輪詢：${data["polling"] === true ? "進行中" : "沒在跑"}`, aggregatorLine(data["aggregator"]), ...homeLines(data["homes"]));
+            : [`目前的程式是 ${config.commit}；下一個指令或 restart 會換成新版`]), ...(state.data.binding_sha256 === config.binding
+            ? []
+            : [`config/myshape-aggregator.json 和看板啟動時不同；下一個指令或 restart 會換上它`]), `啟動時間：${state.data.started_at}`, `輪詢：${data["polling"] === true ? "進行中" : "沒在跑"}`, ...aggregatorLines(data["aggregator"]), ...homeLines(data["homes"]));
     }
     else {
         lines.push(state.kind === "hung" ? "看板服務：沒有回應" : "看板服務：沒在跑", `上次的 pid：${readTrimmed(paths.pid)}`, `上次的埠：${readTrimmed(paths.port)}`);

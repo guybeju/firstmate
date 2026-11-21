@@ -213,8 +213,10 @@ tb_op() {
 }
 
 # tb_make_fake_root <dir>: a private code root with this checkout's scripts and
-# build, its own git history, and stand-ins for the four scripts the board
-# writes through (fm-inbox.sh, fm-send.sh, fm-captain-hold.sh, fm-on.sh).
+# build, its own git history, stand-ins for the four scripts the board writes
+# through (fm-inbox.sh, fm-send.sh, fm-captain-hold.sh, fm-on.sh), and the
+# committed bin/fm-board.sh wrapper of tb_fake_aggregator. A home's board runs
+# it once the home is bound (tb_bind_home).
 #
 # Each stand-in appends "cmd=<key>\targv=<a|b|...>\thome=<FM_HOME>\tstdin=<text>"
 # to $TB_LOG, then follows the next step in $TB_PLAY/<key> when there is one. A
@@ -292,6 +294,47 @@ case "$script" in
 esac
 SH
   chmod +x "$fake"/bin/fm-on.sh "$fake"/bin/fm-inbox.sh "$fake"/bin/fm-send.sh "$fake"/bin/fm-captain-hold.sh
+  tb_fake_aggregator "$fake"
+}
+
+# The settings the stand-ins and the reader take from the environment of the
+# test that made the root. The board hands its programs a fixed, short
+# environment (contracts section 7), so they reach bin/fm-board.sh through
+# <root>/tb-fake.env instead.
+TB_FAKE_ENV_NAMES="TB_LOG TB_PLAY TB_REMOTES FM_SNAPSHOT_NOW"
+
+# tb_fake_aggregator <fake-root>: make that root's bin/fm-board.sh the program the
+# board's binding names: a committed wrapper (git tracks it unchanged, so it
+# runs without a confirmation) that loads <root>/tb-fake.env and runs this
+# checkout's fm-board.sh from <root>/bin, beside the stand-ins. Run it after
+# the test exported the settings of TB_FAKE_ENV_NAMES it needs.
+tb_fake_aggregator() {
+  local fake=$1 name value
+  : > "$fake/tb-fake.env"
+  for name in $TB_FAKE_ENV_NAMES; do
+    if value=$(printenv "$name"); then
+      printf 'export %s=%q\n' "$name" "$value" >> "$fake/tb-fake.env"
+    fi
+  done
+  rm -f "$fake/bin/fm-board.sh"
+  ln -s "$ROOT/bin/fm-board.sh" "$fake/bin/fm-board-real.sh"
+  cat > "$fake/bin/fm-board.sh" <<'SH'
+#!/usr/bin/env bash
+# shellcheck source=/dev/null
+. "$(dirname "$0")/../tb-fake.env"
+exec "$(dirname "$0")/fm-board-real.sh" "$@"
+SH
+  chmod 755 "$fake/bin/fm-board.sh"
+  git -C "$fake" add bin/fm-board.sh
+  git -C "$fake" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm "fake aggregator"
+}
+
+# tb_bind_home <home>: bind the home's board to firstmate's programs, the way
+# bin/fm-board.sh bind does.
+tb_bind_home() {
+  printf '%s\n' '{"v":1,"name":"firstmate","feed":"bin/fm-board.sh","deliver":"bin/fm-board.sh"}' \
+    > "$1/config/myshape-aggregator.json"
+  chmod 644 "$1/config/myshape-aggregator.json"
 }
 
 # --- board-only root ------------------------------------------------------------

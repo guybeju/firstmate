@@ -486,6 +486,23 @@ C58 之後看板只記得在頁面上答的；在聊天裡答、first mate 自�
 - 防呆：`decisions.test.ts`、`stage-1-feed.sh` 的 `test_closed_decisions`、`stage-5-http.sh` 的 `test_decisions_open_and_close_once`、`stage-7-upgrade.sh` 的從前一版升上來與退回去、`check-state-writers.sh` 檢查 `decisions.json` 只有 `decisions.ts` 寫、紀錄只經 `saveRecords`。
 - 還看不到的列在 [handover](handover.markdown) 第 4 節。
 
+### C60　aggregator 用自己的名字接上看板（B4）
+
+看板執行的程式寫死成 `bin/fm-board.sh`，別的 aggregator 只能冒用這個名字；設計報告 `board-interface-design` 的 B4。
+使用者在兩個決定裡選了：B，看板執行設定檔登記的程式並在頁面上確認，照 security 的五個條件做；`carry` 留一份釘住版本的看板程式在現在的路徑（拆 repository 之後）。
+**做法**（[contracts](contracts.markdown) 第 3、7、8 節）：
+
+- 設定檔 `config/myshape-aggregator.json` 只寫名稱與兩個路徑，`feed`、`deliver` 由看板加上；陣列、參數、多的鍵都不能用。
+- 不用確認的只有 code root 的 `bin/` 底下、git 追蹤而且和 HEAD 相同的程式，由 `bin/myshape.sh` 每次啟動或換掉服務時用 git 查好交給服務；這是和今天一樣的門檻，不是「審過」。
+- 其他程式要在頁面上兩步確認，確認綁程式與設定檔內容的 SHA-256，每次執行前重算；確認紀錄 `data/myshape/confirmations.json` 只由頁面的確認寫，經 `commitChange`，帶 `program.confirmed`。
+- 每支程式都要是一般檔、可執行、不是符號連結、擁有者是執行看板的帳號、別的帳號不能寫；群組能寫只有不用確認的可以，要確認的一律拒絕並寫出檔名與權限。
+- 程式只拿到 `MYSHAPE_HOME`、`PATH`（只留絕對路徑）、`HOME`、`LANG`、`TMPDIR`；名稱固定，值是啟動看板的人給的。
+- 寫入在 deliver 的程式不能執行時等著，在啟動、確認 deliver 的程式、每次讀好根 home 之後、與任何新寫入之前依序放行，每次放行存一筆 `writes.released`。
+- 看板改版之前（B2）的稽核紀錄不再換算：讀到就略過，不接著送、不顯示。
+- first mate 這一側：一個函式寫設定檔，`fm-board.sh setup`、新的 `bind`、`tag`、`split`、`adopt` 與 session start 都經它；後四個只在用看板的 home 少了它時寫並印一行，session start 另換掉沒有設定檔就啟動的看板（使用者在更新的空檔上選了 D）。看板自己跑的 `feed`、`deliver` 不寫；路徑上已經有的檔不換掉，所以放一個空檔就是一直不接的做法。
+- 防呆：`binding.test.ts`、`commands.test.ts`、`sending.test.ts`、`ops.test.ts` 的 `program-confirm`、`check-state-writers.sh` 的 `confirmations.json`、`stage-5-http.sh` 的確認路由、`stage-7-aggregator.sh` 的 AT9、`stage-7-upgrade.sh` 的 B3 到 B4、`fm-board/test/stage-4-binding.sh`。
+- 不在這一條：拆 repository；`FM_ROOT_OVERRIDE` 指定 code root 時不給免確認（security 提的選項，看板與轉接層的測試靠這個變數找 code root）。
+
 ### C28　使用者的 ub-mode 與全域規範裡沒有做到的
 
 - 測試不是每一步都先寫：第一段與之後的修正是測試先行；第二段起多半是程式與測試一起寫，再用測試把問題找出來（找到的都記在上面）。單元測試是全部寫完之後才補的。

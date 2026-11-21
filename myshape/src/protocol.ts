@@ -20,6 +20,10 @@ export interface HealthData {
   pid: number;
   port: number;
   code_commit: string;
+  /** The SHA-256 of the binding file the service was started with, or "-". */
+  binding_sha256: string;
+  /** The code root a relative program path resolves against. */
+  root: string;
   boot_id: string;
   started_at: string;
 }

@@ -134,13 +134,16 @@ session 一開始會跑啟動檢查，列出缺的或太舊的工具與安裝指
 
 ## 5. 開帳本，打開看板
 
-開帳本（看板讀的是 firstmate 的 fleet ledger，[fleet-ledger](docs/fleet-ledger.md)；開帳本是 first mate 這一側的指令 `bin/fm-board.sh`，不是看板的）：
+開帳本，並讓看板接上 first mate（看板讀的是 firstmate 的 fleet ledger，[fleet-ledger](docs/fleet-ledger.md)；這是 first mate 這一側的指令 `bin/fm-board.sh`，不是看板的）：
 
 ```
 bin/fm-board.sh setup
 ```
 
-**確認**：印出 `ok setup 帳本已開`，再跑一次印 `ok setup 帳本本來就開著`；`config/fleet-ledger` 存在。
+它開帳本，再寫看板的設定檔 `config/myshape-aggregator.json`：看板經它知道另一邊是 first mate，執行的兩支程式都是 `bin/fm-board.sh`（[contracts](myshape/spec/contracts.markdown) 第 7 節）。
+已經有這個檔時不改它。
+
+**確認**：印出 `ok setup 帳本已開` 與 `ok bind 看板的 aggregator 設定已寫：firstmate`，再跑一次印 `ok setup 帳本本來就開著` 與 `ok bind aggregator 設定本來就是 firstmate`；`config/fleet-ledger` 存在，`config/myshape-aggregator.json` 的內容是 `{"v":1,"name":"firstmate","feed":"bin/fm-board.sh","deliver":"bin/fm-board.sh"}`。
 
 打開看板。
 預設的埠是 47819；要換就在 `config/myshape-port` 寫一行 1024 到 65535 的埠號。
@@ -159,11 +162,15 @@ bin/myshape.sh open
 bin/myshape.sh status
 ```
 
-**確認**：有 `看板服務：在跑`、`輪詢：進行中`、`aggregator：已接上（first mate）`，每一行 `home <id>：` 都是 `相同`（只有主 home 時只有 `home main：相同`）。
-看板經 `bin/fm-board.sh` 讀 first mate 的資料、把頁面上的動作交給 first mate（[adapter](fm-board/spec/adapter.markdown) 第 3 節）；那支程式不在時這一行是 `aggregator：沒有接上（沒有 bin/fm-board.sh）`，頁面上的動作照常完成，要送出的會等到下一次服務啟動、程式在了再依序送出。
-剛打開時那一行可能是 `還沒讀到`，等一下再看。
+**確認**：有 `看板服務：在跑`、`程式目錄：<clone>`、`輪詢：進行中`、`aggregator：已接上（first mate）`、`aggregator 設定：firstmate，feed bin/fm-board.sh，deliver bin/fm-board.sh`，每一行 `home <id>：` 都是 `相同`（只有主 home 時只有 `home main：相同`）。
+看板經 `bin/fm-board.sh` 讀 first mate 的資料、把頁面上的動作交給 first mate（[adapter](fm-board/spec/adapter.markdown) 第 3 節）。
+那支程式在 git 裡追蹤、和 HEAD 相同，所以看板不用在頁面上確認就執行它。
+沒有設定檔時這一行是 `aggregator：沒有接上（沒有 config/myshape-aggregator.json）`：頁面上的動作照常完成，要送出的會等看板接上之後依序送出；跑 `bin/fm-board.sh bind` 寫好設定檔，再跑一次 `bin/myshape.sh open`（下一次開 session 或下一個 `bin/fm-board.sh tag`、`split`、`adopt` 也會自己寫好，並印一行「看板的 aggregator 設定原本不在，已寫好：firstmate…」）。
+`aggregator：沒有接上（config/myshape-aggregator.json 不能用：是空的，看板不執行任何程式）`：有人在那裡放了空檔，要看板不跑任何程式；要接回去就刪掉它再跑 `bin/fm-board.sh bind` 與 `bin/myshape.sh open`。
+剛打開時 `home main：` 那一行可能是 `還沒讀到`，等一下再看。
 
-服務第一次成功啟動之後，主 first mate 每次開 session 都會檢查它：沒在跑就啟動，並在啟動摘要 fleet state 那一段的最後印一行 `看板服務：在跑`、`看板服務：原本沒在跑，已啟動`、`看板服務：原本沒有回應，已重新啟動` 或 `看板服務：無法啟動：<原因>`（[`bin/fm-topic-session-start.sh`](bin/fm-topic-session-start.sh)）。
+服務第一次成功啟動之後，主 first mate 每次開 session 都會檢查它：沒在跑就啟動，並在啟動摘要 fleet state 那一段的最後印一行 `看板服務：在跑`、`看板服務：原本沒在跑，已啟動`、`看板服務：原本沒有回應，已重新啟動`、`看板服務：已接上 firstmate，換上新的看板` 或 `看板服務：無法啟動：<原因>`（[`bin/fm-topic-session-start.sh`](bin/fm-topic-session-start.sh)）。
+少了 `config/myshape-aggregator.json` 時它先寫好（同 `bin/fm-board.sh bind`），在跑的看板就換掉，印的是 `看板服務：已接上 firstmate，換上新的看板`。
 沒拿到 session 鎖的唯讀 session、second mate 的 home、服務從來沒成功啟動過的主 home，都不檢查也不印這一行。
 
 **不對時**：
@@ -173,6 +180,7 @@ bin/myshape.sh status
   開 session 時的 `看板服務：無法啟動：<原因>` 是同一個原因，照著修，下一次開 session 或任何一個看板指令會再試。
 - 上一次啟動失敗的原因在 `state/myshape/startup-error`，服務的輸出在 `state/myshape/service.log`（contracts 第 3 節）。
 - 某個 home 顯示 `無法回報`（頁面上那個 home 的橫幅說原因，例如 `還沒換到 fork`）、`版本不相容` 或 `版本不同`，或頁面說帳本未開，表示那個 home 不在同一版或沒開帳本；只有主 home 時不會出現，有 second mate 時見第 8 節。
+- `aggregator：沒有接上（<路徑> 的群組也能寫（權限 0775）；需要確認的程式不能讓群組寫…）`：設定檔寫的程式不是 git 追蹤、和 HEAD 相同的 `bin/` 底下的檔，又是群組能寫的。first mate 的設定檔只會在 `bin/fm-board.sh` 在 checkout 裡被改過、還沒提交時遇到；把那個改動提交或還原之後再跑一次 `bin/myshape.sh open`，不要對整個 checkout 改權限。
 - 不用時 `bin/myshape.sh stop` 停掉服務；主 first mate 下一次開 session 時會再把它啟動。
 
 ## 6. 裝規則，重開 session
@@ -201,7 +209,7 @@ bin/fm-board.sh install-rules
 ## 7. 之後怎麼更新
 
 - **fork 有新版**（看板或 fork 的修正進了 `carry`）：在主 home 跑 `/updatefirstmate`。
-  下一個看板指令發現服務的程式版本不同，會自動換掉舊服務（開 session 時的檢查不換，只回報 `看板服務：在跑`）；`status` 出現「目前的程式是 …；下一個指令或 restart 會換成新版」時，也可以直接 `bin/myshape.sh restart`。
+  下一個看板指令發現服務的程式版本或設定檔不同，會自動換掉舊服務（開 session 時的檢查只在替這個 home 補寫設定檔時換，其他時候只回報 `看板服務：在跑`）；`status` 出現「目前的程式是 …；下一個指令或 restart 會換成新版」時，也可以直接 `bin/myshape.sh restart`。
   **確認**：`status` 的 `程式版本：` 等於 `git -C <clone> rev-parse HEAD`。
 - **看板改名成 myshape 的那一次更新**（只有一次）：看板的程式、指令與檔案從 `topic-board`、`fm-topic.sh` 改名成 `myshape`、`myshape.sh`。
   有看板資料的 home 一更新到這一版，看板的每個指令都回 69，說這個 home 還有改名前的檔；還開著的舊服務也不再給頁面，直到那個 home 跑過 `bin/fm-board.sh migrate-myshape`。
@@ -215,6 +223,11 @@ bin/fm-board.sh install-rules
   **不對時**：照它印的那一行處理後原樣再跑一次；中途停掉也一樣，再跑一次會接著做完。
   有 second mate 時，每個 second mate 的 home 也跑一次（遠端的是 `bin/fm-on.sh <id> fm-board.sh migrate-myshape`）：那裡沒有看板的檔，只清那個 code root；共用的規則檔照平常由主 home 傳過去。
   還沒重開的 session 照舊規則跑 `bin/fm-topic.sh` 時，那支舊名字什麼都不做，只回改用哪個指令與使用者還要跑什麼。
+- **看板改由設定檔接上 first mate 的那一次更新**（只有一次）：更新之前就設好的主 home 沒有 `config/myshape-aggregator.json`。
+  更新後第一次開 session、或第一個 `bin/fm-board.sh tag`、`split`、`adopt`（first mate 派工與歸併時會跑）先到的那一個替它寫好；開 session 時換掉在跑的看板，印 `看板服務：已接上 firstmate，換上新的看板`，指令則在 stderr 印一行「看板的 aggregator 設定原本不在，已寫好：firstmate…」。不用手動做什麼。
+  在那之前，舊的看板服務照舊執行 `bin/fm-board.sh`，要送出的照常送出。
+  更新之後到那一刻之前，若先跑了 `bin/myshape.sh` 的指令（例如 first mate 照規則跑的 `summary`、`which`），看板會換成新版但還沒有設定檔：頁面上只多一行「沒有接上 aggregator（沒有 config/myshape-aggregator.json）…」，要送出的等著，`summary`、`which` 回「議題不明」；設定檔一寫好，下一個看板指令換上接上的看板，等著的各送一次，自己就好了。
+  **確認**：`bin/myshape.sh status` 有 `aggregator：已接上（first mate）` 與 `aggregator 設定：firstmate，feed bin/fm-board.sh，deliver bin/fm-board.sh`。
 - **規則範本有變**：更新後 `bin/fm-board.sh rules` 會印 `和範本不同`；由使用者決定之後再跑一次 `bin/fm-board.sh install-rules`，再重開 session。
   有 second mate 時，先和第 8 節第 4 點一樣確認每個 home 都是 `相同` 再裝：新的規則可能用到只有新版程式才有的指令，例如共用規則從 v3 起叫 second mate 跑 `bin/fm-board.sh tag`，還沒更新的 home 沒有這支指令。
 - **上游有新版**：只有在 fork 的維護者把上游的 `main` 合併進 `carry` 之後才會到你手上，之後就和「fork 有新版」一樣（[rollout「之後怎麼更新」](myshape/spec/rollout.markdown)）。
@@ -232,6 +245,8 @@ bin/fm-board.sh install-rules
   要退回看板改名成 myshape 之前的程式，先在每個跑過 `migrate-myshape` 的 home 跑 `bin/fm-board.sh migrate-myshape --undo`，再退程式：舊的程式只認舊的名字。
   要退回看板經 `bin/fm-board.sh feed` 與 `deliver` 讀寫之前的程式，先跑 `bin/myshape.sh stop`，把 `state/myshape/audit.jsonl` 移到別處，再退程式：舊的程式讀不懂這一版寫的寫入紀錄，頁面上的寫入歷史會從空的開始。
   退回看板自己存「要你動手」的項目之前的程式時，看板上的項目不會顯示，只剩 backlog 裡還開著的舊 hold；`data/myshape/todos.json` 留著，回到新版時項目又會出現。
+  不想讓看板執行任何程式時，在 `config/myshape-aggregator.json` 放一個空檔（`: > config/myshape-aggregator.json`）再跑 `bin/myshape.sh restart`：看板照常顯示與存檔，要送出的等著；只刪掉那個檔不夠，下一次開 session 或下一個 `bin/fm-board.sh tag`、`split`、`adopt` 會把它寫回來，而它們從不換掉已經在那裡的檔。要接回去，刪掉空檔、跑 `bin/fm-board.sh bind`，再 restart，等著的各送一次。
+  退回看板經設定檔接上 aggregator 之前的程式時，看板又只執行寫死的 `bin/fm-board.sh`；`config/myshape-aggregator.json` 與 `data/myshape/confirmations.json` 留著，舊版不讀。
 
 ## 8. 有 second mate 時
 
@@ -250,6 +265,7 @@ second mate 本身怎麼佈建照上游：同機的見 [secondmate-provisioning 
    更新後照輸出的 `restart-secondmates:` 重啟 second mate（updatefirstmate 技能第 3 步）。
 3. **每個 home 開帳本**：同機的是 `bin/fm-board.sh --in-home <id> setup`，遠端的是 `bin/fm-on.sh <id> fm-board.sh setup`。
    遠端那一行能跑、回 `ok setup …`，就表示那台已經跟到有 `fm-board.sh` 的 `carry`（rollout R-1）。
+   second mate 的 home 不跑看板，所以 `setup` 在那裡不寫看板的設定檔，另印一行 `ok bind secondmate home 不跑看板，不寫 aggregator 設定`。
 4. **確認每個 home 都在同一版**：打開看板停留一分鐘以上（讓遠端輪到一次），`bin/myshape.sh status` 的每一行 `home <id>：` 都要是 `相同`。
    `無法回報`、頁面上那個 home 的橫幅寫 `還沒換到 fork`，表示那台遠端還沒跟到 `carry`：停在這裡，不要做下一步，也不要拿掉任何一邊的 `config/self-update-source`，記下那台的更新錯誤訊息再處理（rollout R-1）。
 5. **最後才裝規則**（第 6 步）：共用的那段規則會叫每個 second mate 跑 `fm-board.sh` 與 `fm-dispatch-plan.sh`，所以要等上一步全過。

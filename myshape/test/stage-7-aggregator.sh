@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # The board with an aggregator on the other side, from a board-only root in
-# the hardened environment of stage-7-standalone.sh (AT2, AT6, AT7 of the
-# board-interface test plan, as they stand for B3). Two stubs sit in the root
-# under the one name the board runs, bin/fm-board.sh: stub-fm, Firstmate-shaped,
-# feeds the shared fixtures of myshape/test/contract/ for home main and its
-# further homes sm1 and far1; stub-plain, written only from the contract,
-# feeds a home of its own under the name "plain". Each logs every feed call
-# and every action record it receives (stub-aggregator/stub-lib.sh). With
+# the hardened environment of stage-7-standalone.sh (AT2, AT6, AT7 and AT9 of
+# the board-interface test plan, as they stand for B4). Two stubs sit outside
+# the root under their own names, each reached through its home's binding
+# file and confirmed on the page: stub-fm, Firstmate-shaped, feeds the shared
+# fixtures of myshape/test/contract/ for home main and its further homes sm1
+# and far1; stub-plain, written only from the contract, feeds a home of its
+# own under the name "plain". Each logs every feed call and every action
+# record it receives (stub-aggregator/stub-lib.sh). AT9 checks the binding
+# and the safety rule from a second board-only root. With
 # TB_STAGE7_TRIPWIRES=1 the root also holds a tripwire for every other
 # Firstmate script, and the run must leave the trip log empty (AT3.2).
 # shellcheck disable=SC2016 # jq filters are literal text.
@@ -39,25 +41,21 @@ BASE_ENV=(MYSHAPE_TEST=1 MYSHAPE_NOTIFY_MS=2000 "MYSHAPE_RETRY_MS=100,200"
 AGG_FM=$TMP_ROOT/agg-fm
 AGG_PLAIN=$TMP_ROOT/agg-plain
 SA_ENV=("${BASE_ENV[@]}")
-sa_install_stub plain "$AGG_PLAIN"
-mkdir -p "$AGG_FM/fm" "$AGG_FM/control"
-: > "$AGG_FM/calls.log"
-: > "$AGG_FM/received.jsonl"
-: > "$AGG_FM/play"
-SA_ENV=("${BASE_ENV[@]}")
+STUB_PLAIN=$(sa_install_stub plain "$AGG_PLAIN")
+STUB_FM=$(sa_install_stub fm "$AGG_FM")
 CONTRACT=$ROOT/myshape/test/contract
 FMH=$(sa_home fm)
 PH=$(sa_home plain)
 sa_decoys "$FMH"
 sa_decoys "$PH"
+sa_bind "$FMH" "$STUB_FM"
+sa_bind "$PH" "$STUB_PLAIN"
 
 # f / p <myshape.sh arguments...>: the board of the stub-fm home, or of the stub-plain home.
 f() {
-  local SA_ENV=("${BASE_ENV[@]}" TB_STUB=fm "TB_AGG=$AGG_FM")
   sa "$FMH" "$@"
 }
 p() {
-  local SA_ENV=("${BASE_ENV[@]}" TB_STUB=plain "TB_AGG=$AGG_PLAIN")
   sa "$PH" "$@"
 }
 
@@ -138,6 +136,7 @@ test_fm_setup() {
   for home in main sm1 far1; do cp "$CONTRACT/report-$home.json" "$AGG_FM/fm/$home.json"; done
   cp "$CONTRACT/ledger-main.jsonl" "$AGG_FM/fm/main.ledger"
   f open >/dev/null || fail "the board did not start"
+  sa_confirm "$FMH"
   f create "建置" --goal "把 x 建起來" --id solo >/dev/null
   f create "收尾" --goal "收乾淨" --id wrap >/dev/null
   refresh "$FMH"
@@ -409,7 +408,6 @@ test_fm_resend_after_a_restart() {
 test_fm_a_crash_mid_write() {
   local message direct_sm direct_far
   f stop >/dev/null
-  SA_ENV=("${BASE_ENV[@]}" TB_STUB=fm "TB_AGG=$AGG_FM")
   sa_child_board "$FMH"
   refresh "$FMH"
   wait_for "the further homes to be known again" is 3 state_of "$FMH" '.homes | length'
@@ -420,7 +418,6 @@ test_fm_a_crash_mid_write() {
   direct_far=$(post "$FMH" direct '{"home":"far1","task":"far-work","text":"途中"}' | jq -r '.write_id')
   wait_for "all three under way" is 3 received_count "$AGG_FM"
   sa_crash_child "$FMH"
-  SA_ENV=("${BASE_ENV[@]}")
   : > "$AGG_FM/play"
   sleep 3.5
   f open >/dev/null || fail "the next command must bring the board back"
@@ -517,6 +514,7 @@ JSON
   "holds": [ { "id": "w2-call", "title": "w2", "question": "好嗎？\n選項：好 | 不好" } ] }
 JSON
   p open >/dev/null || fail "the plain board did not start"
+  sa_confirm "$PH"
   p create "建置" --goal "把 x 建起來" --id solo >/dev/null
   p create "H1" --goal "g" --id H1 --queue high >/dev/null
   p create "H2" --goal "g" --id H2 --queue high >/dev/null
@@ -720,9 +718,278 @@ test_plain_texts_name_no_firstmate() {
   pass "nothing the board shows, sends or stores names Firstmate (AT6.6)"
 }
 
+# --- AT9: the binding and the safety rule -----------------------------------
+# A second board-only root, R9, holds a committed copy of stub-plain in its
+# bin/ (the one kind of program that needs no confirmation); another copy
+# sits outside it in $AGG_B/bin. Both keep their data in $AGG_B.
+
+R9=$TMP_ROOT/root9/board
+AGG_B=$TMP_ROOT/agg-bind
+OUTSIDE=$AGG_B/bin/stub-plain
+
+r9() {  # <myshape.sh arguments...>: the AT9 home's board, from R9
+  local SA_ROOT=$R9
+  sa "$BH" "$@"
+}
+
+bind_to() {  # <program> [<name>]: the AT9 home's binding names <program>
+  sa_bind "$BH" "$@"
+}
+
+agg_b() {  # [jq arguments...] <jq filter>: the AT9 home's aggregator block
+  state_of "$BH" "${@:1:$#-1}" ".aggregator | ${*: -1}"
+}
+
+calls_b() {
+  wc -l < "$AGG_B/calls.log" | tr -d ' '
+}
+
+message_b() {  # <text>: a page message on the AT9 topic; prints its write id
+  post "$BH" messages "$(jq -cn --arg text "$1" '{topic: "bind", text: $text}')" | jq -r '.write_id'
+}
+
+received_b() {  # <write-id>: how many times the AT9 stub received it
+  jq -s --arg id "$1" '[.[] | select(.id == $id)] | length' "$AGG_B/received.jsonl"
+}
+
+test_bind_setup() {
+  tb_make_board_root "$R9" >/dev/null
+  [ "${TB_STAGE7_TRIPWIRES:-0}" != 1 ] || sa_trip_root "$R9"
+  sa_install_stub plain "$AGG_B" >/dev/null
+  sa_stub_files plain "$R9/bin" "$AGG_B"
+  tb_commit_root "$R9" "a tracked aggregator" >/dev/null
+  printf '%s\n' '{"tasks":[{"id":"b1","kind":"job","state":"working"}],"topics":{"b1":"bind 2026-11-18T10:00:00Z"}}' \
+    > "$AGG_B/plain/main.json"
+  BH=$(sa_home bind)
+  r9 open >/dev/null || fail "the AT9 board did not start"
+  r9 create "綁定" --goal "接上 aggregator" --id bind >/dev/null
+  assert_equals "false|沒有 config/myshape-aggregator.json" "$(agg_b '"\(.connected)|\(.unavailable)"')" \
+    "a home with no binding must show only that nothing is connected"
+  pass "an unbound board reaches no aggregator"
+}
+
+# AT9.5 (first half): a program git tracks unchanged under the code root's bin/
+# runs without a confirmation, even when its group may write it.
+test_bind_a_tracked_program_needs_no_confirmation() {
+  local id
+  bind_to bin/stub-plain plain
+  chmod 775 "$R9/bin/stub-plain"
+  [ -z "$(git -C "$R9" status --porcelain)" ] || fail "a group bit must not count as a change to git"
+  r9 open >/dev/null
+  assert_equals "true|0" "$(agg_b '"\(.connected)|\(.confirm | length)"')" \
+    "a tracked, unchanged program under bin/ must run with nothing to confirm"
+  id=$(message_b "直接送")
+  wait_for "the message to the tracked program" write_is "$BH" "$id" delivered
+  assert_equals 1 "$(received_b "$id")" "the message must be received once"
+  assert_contains "$(r9 status)" "程式目錄：$R9" "status must show the code root the command derived"
+  pass "a tracked program under bin/ runs without a confirmation, group-writable or not (AT9.5, AT4.6)"
+}
+
+# AT9.1: the binding holds paths only; the board adds feed and deliver itself.
+test_bind_paths_only() {
+  local before id case_json reason
+  before=$(calls_b)
+  for case_json in \
+    '{"v":1,"name":"plain","feed":["bin/stub-plain","feed"],"deliver":"bin/stub-plain"}|不能是陣列' \
+    '{"v":1,"name":"plain","feed":"bin/stub-plain","deliver":"bin/stub-plain deliver"}|不能帶參數' \
+    '{"v":1,"name":"plain","feed":"bin/stub-plain","deliver":"bin/stub-plain","root":"/elsewhere"}|多了 root'; do
+    reason=${case_json#*|}
+    printf '%s\n' "${case_json%%|*}" > "$BH/config/myshape-aggregator.json"
+    id=$(message_b "不該送出")
+    wait_for "the write to wait" write_is "$BH" "$id" waiting
+    assert_contains "$(agg_b '.unavailable')" "$reason" "a binding that is not paths only must be refused, saying why"
+  done
+  assert_equals "$before" "$(calls_b)" "a refused binding must run nothing"
+  assert_equals "" "$(awk '$1 != "feed" && $1 != "deliver"' "$AGG_B/calls.log")" \
+    "every run must have feed or deliver as its first argument"
+  # The same bytes the running board started with: no command replaces it,
+  # and the next read of the root home hands the waiting writes over.
+  bind_to bin/stub-plain plain
+  refresh "$BH"
+  wait_for "the waiting writes to go once the binding is right" is 0 state_of "$BH" '[.writes[] | select(.state == "waiting")] | length'
+  pass "a binding with arrays, arguments or other keys is refused, runs nothing, and writes wait (AT9.1)"
+}
+
+# AT9.2: a confirmation holds for the SHA-256 of the program and of the binding,
+# checked before every run.
+test_bind_a_confirmation_is_bound_to_the_bytes() {
+  local id size
+  bind_to "$OUTSIDE" plain
+  r9 open >/dev/null
+  assert_equals "false|$OUTSIDE" "$(agg_b '"\(.connected)|\(.confirm[0].path)"')" \
+    "a program outside the root must wait for a confirmation that shows its full path"
+  id=$(message_b "確認之後")
+  wait_for "the write to wait for the confirmation" write_is "$BH" "$id" waiting
+  sa_confirm "$BH"
+  wait_for "the confirmation to release the write" write_is "$BH" "$id" delivered
+  assert_equals 1 "$(received_b "$id")" "the released write must be received once"
+  cp -p "$OUTSIDE" "$TMP_ROOT/stub-ref"
+  size=$(wc -c < "$OUTSIDE")
+  sed -i 's/written only from/written ONLY from/' "$OUTSIDE"
+  touch -r "$TMP_ROOT/stub-ref" "$OUTSIDE"
+  assert_equals "$size" "$(wc -c < "$OUTSIDE")" "the changed program must keep its size"
+  id=$(message_b "改了一個字")
+  wait_for "a changed program to stop the write" write_is "$BH" "$id" waiting
+  assert_equals 0 "$(received_b "$id")" "a program whose bytes changed must not run"
+  assert_equals 1 "$(agg_b '.confirm | length')" "the page must ask again"
+  sa_confirm "$BH"
+  wait_for "the write after the new confirmation" write_is "$BH" "$id" delivered
+  assert_equals 1 "$(received_b "$id")" "the write must be received once after the new confirmation"
+  bind_to "$OUTSIDE" plain2
+  id=$(message_b "設定改了")
+  wait_for "a changed binding to stop the write" write_is "$BH" "$id" waiting
+  assert_equals 1 "$(agg_b '.confirm | length')" "a changed binding must ask again"
+  sa_confirm "$BH"
+  wait_for "the write after the binding's confirmation" write_is "$BH" "$id" delivered
+  pass "a confirmation holds only for the bytes it saw, of the program and of the binding (AT9.2)"
+}
+
+# AT9.3: every program gets the fixed environment, whatever the starter had.
+# The canaries are ones the board's own command does not read (it honors
+# FM_*_OVERRIDE for its paths, so the plan's FM_DATA_OVERRIDE would move the
+# board's data rather than test what reaches the program): FM_SSH_BIN and
+# TMUX are what firstmate's adapter would read, SSH_AUTH_SOCK the agent.
+test_bind_a_fixed_environment() {
+  local names expected id
+  : > "$AGG_B/env-probe"
+  expected=$(printf '%s\n' HOME LANG MYSHAPE_HOME PATH TMPDIR)
+  SA_ENV=("${BASE_ENV[@]}" TB_CANARY=leak FM_SSH_BIN=/decoy SSH_AUTH_SOCK=/decoy TMUX=/decoy MYSHAPE_HOME=/decoy)
+  SA_CMD_PATH="$SA_PATH::." r9 restart >/dev/null
+  SA_ENV=("${BASE_ENV[@]}")
+  for program in confirmed exempt; do
+    rm -f "$AGG_B/env.main" "$AGG_B/env.deliver"
+    refresh "$BH"
+    id=$(message_b "環境 $program")
+    wait_for "the $program program's environment" write_is "$BH" "$id" delivered
+    for probe in main deliver; do
+      names=$(grep -v -x -E 'PWD|SHLVL|_|OLDPWD' "$AGG_B/env.$probe")
+      assert_equals "$expected" "$names" "the $program program's $probe run must get exactly the fixed names"
+      assert_equals "$SA_PATH" "$(cat "$AGG_B/path.$probe")" "PATH must reach the $program program without empty or relative entries"
+    done
+    [ "$program" = exempt ] && break
+    bind_to bin/stub-plain plain
+    SA_ENV=("${BASE_ENV[@]}" TB_CANARY=leak FM_SSH_BIN=/decoy SSH_AUTH_SOCK=/decoy TMUX=/decoy MYSHAPE_HOME=/decoy)
+    SA_CMD_PATH="$SA_PATH::." r9 open >/dev/null
+    SA_ENV=("${BASE_ENV[@]}")
+  done
+  rm -f "$AGG_B/env-probe"
+  pass "a confirmed and a tracked program both get only MYSHAPE_HOME, PATH, HOME, LANG and TMPDIR (AT9.3)"
+}
+
+# AT9.4: the confirmation is written only by the page.
+test_bind_only_the_page_confirms() {
+  local before out rc=0
+  bind_to "$OUTSIDE" plain
+  r9 open >/dev/null
+  sa_confirm "$BH"
+  assert_present "$BH/data/myshape/confirmations.json" "the confirmation must be kept in the board's data"
+  assert_equals "" "$(find "$BH/config" -mindepth 1 -maxdepth 1 ! -name myshape-port ! -name myshape-aggregator.json)" \
+    "the confirmation must not be written into config/"
+  before=$(cat "$BH/data/myshape/confirmations.json")
+  out=$(tb_op "$BH" program-confirm "$(jq -cn --arg path "$OUTSIDE" '{path: $path, sha256: ("0" * 64), binding_sha256: ("0" * 64)}')" 2>&1) || rc=$?
+  assert_equals 1 "$rc" "the socket must refuse a confirmation"
+  assert_contains "$out" "是使用者在頁面上按的，不能從指令送" "the refusal must say only the page confirms"
+  rc=0
+  r9 program-confirm >/dev/null 2>&1 || rc=$?
+  assert_equals 2 "$rc" "the board's command must have no confirmation subcommand"
+  assert_equals "$before" "$(cat "$BH/data/myshape/confirmations.json")" "nothing but the page may change the confirmation"
+  mv "$BH/data/myshape/confirmations.json" "$TMP_ROOT/confirmations.json.moved"
+  r9 restart >/dev/null
+  assert_equals "false|1" "$(agg_b '"\(.connected)|\(.confirm | length)"')" "without the record the page must ask again"
+  sa_confirm "$BH"
+  pass "only the page's confirm writes the confirmation, into data/myshape/ (AT9.4)"
+}
+
+# AT9.5 (second half): everything else waits for a confirmation, or is refused.
+test_bind_what_needs_a_confirmation() {
+  local program reason home_copy file
+  cp "$R9/bin/stub-plain" "$R9/bin/stub-untracked"
+  chmod 755 "$R9/bin/stub-untracked"
+  # Staged with git add but not committed: not equal to HEAD.
+  cp "$R9/bin/stub-plain" "$R9/bin/stub-staged"
+  chmod 755 "$R9/bin/stub-staged"
+  git -C "$R9" add bin/stub-staged
+  mkdir -p "$BH/state/agg"
+  sa_stub_files plain "$BH/state/agg" "$AGG_B"
+  # A program outside the root waits too: AT9.2.
+  for program in bin/stub-untracked bin/stub-staged "$BH/state/agg/stub-plain"; do
+    bind_to "$program" plain
+    r9 open >/dev/null
+    assert_equals 1 "$(agg_b '.confirm | length')" "$program must wait for a confirmation"
+  done
+  printf '# changed\n' >> "$R9/bin/stub-plain"
+  bind_to bin/stub-plain plain
+  r9 open >/dev/null
+  assert_contains "$(agg_b '.unavailable')" "群組也能寫（權限 0775）" \
+    "a tracked program changed before the start is not exempt, and its group bit is refused"
+  chmod 755 "$R9/bin/stub-plain"
+  r9 open >/dev/null
+  assert_equals "1|$R9/bin/stub-plain" "$(agg_b '"\(.confirm | length)|\(.confirm[0].path)"')" \
+    "a tracked program changed before the start must wait for a confirmation"
+  git -C "$R9" checkout -q -- bin/stub-plain
+  git -C "$R9" rm -q --cached bin/stub-staged
+  ln -s "$OUTSIDE" "$TMP_ROOT/stub-link"
+  cp "$OUTSIDE" "$TMP_ROOT/stub-plain-text" && chmod 644 "$TMP_ROOT/stub-plain-text"
+  for program in "$TMP_ROOT/stub-link|是符號連結" "$TMP_ROOT/nothing-here|找不到" "$TMP_ROOT/stub-plain-text|不能執行（權限 0644）"; do
+    reason=${program#*|}
+    bind_to "${program%%|*}" plain
+    r9 open >/dev/null
+    assert_contains "$(agg_b '.unavailable')" "$reason" "${program%%|*} must be refused, saying why"
+    assert_equals 0 "$(agg_b '.confirm | length')" "${program%%|*} must not be offered for confirmation"
+  done
+  # Confirmed in AT9.4 under this same binding.
+  bind_to "$OUTSIDE" plain
+  r9 open >/dev/null
+  assert_equals true "$(agg_b '.connected')" "the outside program must be the confirmed one"
+  chmod 775 "$OUTSIDE"
+  assert_equals "false|$OUTSIDE 的群組也能寫（權限 0775）；需要確認的程式不能讓群組寫，確認了也不執行。要用它，只改這一個檔：chmod g-w $OUTSIDE" \
+    "$(agg_b '"\(.connected)|\(.unavailable)"')" "a confirmed program its group may write must be refused, naming the file and its mode"
+  assert_contains "$(post "$BH" programs/confirm '{"role":"deliver"}' | jq -r '.message')" "權限 0775" \
+    "a group-writable program must not be offered for confirmation"
+  chmod 755 "$OUTSIDE"
+  # Decoy code roots: in the home, and named by files under its config/, data/
+  # and state/; none of them may be where a relative path resolves.
+  for home_copy in "$BH" "$BH/config/decoy-root" "$BH/data/decoy-root" "$BH/state/decoy-root"; do
+    mkdir -p "$home_copy/bin"
+    printf '#!/bin/sh\ntouch %s/home-copy-ran\nexit 1\n' "$BH" > "$home_copy/bin/stub-plain"
+    chmod 755 "$home_copy/bin/stub-plain"
+  done
+  for file in config/myshape-root data/myshape/root state/myshape/root; do
+    printf '%s\n' "$BH/${file%%/*}/decoy-root" > "$BH/$file"
+  done
+  bind_to bin/stub-plain plain
+  r9 open >/dev/null
+  refresh "$BH"
+  wait_for "the root's program to run" is true agg_b '.connected'
+  assert_absent "$BH/home-copy-ran" "a relative path must resolve against the code root, never the home or a root named under its config/, data/ or state/"
+  assert_contains "$(r9 status)" "程式目錄：$R9" "the code root must stay the one the command derived"
+  pass "untracked, changed, home and outside programs wait for a confirmation; a symlink, a missing or a non-executable file, and a group-writable unconfirmable one are refused (AT9.5)"
+}
+
+# AT9.6: the undo. With the binding gone nothing runs; restored, the writes go once.
+test_bind_the_undo() {
+  local before id
+  rm "$BH/config/myshape-aggregator.json"
+  r9 restart >/dev/null
+  before=$(calls_b)
+  id=$(message_b "沒有設定")
+  wait_for "the write to wait with no binding" write_is "$BH" "$id" waiting
+  refresh "$BH"
+  assert_equals "$before" "$(calls_b)" "with the binding removed nothing may run"
+  bind_to bin/stub-plain plain
+  r9 restart >/dev/null
+  wait_for "the waiting write once the binding is back" write_is "$BH" "$id" delivered
+  assert_equals 1 "$(received_b "$id")" "the waiting write must be received once"
+  r9 restart >/dev/null
+  refresh "$BH"
+  assert_equals 1 "$(received_b "$id")" "another restart must not send it again"
+  pass "removing the binding and restarting runs nothing; restoring it delivers the waiting writes once (AT9.6)"
+}
+
 test_nothing_is_left() {
   f stop >/dev/null
   p stop >/dev/null
+  r9 stop >/dev/null
   sa_check_decoys "$FMH"
   sa_check_decoys "$PH"
   sa_assert_no_boards
@@ -736,4 +1003,7 @@ fm_test_run test_fm_setup test_fm_work_reaches_the_page test_fm_every_home_is_re
   test_fm_a_crash_mid_write test_fm_whole_page_states test_fm_refresh test_fm_summaries \
   test_plain_setup test_plain_work test_plain_ledger test_plain_second_home test_plain_banners \
   test_plain_work_only_under_topics test_plain_topics_and_order test_plain_the_captains_channel test_plain_hands_on \
-  test_plain_changes_are_marked test_plain_texts_name_no_firstmate test_nothing_is_left
+  test_plain_changes_are_marked test_plain_texts_name_no_firstmate \
+  test_bind_setup test_bind_a_tracked_program_needs_no_confirmation test_bind_paths_only \
+  test_bind_a_confirmation_is_bound_to_the_bytes test_bind_a_fixed_environment test_bind_only_the_page_confirms \
+  test_bind_what_needs_a_confirmation test_bind_the_undo test_nothing_is_left

@@ -199,12 +199,8 @@ test_message_and_notice_become_notes() {
   raw_is fm-inbox.sh '議題「帳務重構」離開「待辦」，排在「一般」第 3' "a notice's note body must be its exact text"
   fresh
   deliver "$(record message '. + {legacy_request_id: "tb-0123456789abcdef"}')" >/dev/null
-  assert_contains "$(cat "$TB_LOG")" 'argv=note|--request-id|tb-0123456789abcdef|-|' \
-    "a message carrying legacy_request_id must keep that request id"
-  fresh
-  deliver "$(record notice '. + {legacy_request_id: "tb-confirmed-feedfacefeedface"}')" >/dev/null
-  assert_contains "$(cat "$TB_LOG")" 'argv=note|--request-id|tb-confirmed-feedfacefeedface|-|' \
-    "a notice carrying legacy_request_id must keep that request id"
+  assert_contains "$(cat "$TB_LOG")" 'argv=note|--request-id|tb-w-mfz3k1-a1b2c3|-|' \
+    "a field the board no longer sends must not change the request id"
   pass "message and notice run fm-inbox.sh note with the board's exact body and request id"
 }
 
@@ -302,7 +298,7 @@ test_answer_runs_the_hold_tool_then_a_note() {
     "an answer in far1 must run fm-on.sh --stdin far1 fm-captain-hold.sh answers --source myshape"
   raw_is fm-on.sh $'call-1\t合併\tA\trelease\n' "the remote answer must be one line ending in a newline"
   fresh
-  deliver "$(record answer '.topic = null | . + {legacy_request_id: "tb-old"}')" >/dev/null
+  deliver "$(record answer '.topic = null')" >/dev/null
   assert_contains "$(cat "$TB_LOG")" "$(line fm-inbox.sh "$note" "$MAIN" '［議題：未分類］已在看板回答 main/call-1：合併')" \
     "an answer without a topic must say 未分類, and its note keeps the tb-<id>-note request id"
   pass "answer runs the hold tool of its home, then the note tb-<id>-note"

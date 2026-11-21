@@ -2,7 +2,7 @@
 
 第 2、3 節是當時的紀錄，用的是改名（[open-issues](open-issues.markdown) C57）之前的名字 `topic-board` 與 `fm-topic`；新舊名字的對照在 C57。
 
-看板由一個獨立的 session 做到這裡，之後的維護移交給 fleet。這一頁給接手的人：怎麼跑測試、每個問題的狀態、哪些事還沒驗、已知的限制。看板只經 `bin/fm-board.sh feed` 與 `deliver` 碰到另一邊（[contracts](contracts.markdown) 第 4、7、11 節）；first mate 那支程式依賴框架的哪些指令與輸出，在 [adapter](../../fm-board/spec/adapter.markdown) 第 7 節。
+看板由一個獨立的 session 做到這裡，之後的維護移交給 fleet。這一頁給接手的人：怎麼跑測試、每個問題的狀態、哪些事還沒驗、已知的限制。看板只經 home 的 `config/myshape-aggregator.json` 寫的兩支程式碰到另一邊，first mate 的是 `bin/fm-board.sh feed` 與 `deliver`（[contracts](contracts.markdown) 第 4、7、11 節）；first mate 那支程式依賴框架的哪些指令與輸出，在 [adapter](../../fm-board/spec/adapter.markdown) 第 7 節。
 
 狀態以 `carry` 上這個檔所在的 commit 為準。標「回報」的結果是主 first mate 在真的 home 或 Mac 上跑完告訴這個 session 的，這個 session 沒有自己重跑。
 
@@ -104,6 +104,7 @@ trash "$H"                                        # 再把暫時的 home 丟進�
 | C55 | 完成 | 這一條進 `carry` 的 PR（commit 訊息寫明 C55） |
 | C58 | 完成 | 這一條進 `carry` 的 PR |
 | C59 | 完成 | 這一條進 `carry` 的 PR |
+| C60 | 完成 | 這一條進 `carry` 的 PR |
 
 C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold 時記下的處理方式，卡片只剩一個送出鈕（見 C19）。
 
@@ -166,12 +167,16 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
 
 測試蓋不到的：
 
+- 看板給程式的環境只有五個名稱（contracts 第 7 節）；框架的指令改成需要別的環境變數時，測試裡的替身拿不到也看不出來，真的 home 上那個指令才會壞。要加名稱就加在 `myshape/src/commands.ts` 的那張表。
 - `fm-board.sh deliver` 跑的四支框架指令（`fm-inbox.sh`、`fm-send.sh`、`fm-on.sh`、`fm-captain-hold.sh answers`）在測試裡是替身。框架改了它們的輸出或 exit code，測試不會失敗。細節與每一項對應的測試在 [adapter](../../fm-board/spec/adapter.markdown) 第 7 節。
 - 進入點 `board-server.ts`、`board-client.ts` 與 `src/page/` 沒有單元測試，由 Bash 與瀏覽器的整合測試覆蓋；CRAP 與 mutation 的關卡只管函式庫模組（C28）。
 - 窄視窗的版面沒有自動測試（C42）。
 - 頁面在佇列裡有上百個項目時的速度沒有量過。
 
 行為上的：
+
+- 主 home 的 checkout 裡改了 `bin/fm-board.sh` 而沒提交，下一次看板啟動時它就不是「不用確認」的程式；這台 PC 的 checkout 群組能寫，要確認的程式會被拒絕，看板就接不上（寫入等著、不讀 home），直到那個改動提交或還原，再跑一個看板指令。
+- `FM_ROOT_OVERRIDE` 指定 code root 時，「不用確認」照樣看那個 code root 的 `bin/`（contracts 第 7 節）；要不要在這時不給免確認，是之後的工作。
 
 - 頁面上只能用拖的改順序：沒有鍵盤可用的移法，原生拖放在 Chrome 上也還沒驗（第 3 節）；這兩種情況改用 `bin/myshape.sh move`（C55）。
 - 看板認一個 home 的依據是 `state/myshape/token`：全新的 home 要先 `open` 才能 `create`；`open` 在 secondmate 的 home 也不會被拒絕，那裡會開出另一個看板（沒有規則叫 second mate 跑它）。

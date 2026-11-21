@@ -15,6 +15,7 @@ TMP_ROOT=$(fm_test_tmproot fm-board-s3)
 trap 'tb_stop_boards; fm_test_cleanup' EXIT
 
 MAIN=$(tb_make_service_home main)
+tb_bind_home "$MAIN"
 LOCAL_SM=$(tb_make_secondmate_home sm sm1)
 tb_write_registry "$MAIN" "$LOCAL_SM"
 

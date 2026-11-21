@@ -68,6 +68,7 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
 | `data/myshape/aggregator.json` | 0644 | 最近一次根 home 回報裡的 `aggregator`，讓看板在下一次讀到之前寫的字也用對名字 | 只有看板服務 |
 | `data/myshape/todos.json` | 0644 | 要你動手的項目（第 3.6 節） | 只有看板服務 |
 | `data/myshape/decisions.json` | 0644 | 每個 home 上一次讀到的待決事項與已關的待決事項的游標（第 3.7 節） | 只有看板服務 |
+| `data/myshape/confirmations.json` | 0644 | 使用者在頁面上確認過的程式：每支程式一筆，完整路徑、程式內容與設定檔內容的 SHA-256、時間，加上一次改動的 `outbox`（第 7 節） | 只有看板服務，只在頁面上的確認動作 |
 | `data/<task-id>/topic` | 0644 | 議題標記，每個 home 各自一份 | `fm-board.sh tag`（first mate 這一側；看板經 feed 讀） |
 | `state/myshape/` | 0700 | 下面這些檔的目錄 | 服務 |
 | `state/myshape/board.sock` | 0600 | Unix socket | 服務 |
@@ -78,9 +79,10 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
 | `state/myshape/service.log`、`service.log.1` | 0600 | 服務的 stdio | 服務 |
 | `state/myshape/audit.jsonl` | 0600 | 稽核紀錄，只追加 | 服務 |
 | `config/myshape-port` | — | 選用，一行埠號 | 使用者 |
+| `config/myshape-aggregator.json` | 0644，別的帳號不能寫 | 看板接哪個 aggregator：名稱與 feed、deliver 兩支程式的路徑（第 7 節）；看板只讀 | 使用者，或 aggregator 照使用者的意思寫（first mate 是 `fm-board.sh setup`、`bind` 與 session start） |
 | `config/fleet-ledger` | — | 上游的帳本旗標，每個 home 各一 | `fm-board.sh setup`（first mate 這一側） |
 
-每次改寫整個檔（`topics.json`、`topics-archive.json`、`offsets.json`、`notify-pending.json`、`aggregator.json`、`todos.json`、`decisions.json`、`token`、`port`、`pid`）都用同目錄的暫存檔 `<檔名>.tmp-<pid>` 加 rename。
+每次改寫整個檔（`topics.json`、`topics-archive.json`、`offsets.json`、`notify-pending.json`、`aggregator.json`、`todos.json`、`decisions.json`、`confirmations.json`、`token`、`port`、`pid`）都用同目錄的暫存檔 `<檔名>.tmp-<pid>` 加 rename。
 
 ### 3.1 `data/topics.json`
 
@@ -141,13 +143,14 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
   另有三種沒有議題的紀錄：`todo.forgotten`（`todo adopt-done` 清掉一個沒搬上看板、hold 已在別處關掉的舊狀態，帶它的 `reason`）、`todo.settled`（看板上關掉的搬上來的項目，它的 hold 也關了，之後可以再放上看板）、`todo.marks_carried`（看板第一次自己存項目時，從 `topics.json` 帶過來舊狀態）。
   `text` 例：「要你動手「登入 VPN」已關：做完了，first mate 已驗證（first mate 用指令）」、「要你動手「登入 VPN」：你按了做完了（你在頁面上）」。
   `topic.confirmed` 只在看板啟動時確認舊版留下的提議時寫，封存檔裡的也寫（第 3.1 節）；更早寫下的照樣顯示。
+- 看板接上 aggregator 的兩種紀錄，都沒有議題，`home` 與 `task` 是 `null`（第 7 節）：`program.confirmed`（使用者在頁面上確認看板可以執行一支程式，`by` 是 `captain`，`text` 寫出完整路徑、角色與 SHA-256，例如「確認看板可以執行 /opt/agg/plain（feed、deliver；SHA-256 …）（你在頁面上）」），與 `writes.released`（等著的寫入交給 deliver 的程式之前，`by` 是 `board`，`text` 寫出依序放行的 id，例如「接上 plain，依序送出等著的 2 筆：w-…、w-…」）。
 - 待決事項從讀取資料記下的開與關（C59），`by` 是 `board`，在待決事項的議題底下（它自己的標記，沒有就是來源 task 的），帶 `home` 與 `task`：
   - `hold.opened`：一次讀取的 `holds[]` 裡有、上一次讀取沒有的 hold。`ts` 是它的 `hold_set`；`hold_set` 只有日期或沒有時是這次讀取的時間，`text` 結尾加「（最晚 MM-DD HH:mm）」。`closed_holds[]` 裡一個上一次讀取時還沒開的、帶 `opened_at` 的待決事項，也先寫一筆，`ts` 是 `opened_at`。
   - `hold.closed`：`closed_holds[]` 裡上一次讀取沒有的一筆。`ts` 是它的 `closed_at`，沒有時是這次讀取的時間，加「（最晚 …）」。`outcome` 是 Resolution mode（`answered`、`released`、`repaired`、`reconciled`、`forge-closed`、`forge-released`，空的記成 `answered`），`answer` 是答案，`source` 是經哪裡（`chat` 是 first mate 直接記下的話）。在看板作答的（`source` 是 `myshape`）有看板自己的 `hold.answered`（`outcome` 是那個答案或它顯示的字）時不另寫，那一筆就是它的關閉；看板的那個作答還在送出中、等待或重試時先不寫，也不記成看過，游標留在原處，下一次讀再看；兩者都不是（送出的結果不是已送達，或有人用同一個入口手動作答）時照一般的關閉寫，「經看板」。
   - 兩種都帶 `key`：`hold.opened\t<home>\t<task>\t<hold_set>`（從 `closed_holds[]` 先寫的是 `…\t#<digest>`）與 `hold.closed\t<home>\t<task>\t<digest>`。看板啟動時從這個檔重建 key 的集合，同一個 key 只寫一次。
   - 從什麼時候開始看：看板第一次讀到一個 home、或那個 home 的 `code_commit` 換了的那一次（每一次更新程式都是），不寫開啟；那個 home 的回報還沒給過 `closed_cursor`，或看板還沒交給它游標的那一次，不寫關閉。那時已經開著、已經關掉的都不補記。
   `text` 例：「待決事項「NAS 兩步驗證」已開：NAS 要不要開兩步驗證？」、「待決事項「NAS 兩步驗證」已回答：要（經聊天）」、「待決事項「X」已回答並放行，工作繼續：好（經聊天）」、「待決事項「X」已對帳結束，不必再答：…」、「待決事項「X」隨 PR 結束而關閉」。
-- 每一個改動都有一個存它的檔：議題的改動是 `topics.json`，要你動手的改動是 `data/myshape/todos.json`。看板先把兩個檔 `outbox` 裡 `events.jsonl` 還沒有的紀錄補寫進去（寫不進去就拒絕這次改動，回「看板寫不進紀錄（原因），這次的修改沒有做」），再把改動和它的紀錄一起寫進那個檔的 `outbox`、用同一次改名存下，然後把紀錄追加到這裡並 fsync。追加失敗時改動已經生效，紀錄留在 `outbox`，下一次改動或下一次啟動補寫；啟動時補寫不進去，看板就不啟動。
+- 每一個改動都有一個存它的檔：議題的改動是 `topics.json`，要你動手的改動是 `data/myshape/todos.json`，確認程式是 `data/myshape/confirmations.json`；只存紀錄的改動（例如 `writes.released`）經 `topics.json`。看板先把三個檔 `outbox` 裡 `events.jsonl` 還沒有的紀錄補寫進去（寫不進去就拒絕這次改動，回「看板寫不進紀錄（原因），這次的修改沒有做」），再把改動和它的紀錄一起寫進那個檔的 `outbox`、用同一次改名存下，然後把紀錄追加到這裡並 fsync。追加失敗時改動已經生效，紀錄留在 `outbox`，下一次改動或下一次啟動補寫；啟動時補寫不進去，看板就不啟動。
   封存時封存檔先寫、`topics.json` 後寫，重開時反過來，所以中途當掉時議題留在 `topics.json`、沒有紀錄，或兩邊都有、`topics.json` 為準、紀錄由 `outbox` 補寫。要你動手的改動先寫 `topics.json` 的 `todos`，再寫 `todos.json`；看板啟動時從 `todos.json` 重算 `todos`。
 
 帳本事件去重的鍵是 (home, 帳本那一行的原始位元組)，系統紀錄的是 `rid`。啟動時讀完整個檔重建兩個去重集合；最後一行沒有換行字元就截掉。
@@ -211,7 +214,7 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
 
 ## 4. 讀取契約（feed）
 
-看板讀每一個 home 都用同一個程式、同一種形狀（第 7 節）：`<code root>/bin/fm-board.sh feed <home> <offset> <prefix-sha256> [<closed-offset> <closed-sha256>]`。
+看板讀每一個 home 都用同一個程式、同一種形狀（第 7 節）：`<feed> feed <home> <offset> <prefix-sha256> [<closed-offset> <closed-sha256>]`，`<feed>` 是設定檔寫的那支程式。
 `<home>` 是 `main`（根 home），或根 home 的回報在 `secondmates[]` 裡列出的 id；home 只是 aggregator 給的名字，看板不分本機或遠端，怎麼到那個 home 是 aggregator 的事。
 `<offset>` 與 `<prefix-sha256>` 是看板替那個 home 存在 `data/myshape/offsets.json` 的帳本游標，第一次是 `0 -`。
 後兩個是已關的待決事項的游標（C13），存在 `data/myshape/decisions.json`；只有那個 home 上一次的回報帶了 `closed_cursor` 才給，所以還在舊程式上的 home 永遠只收到三個參數。
@@ -325,29 +328,79 @@ API 的路徑與 body 由第五段定；這裡只定兩件事：
 
 ## 7. 看板執行的程式
 
-看板服務能執行的外部程式只有一支，寫死在程式裡，不從設定檔讀：`<code root>/bin/fm-board.sh`，用兩種形狀。
+看板服務能執行的外部程式只有兩支：home 的 `config/myshape-aggregator.json`（下稱設定檔）指定的 feed 與 deliver。
+設定檔只寫程式的路徑，不寫參數：`{"v":1,"name":"<名稱>","feed":"<路徑>","deliver":"<路徑>"}`，`feed` 與 `deliver` 這兩個字由看板自己加上。
+只能有這四個鍵；`name` 是 1 到 64 個英數字、`.`、`_` 或 `-`，以英數字開頭；路徑是一個字串，不含空白與控制字元。
+陣列、帶參數的路徑、多出來的鍵都讓整個設定檔不能用。
+設定檔本身要是一般檔、不是符號連結、擁有者是執行看板的帳號、別的帳號不能寫，最多 4096 位元組。
+看板只讀設定檔，從不寫它；頁面上也沒有地方能改它。
 一律用 `execFile` 傳參數陣列、不經 shell；使用者輸入只進 stdin 的動作紀錄。
-每次執行的環境是啟動服務那個程序的環境，另外明確帶 `MYSHAPE_HOME=<看板的 home>`。
-看板的 home 與 code root 的路徑、程式版本，由啟動服務的 `myshape.sh` 當參數傳入；服務自己不執行 `git`、不猜路徑。
 
 | # | argv | stdin | 用在 |
 | --- | --- | --- | --- |
-| F | `fm-board.sh feed <home> <offset> <sha> [<closed-offset> <closed-sha>]` | — | 讀一個 home（第 4 節） |
-| D | `fm-board.sh deliver` | 一行動作紀錄 | 把使用者在頁面上的動作與看板的通知交給 aggregator（7.1） |
+| F | `<feed> feed <home> <offset> <sha> [<closed-offset> <closed-sha>]` | — | 讀一個 home（第 4 節） |
+| D | `<deliver> deliver` | 一行動作紀錄 | 把使用者在頁面上的動作與看板的通知交給 aggregator（7.1） |
 
 參數的檢查：`<home>` 符合 `[A-Za-z0-9._-]`、不以 `.` 或 `-` 開頭；`<offset>` 是非負整數；`<sha>` 是 64 位十六進位或 `-`；動作紀錄只能是一行。
 給 agent 的文字（`message` 不算，`direct` 算）以 `/`、`$`、`!` 或 `-` 開頭就拒收（前面有空白也算），不送出、不改寫，提示「以 /、$、! 或 - 開頭會被當成指令。要跑指令請到終端機，要傳文字請在開頭加字。」任何會把文字打進終端機的接收者都受這一條保護，所以它是看板的規則。
 
-**沒有接上 aggregator。** 服務啟動時檢查 `bin/fm-board.sh` 是不是一般、可執行的檔。不是的話，這一次啟動的整段期間：不讀任何 home；每一筆寫入都記成 `waiting`（等 aggregator 接上），attempt 是 0、不重試、不算失敗、不受接續時限限制，留在稽核紀錄裡跨過重啟；頁面只顯示一行「沒有接上 aggregator（原因）」的說明，不是警告。
-下一次啟動檢查到程式在，就照稽核紀錄的順序（最舊的先）把每一筆 `waiting` 的寫入交出去，用原來的 id，排在任何新寫入之前；之後照 7.1 的結果處理。
+**相對路徑與 code root。**
+相對路徑以看板的 code root 為準，絕對路徑照寫。
+code root 是看板的指令 `bin/myshape.sh` 算出來的目錄：它自己所在目錄的上一層，或啟動它的環境裡的 `FM_ROOT_OVERRIDE`。
+看板放在 aggregator 的 checkout 裡時（例如 first mate），code root 就是那個 checkout。
+code root 只從這兩處來，不從設定檔，也不從 `data/`、`state/`、`config/` 底下的任何檔來。
+看板的 home、code root 的路徑與程式版本由啟動服務的 `myshape.sh` 當參數傳入；服務自己不執行 `git`、不猜路徑。
+
+**哪些程式不用確認。**
+只有一種：設定檔裡寫成 code root 底下 `bin/` 的相對路徑（每一段以英數字或 `_` 開頭，所以沒有 `.` 與 `..`），git 追蹤那個檔，而且它和 HEAD 相同。
+`bin/myshape.sh` 每次啟動或換掉服務時用 git 查這一點（`git ls-files --error-unmatch` 與 `git diff --quiet HEAD --`），把查到的路徑與當時設定檔內容的 SHA-256 交給服務；服務自己不跑 git。
+first mate 的 `bin/fm-board.sh` 是這一種。
+這和今天是同一個門檻：「追蹤、沒改過」不是「審過」，也不表示經過 pull request；本機的一個 commit 就過得了。
+服務啟動之後才改的追蹤檔照改過的內容執行，和今天一樣。
+設定檔在服務啟動之後改了（內容的 SHA-256 和 `myshape.sh` 查的時候不同），它寫的程式就不再算不用確認；下一個看板指令會換上新的服務並重新查。
+`FM_ROOT_OVERRIDE` 還在的時候，啟動看板的環境可以指定 code root，所以「不用確認」只表示「在那個 code root 裡追蹤、沒改過」，不比這個更多。
+
+**其他每一支程式都要在頁面上確認。**
+包括 `bin/` 底下沒有追蹤的檔、追蹤但在啟動時和 HEAD 不同的檔、code root 裡其他地方的檔、home 的 `state/` 底下的檔，以及 code root 外面的檔。
+確認分兩步，兩步都寫出程式的完整路徑（第 8 節）；第二步另寫出程式內容的 SHA-256。
+確認綁的是程式內容的 SHA-256 與設定檔內容的 SHA-256；每次執行之前兩個都重算，任何一個對不上就不執行，頁面再問一次，寫入等著。
+確認紀錄只由頁面上的確認動作寫，存在看板自己的資料 `data/myshape/confirmations.json`（第 3 節），經過和每一個改動一樣的 `commitChange`，帶一筆 `program.confirmed` 紀錄；沒有任何 socket 操作或指令能寫它。
+這個紀錄是同一個帳號的一個檔：它擋得住一次不小心或被誤導的寫入（改了設定檔，沒有確認就不會跑別的程式），擋不住同一個帳號下存心偽造確認紀錄或去改 `bin/` 裡程式的人，這和今天一樣。
+
+**每一支程式都要過的檔案檢查**，每次執行之前都做：一般檔、可執行、不是符號連結、擁有者是執行看板的帳號、別的帳號不能寫。
+群組能寫的：不用確認的程式照常執行，這是今天 `bin/fm-board.sh` 的門檻，而它已經要求追蹤、等於 HEAD；要確認的程式一律拒絕，確認過也一樣，原因寫出檔名與權限，例如「/opt/agg/feed 的群組也能寫（權限 0775）；需要確認的程式不能讓群組寫，確認了也不執行。要用它，只改這一個檔：chmod g-w /opt/agg/feed」。
+符號連結、找不到、不能執行、別的帳號能寫的程式也拒絕，不提供確認。
+
+**固定的環境。**
+每一支程式拿到的環境只有這五個名稱：`MYSHAPE_HOME`（看板設成自己的 home）、`PATH`、`HOME`、`LANG`、`TMPDIR`（後四個從啟動看板的那個程序的環境複製，那裡有才給；`PATH` 去掉空的項目與不是絕對路徑的項目）。
+名稱寫死在看板的程式裡，確認過的與不用確認的程式拿到的一樣。
+這張表固定的是名稱，不是值：`PATH`、`HOME`、`LANG`、`TMPDIR` 的值是啟動看板的人給的。
+其他的名稱一個都不傳，包括 `SSH_AUTH_SOCK`、`TMUX`、任何 `FM_*`。
+要是有程式需要另一個名稱（例如不在預設位置的終端機 socket），做法是在看板程式的那張表加上那一個名稱，不是改回傳整個環境。
+不傳 `SSH_AUTH_SOCK` 並不讓一支確認過的程式到不了另一台機器：它拿得到 `HOME`，金鑰檔不需要 agent；真正的界線是頁面上的確認。
+
+**沒有接上 aggregator。**
+沒有設定檔、設定檔不能用，或 feed 的程式現在不能執行時，不讀任何 home。
+沒有設定檔、設定檔不能用，或 deliver 的程式既不是不用確認的、也沒有對它現在的內容確認過（或沒過檔案檢查）時，每一筆寫入都記成 `waiting`（等 aggregator 接上），attempt 是 0、不重試、不算失敗、不受接續時限限制，留在稽核紀錄裡跨過重啟；送到一半才發現程式不能執行的寫入也回到 `waiting`。
+頁面只顯示一行說明，不是警告：「沒有接上 aggregator（原因）。頁面上的動作照常完成；要送出的會等它接上之後依序送出。」
+deliver 的程式能執行之後，`waiting` 的寫入照稽核紀錄的順序（最舊的先）交出去，用原來的 id：在服務啟動時、在頁面上確認 deliver 的程式時、每一次讀好根 home 之後（例如設定檔改回服務啟動時的樣子），以及任何新的寫入送出之前，所以新的不會排到舊的前面。
+每一次放行都是看板的一個改動，經過 `commitChange`，先存一筆 `writes.released` 紀錄寫明放行的 id，存不了就不放行。
+之後照 7.1 的結果處理。
 等著發的「議題變成可派」通知與它們的時間存在 `data/myshape/notify-pending.json`，啟動時讀回來，已經到時間而且還可派的立刻發；這種通知的順序是延遲結束、記下來的那一刻，不是拖曳的那一刻。
 
-看板直接讀寫的檔案只有第 3 節表裡它自己的那些，再加唯讀的 `config/myshape-port` 與 `myshape/` 底下自己的程式與靜態檔。
+**怎麼關掉、怎麼退回。** 要看板不執行任何程式，在 `config/myshape-aggregator.json` 放一個別的內容的檔（例如空檔）再跑 `myshape.sh restart`：空的設定檔讀成「是空的，看板不執行任何程式」，什麼都不執行，寫入等著。
+只刪掉設定檔留不久：替 home 寫設定檔的 aggregator 會再寫回來（first mate 在下一次 session start 或下一個會碰看板的 `fm-board.sh` 指令寫，[adapter](../../fm-board/spec/adapter.markdown) 第 3 節），它從不改掉路徑上已經有的檔。
+要再接上，換回正確的設定檔（first mate 是刪掉那個檔再跑 `fm-board.sh bind`）再 restart，等著的寫入各送一次。
+退回這個改動的 commit：看板又只執行寫死的 `<code root>/bin/fm-board.sh`，設定檔與確認紀錄留著、不被讀。
 
-白名單管的是看板服務這個程序。node client 不是服務：它會啟動服務（`spawn` 同一個 `node` 執行 `dist/board-server.js`），並在服務卡死時跑 `ps -o args= -p <pid>` 與送訊號；`myshape.sh` 自己會跑 `git rev-parse` 與 `jq`。這些都不經服務，也不受瀏覽器的請求觸發。
+`myshape.sh status` 寫出 code root（「程式目錄」）、設定檔的名稱與兩個路徑、有沒有接上與原因；設定檔和服務啟動時不同時另寫一行。
+
+看板直接讀寫的檔案只有第 3 節表裡它自己的那些，再加唯讀的 `config/myshape-port`、`config/myshape-aggregator.json`，與 `myshape/` 底下自己的程式與靜態檔。
+
+白名單管的是看板服務這個程序。node client 不是服務：它會啟動服務（`spawn` 同一個 `node` 執行 `dist/board-server.js`），並在服務卡死時跑 `ps -o args= -p <pid>` 與送訊號；`myshape.sh` 自己會跑 `git rev-parse`、上面那兩個 git 檢查、`jq`，與讀設定檔的 `node dist/binding-cli.js`。這些都不經服務，也不受瀏覽器的請求觸發。
 `myshape.sh` 不 source 任何 first mate 的函式庫。
 
-不在白名單裡、由 agent 或使用者自己跑的：first mate 這一側的 `fm-board.sh setup`、`install-rules`、`rules`、帶 task 的 `split` 與 `fm-dispatch-plan.sh order`（[adapter](../../fm-board/spec/adapter.markdown)）。看板不碰 backlog，不執行合併、捨棄、清理。
+不在白名單裡、由 agent 或使用者自己跑的：first mate 這一側的 `fm-board.sh setup`、`bind`、`install-rules`、`rules`、帶 task 的 `split` 與 `fm-dispatch-plan.sh order`（[adapter](../../fm-board/spec/adapter.markdown)）。看板不碰 backlog，不執行合併、捨棄、清理。
 
 ### 7.1 動作紀錄與結果（C12）
 
@@ -365,7 +418,7 @@ API 的路徑與 body 由第五段定；這裡只定兩件事：
 - `tag` 的 `last_tag_line` 是看板送出時看到的那個 task 最後一行議題標記，沒有就是空字串。重試之前看板先重讀那個 home：標記已經是這個議題就算送達，已經被別人改成別的就算別處已處理。
 - `notice` 的 `event`：`topic.dispatchable`（議題離開「待辦」或重開，之後 30 秒沒再動）、`topic.merged`、`topic.archived`、`topic.kept`（先不關）、`topic.confirmed`（舊版留下的提議在啟動時確認）、`todo.claimed`（使用者按了做完了）、`todo.closed`（一個要你動手的項目離開看板）。`text` 寫的是發生了什麼，例如「議題「帳務」重開，排在「高」最後，現在可派」，不寫要跑什麼。
 - 要你動手的通知帶 `item`：項目的 `id`、`title`，與放上看板時給的 `ref`（沒給是空字串）。`todo.closed` 另帶 `by`（`captain` 是使用者在頁面上按的，`aggregator` 是 aggregator 自己的 `todo done` 或 `todo obsolete`）與 `words`（`做完了`、`不做了`、`撤下`）。項目在 hold 已在別處關掉時離開看板，不發通知。
-- 看板改版之前寫下、還沒送完的寫入（稽核紀錄裡帶 `plan` 而不是 `action` 的那些）照舊的種類換成上面的紀錄，`id` 不變；`message` 與 `notice` 另帶 `legacy_request_id`，是它當初的去重 key，送給 aggregator 的時候要用它而不是 `id`；`answer` 的 `question_sha256` 是 `-`，因為舊紀錄沒有存問題。這個換算只為了接上舊的紀錄，之後會拿掉。
+- 看板在有動作紀錄之前寫下的寫入（稽核紀錄裡帶 `plan` 而不是 `action` 的那些）不再讀：讀稽核紀錄時略過，不接著送，頁面上也不列，所以不會顯示成沒送完。
 
 `deliver` 在 stdout 印一行結果：
 
@@ -390,12 +443,15 @@ first mate 這一側的 `deliver` 每一種跑哪個指令、怎麼對應結果�
 | 議題併進另一個議題 | (舊 id, 新 id) |
 | 重送一筆「結果不明」的寫入 | write id |
 | 要你動手的「不做了」「好，撤下」 | (動作, 項目 id) |
+| 讓看板執行一支要確認的程式（第 7 節） | (程式的完整路徑, 程式內容的 SHA-256, 設定檔內容的 SHA-256)，兩步都由服務當下讀檔算出，請求只說是 feed 還是 deliver |
 
 作答一律兩步（採建議 C12）：答案送出就會關掉或解除那個 hold，不能收回。
 答了之後這一項怎麼處理，由開 hold 的人用 `fm-captain-hold.sh hold --on-answer close|release` 記在 hold 上（第 4 節的 `on_answer`），看板照著送，使用者不選：`close` 送 `done`，被 hold 的項目標成完成；`release` 送 `release`，解除 hold、項目回到排隊中。
 沒有記的（較早的 hold、程式還沒更新的 home）送 `release`；原因在 C19。要你動手的項目不是待決事項：「不做了」「好，撤下」是看板自己的操作（第 6.1 節），也是兩步。
 第二步的畫面寫明「記成你的答覆並通知 <aggregator 的名稱>」「看板自己不會合併或捨棄」、確認碼的有效時間，以及送出之後這一項會怎樣（沒有記的再註明這是預設），只有一個「送出」鈕與「取消」。
 問題全文或處理方式在兩步之間變了（hold 被改寫或已關掉）就拒絕。請求裡帶的 `mode` 不看。
+
+確認程式的第一步寫「要接上 <名稱>，看板得在<讀取與送出>時執行 <完整路徑>。這支程式不是看板程式目錄 bin/ 裡、和 commit 相同的檔，要你確認一次才會執行。」與一個「確認…」鈕；第二步寫「確定讓看板在每次<讀取與送出>時執行 <完整路徑> 嗎？確認的是它現在的內容（SHA-256 <64 位>）與 config/myshape-aggregator.json 現在的內容；之後兩者有一個改了，看板就不執行，再問你一次。」與「確定執行」「取消」。<名稱> 是設定檔的 `name`，<讀取與送出> 依那支程式在設定檔裡的角色是「讀取」「送出」或「讀取與送出」。
 
 封存不用兩步：可以重開。頁面上只做一次畫面內的確認，說明排隊中的項目會被停住、已經在跑的不會停。
 
@@ -438,9 +494,9 @@ first mate 這一側的 `deliver` 每一種跑哪個指令、怎麼對應結果�
 
 ## 11. 看板依賴的框架介面
 
-看板服務只經第 7 節的一支程式碰到另一邊；那支程式在 first mate 的 fork 裡是 `bin/fm-board.sh`，它讀寫框架的哪些東西、測試在哪裡，在 [adapter](../../fm-board/spec/adapter.markdown) 第 3 節與第 7 節。
-看板自己的測試（`myshape/test/stage-7-*.sh`）用照第 4 節與 7.1 寫的替身 aggregator（`myshape/test/stub-aggregator/`）放在那個名字，不跑任何框架的程式；兩邊共用的範例在 `myshape/test/contract/`，由看板維護，first mate 這一側的測試讀它們。
-第三到五段的測試用 `tb_make_fake_root` 跑真的 `fm-board.sh` 與框架的替身，看的是兩邊接起來之後頁面與通知和以前一樣。
+看板服務只經第 7 節設定檔寫的兩支程式碰到另一邊；first mate 的設定檔讓兩支都是 `bin/fm-board.sh`，它讀寫框架的哪些東西、測試在哪裡，在 [adapter](../../fm-board/spec/adapter.markdown) 第 3 節與第 7 節。
+看板自己的測試（`myshape/test/stage-7-*.sh`）用照第 4 節與 7.1 寫的替身 aggregator（`myshape/test/stub-aggregator/`），放在看板的 code root 外面、用它自己的名字，經設定檔接上並在頁面上確認，不跑任何框架的程式；比較升級的那些步驟另把替身放在舊版看板唯一會跑的 `bin/fm-board.sh`。兩邊共用的範例在 `myshape/test/contract/`，由看板維護，first mate 這一側的測試讀它們。
+第三到五段的測試用 `tb_make_fake_root` 跑真的 `fm-board.sh` 與框架的替身：那個 code root 的 `bin/fm-board.sh` 是提交過的一個小包裝，從 `tb-fake.env` 讀替身要的設定再交給真的 `fm-board.sh`，因為看板不再把自己的環境傳給程式；看的是兩邊接起來之後頁面與通知和以前一樣。
 
 ### 11.3 其他
 

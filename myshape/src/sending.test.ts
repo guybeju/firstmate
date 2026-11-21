@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as actions from "./actions.js";
 import type { ActionContext, ActionResult } from "./actions.js";
 import { createApi } from "./api.js";
+import type { ProgramToConfirm } from "./api.js";
+import type { Role } from "./binding.js";
 import type { AllowedCommand, CommandResult } from "./commands.js";
 import { ConfirmStore } from "./confirm.js";
 import type { ApiHandler } from "./http.js";
@@ -50,7 +52,13 @@ interface Harness {
   finished: WriteRecord[];
   changes: () => number;
   audit: () => Record<string, unknown>[];
-  restart: (timings?: Partial<WriteTimings>, unavailable?: string | null) => Harness;
+  /** The ids of every release the engine recorded, in order. */
+  released: string[][];
+  /** Sets why the deliverer may not run from now on, or null when it may. */
+  block: (reason: string | null) => void;
+  /** Makes saving the record of a release fail from now on. */
+  failReleaseRecord: () => void;
+  restart: (timings?: Partial<WriteTimings>, blocked?: string | null) => Harness;
 }
 
 let dir: string;
@@ -140,9 +148,12 @@ function homes(): HomeSnapshot[] {
 
 function harness(
   timings: Partial<WriteTimings> = {},
-  unavailable: string | null = null,
+  initiallyBlocked: string | null = null,
   auditFile = path.join(dir, "audit.jsonl"),
 ): Harness {
+  let blocked = initiallyBlocked;
+  let releaseSaves = true;
+  const released: string[][] = [];
   const queue: CommandResult[] = [];
   const calls: Record<string, unknown>[] = [];
   const tags = new Map<string, string | null>();
@@ -156,7 +167,11 @@ function harness(
         calls.push(JSON.parse(command.record) as Record<string, unknown>);
         return queue.shift() ?? DELIVERED;
       },
-      unavailable,
+      blocked: () => blocked,
+      onRelease: (ids) => {
+        if (releaseSaves) released.push(ids);
+        return releaseSaves;
+      },
       readTags: async (home, task) =>
         tags.has(`${home}/${task}`) ? (tags.get(`${home}/${task}`) as string | null) : "",
       onChange: () => {
@@ -181,9 +196,16 @@ function harness(
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line) as Record<string, unknown>),
-    restart: (next = {}, nextUnavailable = unavailable) => {
+    released,
+    block: (reason) => {
+      blocked = reason;
+    },
+    failReleaseRecord: () => {
+      releaseSaves = false;
+    },
+    restart: (next = {}, nextBlocked = blocked) => {
       engine.stop();
-      const restarted = harness({ ...timings, ...next }, nextUnavailable, auditFile);
+      const restarted = harness({ ...timings, ...next }, nextBlocked, auditFile);
       restarted.engine.resumeUnfinished();
       return restarted;
     },
@@ -714,6 +736,53 @@ describe("no deliverer", () => {
     expect(after.engine.records.get(direct.id)?.state).toBe("unknown");
   });
 
+  it("records each release before it, oldest first, and keeps waiting when the record fails", async () => {
+    const h = harness({}, "要先在頁面上確認");
+    const one = sent(actions.message(h.context, "billing", "one", "browser"));
+    const two = sent(actions.message(h.context, "login", "two", "browser"));
+    h.failReleaseRecord();
+    h.block(null);
+    expect(h.engine.releaseWaiting()).toBe(0);
+    expect([one.state, two.state]).toEqual(["waiting", "waiting"]);
+    expect(h.calls).toEqual([]);
+    const after = h.restart({}, null);
+    await settled(after.engine.records.get(two.id) as WriteRecord, "delivered");
+    expect(after.released).toEqual([[one.id, two.id]]);
+    expect(after.calls.map((call) => call["id"])).toEqual([one.id, two.id]);
+  });
+
+  it("hands the waiting writes over at a confirmation, without a restart", async () => {
+    const h = harness({}, "要先在頁面上確認");
+    const one = sent(actions.message(h.context, "billing", "one", "browser"));
+    expect(h.engine.releaseWaiting()).toBe(0);
+    h.block(null);
+    expect(h.engine.releaseWaiting()).toBe(1);
+    await settled(one, "delivered");
+    expect(h.released).toEqual([[one.id]]);
+    expect(h.engine.releaseWaiting()).toBe(0);
+    expect(h.released).toHaveLength(1);
+  });
+
+  it("sends the waiting writes before a newer one when the deliverer may run again", async () => {
+    const h = harness({}, "程式改過了");
+    const old = sent(actions.message(h.context, "billing", "old", "browser"));
+    h.block(null);
+    const newer = sent(actions.message(h.context, "billing", "new", "browser"));
+    await settled(newer, "delivered");
+    await settled(old, "delivered");
+    expect(h.calls.map((call) => call["id"])).toEqual([old.id, newer.id]);
+    expect(h.released).toEqual([[old.id]]);
+  });
+
+  it("puts a write back to waiting when its program may not run at the moment of the run", async () => {
+    const h = harness({ retryDelaysMs: [1] });
+    h.next({ code: null, stdout: "", stderr: "", blocked: "要先在頁面上確認" });
+    const note = sent(actions.message(h.context, "billing", "a", "browser"));
+    await settled(note, "waiting");
+    expect(note.attempt).toBe(0);
+    expect(h.calls).toHaveLength(1);
+  });
+
   it("still shows a connected deliverer's failures", async () => {
     const h = harness({ retryDelaysMs: [1, 1] });
     h.next(outcome("failed", "refused"), outcome("retry"), outcome("retry"), outcome("retry"));
@@ -748,7 +817,7 @@ describe("audit lines from before action records", () => {
       },
     });
 
-  it("resumes an old note as a message or a notice under its write id and request id", async () => {
+  it("loads without an error, resumes none, and shows none as unsettled", async () => {
     const file = path.join(dir, "audit.jsonl");
     fs.writeFileSync(
       file,
@@ -758,99 +827,26 @@ describe("audit lines from before action records", () => {
           requestId: "tb-0011223344556677",
           body: "［議題：Billing（billing）］\n請先做帳務",
         }),
-        line(
-          {
-            type: "note",
-            requestId: "tb-dispatch-aa",
-            body: "議題「Billing」已可派工，請跑 order 重新評估",
-          },
-          { id: "w-dispatch", topic: null, text: "議題「Billing」已可派工" },
-        ),
-      ].join("\n")}\n`,
-    );
-    const h = harness();
-    h.engine.resumeUnfinished();
-    await settled(h.engine.records.get("w-dispatch") as WriteRecord, "delivered");
-    expect(h.calls).toEqual([
-      {
-        v: 1,
-        id: "w-old",
-        attempt: 0,
-        kind: "message",
-        topic: { id: "billing", name: "Billing" },
-        text: "請先做帳務",
-        legacy_request_id: "tb-0011223344556677",
-      },
-      {
-        v: 1,
-        id: "w-dispatch",
-        attempt: 0,
-        kind: "notice",
-        event: "topic.dispatchable",
-        text: "議題「Billing」已可派工，請跑 order 重新評估",
-        legacy_request_id: "tb-dispatch-aa",
-      },
-    ]);
-  });
-
-  it("flags an old send or relay as unknown, and keeps settled answers and tags in the history", () => {
-    const file = path.join(dir, "audit.jsonl");
-    fs.writeFileSync(
-      file,
-      `${[
         line({ type: "send", task: "t" }, { id: "w-send", task: "t" }),
         line(
-          { type: "relay", secondmate: "far1", remote: true, deliveryId: "0123456789abcdef" },
-          { id: "w-relay", home: "far1", task: "t" },
+          { type: "relay", secondmate: "far1", deliveryId: "0123456789abcdef" },
+          { id: "w-relay" },
         ),
         line(
-          {
-            type: "answer",
-            placement: "remote",
-            line: "c\t合併\tA\tdone",
-            noteBody: "［議題：Billing］…",
-            answered: true,
-          },
-          { id: "w-answer", home: "far1", task: "c" },
+          { type: "answer", line: "c\t合併\tA\tdone", noteBody: "［議題：Billing］…" },
+          { id: "w-answer" },
         ),
         JSON.stringify({ ts: "T", write_id: "w-answer", state: "delivered", attempt: 0 }),
-        line(
-          { type: "tag", placement: "local", task: "t", topic: "billing", lastLineAtSend: "" },
-          { id: "w-tag", home: "sm1" },
-        ),
-        JSON.stringify({ ts: "T", write_id: "w-tag", state: "delivered", attempt: 0 }),
+        line({ type: "tag", task: "t", topic: "billing", lastLineAtSend: "" }, { id: "w-tag" }),
+        JSON.stringify({ ts: "T", write_id: "w-tag", state: "failed", attempt: 0, error: "x" }),
       ].join("\n")}\n`,
     );
     const h = harness();
     h.engine.resumeUnfinished();
-    const records = h.engine.records;
-    expect(records.get("w-send")).toMatchObject({
-      state: "unknown",
-      action: { kind: "direct", home: "main", task: "t", text: "請先做帳務" },
-    });
-    expect(records.get("w-relay")).toMatchObject({
-      state: "unknown",
-      home: "far1",
-      action: { kind: "direct", home: "far1" },
-    });
-    expect(records.get("w-answer")).toMatchObject({
-      state: "delivered",
-      action: {
-        kind: "answer",
-        home: "far1",
-        task: "c",
-        answer: "合併",
-        label: "A",
-        mode: "done",
-        topic: { id: "billing", name: "Billing" },
-      },
-    });
-    expect(records.get("w-tag")).toMatchObject({
-      state: "delivered",
-      action: { kind: "tag", home: "sm1", task: "t", topic: "billing" },
-    });
-    expect(JSON.stringify([...records.values()])).not.toContain("remote");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(h.engine.records.size).toBe(0);
     expect(h.calls).toEqual([]);
+    expect(h.released).toEqual([]);
   });
 });
 
@@ -877,7 +873,8 @@ describe("serialization", () => {
             ? outcome("retry")
             : DELIVERED;
         },
-        unavailable: null,
+        blocked: () => null,
+        onRelease: () => true,
         readTags: async () => "",
         onChange: () => undefined,
         onFinished: () => undefined,
@@ -900,7 +897,10 @@ describe("serialization", () => {
 
 function api(
   h: Harness,
-  overrides: { topicOp?: (op: string, args: Record<string, unknown>) => BoardResponse } = {},
+  overrides: {
+    topicOp?: (op: string, args: Record<string, unknown>) => BoardResponse;
+    programToConfirm?: (role: Role) => ProgramToConfirm | string;
+  } = {},
 ) {
   const confirm = new ConfirmStore();
   const seen: string[] = [];
@@ -922,6 +922,8 @@ function api(
     actionContext: () => h.context,
     writes: h.engine,
     confirm,
+    programToConfirm: overrides.programToConfirm ?? (() => "這支程式不需要確認。"),
+    programConfirmed: () => seen.push("confirmed"),
   });
   const call = (route: string, body: Record<string, unknown> = {}, query = "") =>
     handler(
@@ -985,6 +987,44 @@ describe("api", () => {
     expect(await malformed.call("POST topics/rename", {})).toEqual({
       status: 400,
       body: { error: "usage", message: "用法錯" },
+    });
+  });
+
+  it("confirms a program only on the second request, with what the service reads at each step", async () => {
+    const h = harness();
+    let program: ProgramToConfirm = {
+      path: "/opt/agg/bin/plain",
+      sha256: "1".repeat(64),
+      binding_sha256: "2".repeat(64),
+      roles: ["feed", "deliver"],
+    };
+    const { call, seen } = api(h, { programToConfirm: () => program });
+    expect((await call("POST programs/confirm", { role: "other" })).status).toBe(400);
+    const first = await call("POST programs/confirm", { role: "deliver", path: "/elsewhere" });
+    expect(first.body).toMatchObject({
+      ok: true,
+      confirm: expect.stringMatching(/^[0-9a-f]{32}$/),
+    });
+    expect(seen).toEqual([]);
+    program = { ...program, sha256: "3".repeat(64) };
+    const stale = await call("POST programs/confirm", {
+      role: "deliver",
+      confirm: first.body["confirm"],
+    });
+    expect(stale.body["error"]).toBe("confirm");
+    const again = await call("POST programs/confirm", { role: "deliver" });
+    const done = await call("POST programs/confirm", {
+      role: "deliver",
+      path: "/elsewhere",
+      sha256: "f".repeat(64),
+      confirm: again.body["confirm"],
+    });
+    expect(done.status).toBe(200);
+    expect(seen).toEqual([`program-confirm:${JSON.stringify(program)}`, "confirmed"]);
+    const nothing = api(h, { programToConfirm: () => "沒有 config/myshape-aggregator.json" });
+    expect(await nothing.call("POST programs/confirm", { role: "feed" })).toEqual({
+      status: 409,
+      body: { error: "refused", message: "沒有 config/myshape-aggregator.json" },
     });
   });
 

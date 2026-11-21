@@ -42,6 +42,25 @@ function notConnectedNote(view) {
         return null;
     return h("p", { class: "note not-connected" }, `沒有接上 aggregator（${view.aggregator.unavailable ?? ""}）。頁面上的動作照常完成；要送出的會等它接上之後依序送出。`);
 }
+const ROLE_WORD = { feed: "讀取", deliver: "送出" };
+/**
+ * A program the board may run only once the captain confirms it, in two
+ * steps that show its full path; the board checks both steps against the
+ * program and binding as they are then.
+ */
+function programConfirm(page, actions, program) {
+    const name = page.view?.aggregator.binding?.name ?? "aggregator";
+    const roles = program.roles.map((role) => ROLE_WORD[role]).join("與");
+    const key = `program:${program.path}`;
+    const role = program.roles[0] ?? "deliver";
+    if (!page.pending.has(key)) {
+        return h("p", { class: "note program-confirm" }, `要接上 ${name}，看板得在${roles}時執行 `, h("code", {}, program.path), "。這支程式不是看板程式目錄 bin/ 裡、和 commit 相同的檔，要你確認一次才會執行。", h("button", { onclick: () => actions.ask(key, "programs/confirm", { role }) }, "確認…"));
+    }
+    return h("div", { class: "confirm" }, `確定讓看板在每次${roles}時執行 `, h("code", {}, program.path), ` 嗎？確認的是它現在的內容（SHA-256 ${program.sha256}）與 config/myshape-aggregator.json 現在的內容；之後兩者有一個改了，看板就不執行，再問你一次。`, h("span", { class: "btns" }, h("button", { class: "danger", onclick: () => actions.confirm(key) }, "確定執行"), h("button", { onclick: () => actions.cancel(key) }, "取消")));
+}
+function programConfirms(page, actions) {
+    return (page.view?.aggregator.confirm ?? []).map((program) => programConfirm(page, actions, program));
+}
 function banners(page, actions) {
     const view = page.view;
     return [
@@ -53,7 +72,13 @@ function banners(page, actions) {
             : null,
         view === null
             ? null
-            : [notConnectedNote(view), staleBanner(view), versionBanner(view), ledgerBanner(view)],
+            : [
+                notConnectedNote(view),
+                programConfirms(page, actions),
+                staleBanner(view),
+                versionBanner(view),
+                ledgerBanner(view),
+            ],
         page.notice === null
             ? null
             : h("div", { class: "banner warn" }, page.notice, " ", h("button", { class: "link", onclick: () => actions.cancel("notice") }, "知道了")),

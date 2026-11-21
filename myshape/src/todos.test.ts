@@ -425,7 +425,11 @@ describe("the file", () => {
 
   function target(): { target: CommitTarget; saved: StoredRecord[] } {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "tb-todos-"));
-    const paths = boardPaths({ state: path.join(dir, "state"), data: path.join(dir, "data") });
+    const paths = boardPaths({
+      state: path.join(dir, "state"),
+      data: path.join(dir, "data"),
+      config: path.join(dir, "config"),
+    });
     const saved: StoredRecord[] = [];
     let n = 0;
     const sink = {

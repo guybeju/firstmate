@@ -16,11 +16,22 @@ export interface WriteView {
   created_at: number;
 }
 
+/** A program the board runs only after the captain confirms it on the page. */
+export interface ProgramView {
+  path: string;
+  sha256: string;
+  roles: ("feed" | "deliver")[];
+}
+
 /** Who is on the other side of the board, and whether the board can reach it. */
 export interface AggregatorView {
   connected: boolean;
-  /** Why the board cannot reach it in this service's life, or null. */
+  /** Why the board cannot reach it right now, or null. */
   unavailable: string | null;
+  /** The binding file's aggregator and program paths, when it can be read. */
+  binding: { name: string; feed: string; deliver: string } | null;
+  /** The programs waiting for the captain's confirmation. */
+  confirm: ProgramView[];
   name: string | null;
   label: string;
   update_hint: string | null;

@@ -1,6 +1,7 @@
 // The page with an aggregator on the other side, run by browser.mjs in a
 // headless Firefox for stage-7-page.sh. TB_PAGE_MODE=connected walks a board
-// fed by stub-plain; TB_PAGE_MODE=alone walks a board with nothing connected.
+// fed by stub-plain, bound outside the root as TB_PROGRAM and confirmed on the
+// page first; TB_PAGE_MODE=alone walks a board with nothing connected.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 
@@ -90,7 +91,30 @@ async function handsOn(page) {
   await noFirstmate(page, "the home page after the items closed");
 }
 
+/**
+ * The program bound outside the root runs only after the captain confirms it
+ * on the page in two steps that show its full path; both steps' texts are
+ * pinned here.
+ */
+async function confirmTheProgram(page) {
+  const program = process.env.TB_PROGRAM;
+  await page.waitFor("the offer to confirm the program", `document.querySelector(".program-confirm") !== null`, 15000);
+  const offer = await page.evaluate(`document.querySelector(".program-confirm").innerText`);
+  const expected = `要接上 plain，看板得在讀取與送出時執行 ${program}。這支程式不是看板程式目錄 bin/ 裡、和 commit 相同的檔，要你確認一次才會執行。`;
+  if (!offer.startsWith(expected)) throw new Error(`the first step must read:\n${expected}\ngot:\n${offer}`);
+  if (received().length !== 0) throw new Error("nothing may reach the program before it is confirmed");
+  await page.click(".program-confirm button", "確認…");
+  await page.waitFor("the second step", `document.querySelector(".confirm") !== null`);
+  const step = await page.evaluate(`document.querySelector(".confirm").innerText`);
+  const second = new RegExp(`^確定讓看板在每次讀取與送出時執行 ${program.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} 嗎？確認的是它現在的內容（SHA-256 [0-9a-f]{64}）與 config/myshape-aggregator.json 現在的內容；之後兩者有一個改了，看板就不執行，再問你一次。`);
+  if (!second.test(step)) throw new Error(`the second step must name the program, its SHA-256 and the binding:\n${step}`);
+  await noFirstmate(page, "the confirmation's two steps");
+  await page.click(".confirm button", "確定執行");
+  await page.waitFor("the offer gone", `document.querySelector(".program-confirm") === null`, 15000);
+}
+
 async function connected(page) {
+  await confirmTheProgram(page);
   await page.waitFor("the fed work", has("建置"));
   await page.waitFor("the fed workers", has("j1 working"), 15000);
   await noFirstmate(page, "the home page");

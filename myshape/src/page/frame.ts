@@ -4,7 +4,7 @@ import { h } from "./dom.js";
 import type { Child } from "./dom.js";
 import { home, sidebar } from "./home.js";
 import { currentTopic } from "./state.js";
-import type { Actions, Page, View } from "./state.js";
+import type { Actions, Page, ProgramView, View } from "./state.js";
 import { topicPage } from "./topic.js";
 
 function staleBanner(view: View): Child {
@@ -63,6 +63,49 @@ function notConnectedNote(view: View): Child {
   );
 }
 
+const ROLE_WORD: Record<ProgramView["roles"][number], string> = { feed: "讀取", deliver: "送出" };
+
+/**
+ * A program the board may run only once the captain confirms it, in two
+ * steps that show its full path; the board checks both steps against the
+ * program and binding as they are then.
+ */
+function programConfirm(page: Page, actions: Actions, program: ProgramView): Child {
+  const name = page.view?.aggregator.binding?.name ?? "aggregator";
+  const roles = program.roles.map((role) => ROLE_WORD[role]).join("與");
+  const key = `program:${program.path}`;
+  const role = program.roles[0] ?? "deliver";
+  if (!page.pending.has(key)) {
+    return h(
+      "p",
+      { class: "note program-confirm" },
+      `要接上 ${name}，看板得在${roles}時執行 `,
+      h("code", {}, program.path),
+      "。這支程式不是看板程式目錄 bin/ 裡、和 commit 相同的檔，要你確認一次才會執行。",
+      h("button", { onclick: () => actions.ask(key, "programs/confirm", { role }) }, "確認…"),
+    );
+  }
+  return h(
+    "div",
+    { class: "confirm" },
+    `確定讓看板在每次${roles}時執行 `,
+    h("code", {}, program.path),
+    ` 嗎？確認的是它現在的內容（SHA-256 ${program.sha256}）與 config/myshape-aggregator.json 現在的內容；之後兩者有一個改了，看板就不執行，再問你一次。`,
+    h(
+      "span",
+      { class: "btns" },
+      h("button", { class: "danger", onclick: () => actions.confirm(key) }, "確定執行"),
+      h("button", { onclick: () => actions.cancel(key) }, "取消"),
+    ),
+  );
+}
+
+function programConfirms(page: Page, actions: Actions): Child {
+  return (page.view?.aggregator.confirm ?? []).map((program) =>
+    programConfirm(page, actions, program),
+  );
+}
+
 function banners(page: Page, actions: Actions): Child {
   const view = page.view;
   return [
@@ -84,7 +127,13 @@ function banners(page: Page, actions: Actions): Child {
       : null,
     view === null
       ? null
-      : [notConnectedNote(view), staleBanner(view), versionBanner(view), ledgerBanner(view)],
+      : [
+          notConnectedNote(view),
+          programConfirms(page, actions),
+          staleBanner(view),
+          versionBanner(view),
+          ledgerBanner(view),
+        ],
     page.notice === null
       ? null
       : h(

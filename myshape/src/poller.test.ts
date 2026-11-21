@@ -58,8 +58,12 @@ function feedOf(call: { command: AllowedCommand }): string {
   return command.kind === "feed" ? `${command.home} ${command.offset} ${command.sha}` : "";
 }
 
-function setup(timings: PollTimings = TIMINGS, unavailable: string | null = null): Setup {
-  const paths = boardPaths({ state: path.join(dir, "state"), data: path.join(dir, "data") });
+function setup(timings: PollTimings = TIMINGS, blocked: string | null = null): Setup {
+  const paths = boardPaths({
+    state: path.join(dir, "state"),
+    data: path.join(dir, "data"),
+    config: path.join(dir, "config"),
+  });
   fs.mkdirSync(paths.boardDataDir, { recursive: true });
   const journal = new Journal(paths.events);
   const offsets = new Offsets(paths);
@@ -89,7 +93,7 @@ function setup(timings: PollTimings = TIMINGS, unavailable: string | null = null
       onReport: (home, parsed) => reported.push(`${home}:${parsed.closed_holds.length}`),
       onCursorRefused: (home) => refused.push(home),
     },
-    unavailable,
+    () => blocked,
   );
   pollers.push(poller);
   return {

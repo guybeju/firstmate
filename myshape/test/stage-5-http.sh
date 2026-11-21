@@ -23,6 +23,7 @@ mkdir -p "$TB_PLAY" "$TB_REMOTES"
 CODE_ROOT="$TMP_ROOT/root"
 tb_make_fake_root "$CODE_ROOT"
 MAIN=$(tb_make_service_home main)
+tb_bind_home "$MAIN"
 
 t() {
   FM_HOME="$MAIN" FM_ROOT_OVERRIDE="$CODE_ROOT" "$CODE_ROOT/bin/myshape.sh" "$@"
@@ -335,7 +336,7 @@ test_every_change_leaves_a_record() {
   ops=$(node --input-type=module -e "import('$ROOT/myshape/dist/ops.js').then((m) => console.log(Object.entries(m.OPERATIONS).filter(([, op]) => op.channel !== 'page').map(([name]) => name).sort().join(' ')))")
   routes=$(node --input-type=module -e "import('$ROOT/myshape/dist/api.js').then((m) => console.log(Object.keys(m.ROUTES).sort().join('|')))")
   covered_ops="archive close-propose create goal merge move rename reopen split todo-add todo-adopt-done todo-done todo-failed todo-obsolete"
-  covered_routes="GET state|POST agents/tag|POST direct|POST holds/answer|POST messages|POST refresh|POST todos/claim|POST todos/drop|POST todos/takedown|POST topics/archive|POST topics/goal|POST topics/keep|POST topics/merge|POST topics/move|POST topics/rename|POST topics/reopen|POST writes/ignore|POST writes/resend"
+  covered_routes="GET state|POST agents/tag|POST direct|POST holds/answer|POST messages|POST programs/confirm|POST refresh|POST todos/claim|POST todos/drop|POST todos/takedown|POST topics/archive|POST topics/goal|POST topics/keep|POST topics/merge|POST topics/move|POST topics/rename|POST topics/reopen|POST writes/ignore|POST writes/resend"
   assert_equals "$covered_ops" "$ops" "every socket operation needs a case here"
   assert_equals "$covered_routes" "$routes" "every page route needs a case here"
 
@@ -384,6 +385,17 @@ test_every_change_leaves_a_record() {
   id=$(state '[.writes[] | select(.kind == "direct" and .state == "failed")][-1].id')
   records_after - "writes/ignore" api writes/ignore "{\"write_id\":\"$id\"}"
   records_after - "refresh" api refresh '{}'
+  # A program the board cannot vouch for: a write waits for it, and the page's
+  # confirmation saves its record and the record of the write it releases.
+  printf '#!/bin/sh\nexec %s/bin/fm-board.sh "$@"\n' "$CODE_ROOT" > "$TMP_ROOT/outside-fm-board"
+  chmod 755 "$TMP_ROOT/outside-fm-board"
+  jq -cn --arg p "$TMP_ROOT/outside-fm-board" '{v: 1, name: "firstmate", feed: $p, deliver: $p}' \
+    > "$MAIN/config/myshape-aggregator.json"
+  t open >/dev/null
+  records_after - "a message that waits" api messages '{"topic":"rec","text":"等確認"}'
+  records_after "program.confirmed writes.released" "programs/confirm" two_step programs/confirm '{"role":"deliver"}'
+  tb_bind_home "$MAIN"
+  t open >/dev/null
   records_after - "GET state" state '.version'
   # The adopted item closed on the board (it6) is settled once by the next reads;
   # it3 left with its hold already gone, so nothing holds it back.

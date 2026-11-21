@@ -31,6 +31,8 @@ export const RECORD_KINDS = [
     "hold.answered",
     "hold.closed",
     "agent.tagged",
+    "program.confirmed",
+    "writes.released",
 ];
 /** The optional text fields a record may carry, in the order they are saved. */
 export const OPTIONAL_TEXT_FIELDS = ["outcome", "reason", "key", "answer", "source"];

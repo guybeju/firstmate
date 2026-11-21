@@ -29,6 +29,7 @@ CODE_ROOT="$TMP_ROOT/root"
 tb_make_fake_root "$CODE_ROOT"
 
 MAIN=$(tb_make_service_home main)
+tb_bind_home "$MAIN"
 LOCAL_SM=$(tb_make_secondmate_home sm sm1)
 REMOTE_SM="$TB_REMOTES/far1"
 mkdir -p "$REMOTE_SM/state" "$REMOTE_SM/data" "$REMOTE_SM/config"
@@ -279,13 +280,16 @@ test_same_home_writes_do_not_overlap() {
 }
 
 # child_board: stop MAIN's board and start it again as this script's own
-# background child, with retries an hour apart, so a test can crash it.
+# background child, with retries an hour apart, so a test can crash it. It is
+# given what myshape.sh would give it: the binding's SHA-256, and the fake
+# root's committed bin/fm-board.sh as a program that needs no confirmation.
 child_board() {
   local i=0
   t stop >/dev/null
   MYSHAPE_RETRY_MS=60000 node "$CODE_ROOT/myshape/dist/board-server.js" --home "$MAIN" --root "$CODE_ROOT" \
     --commit "$(git -C "$CODE_ROOT" rev-parse HEAD)" --state "$MAIN/state" --data "$MAIN/data" \
-    --port "$(cat "$MAIN/config/myshape-port")" >> "$MAIN/state/myshape/service.log" 2>&1 &
+    --config "$MAIN/config" --binding "$(node "$CODE_ROOT/myshape/dist/binding-cli.js" "$MAIN/config/myshape-aggregator.json" | head -n 1)" \
+    --exempt bin/fm-board.sh --port "$(cat "$MAIN/config/myshape-port")" >> "$MAIN/state/myshape/service.log" 2>&1 &
   CHILD=$!
   while [ "$(tb_board_pid "$MAIN")" != "$CHILD" ] || [ ! -S "$MAIN/state/myshape/board.sock" ]; do
     [ "$i" -lt 100 ] || fail "the board started as this script's child did not come up"
@@ -642,6 +646,7 @@ test_hands_on_item_with_the_real_hold_tool() {
   local home HOLD_TOOL="$ROOT/bin/fm-captain-hold.sh"
   command -v tasks-axi >/dev/null 2>&1 || { pass "skip: tasks-axi not found"; return 0; }
   home=$(tb_make_service_home real-todo)
+  tb_bind_home "$home"
   printf '## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
   printf '%s' '{"v":1,"next_seq":1,"queues":{"high":["t"],"normal":[],"later":[]},"topics":{"t":{"name":"T","goal":"g","status":"confirmed","created_at":""}},"merged":{}}' \
     > "$home/data/topics.json"

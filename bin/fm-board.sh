@@ -6,6 +6,7 @@
 #   fm-board.sh tag <task-id> <topic-id>
 #   fm-board.sh tag <new-task-id> --from <old-task-id>
 #   fm-board.sh setup
+#   fm-board.sh bind
 #   fm-board.sh split <topic-id> <name> --goal <one line> [--id <new-id>] [--reason <one line>] [<task-id> | <secondmate-id>/<task-id>]...
 #   fm-board.sh --in-home <secondmate-id> tag <task-id> <topic-id>
 #   fm-board.sh --in-home <secondmate-id> answers        (one answer line on stdin)
@@ -35,7 +36,22 @@
 #        old or more, or no jq - the tag is written as given with one line on
 #        stderr saying why it was not checked. --from is not checked anywhere.
 #        Without jq the main home's check is skipped with a warning too.
-# setup  Creates this home's config/fleet-ledger flag. Safe to repeat.
+# setup  Creates this home's config/fleet-ledger flag, then binds the board
+#        to firstmate as bind does. Safe to repeat.
+# bind   Writes this home's config/myshape-aggregator.json, which tells the
+#        board to reach firstmate through bin/fm-board.sh feed and deliver:
+#        {"v":1,"name":"firstmate","feed":"bin/fm-board.sh","deliver":"bin/fm-board.sh"}.
+#        It takes no argument and writes nothing else. A file or link already
+#        at that path is never replaced, whatever it says; a secondmate home,
+#        which runs no board, gets none. Prints one line. The board runs
+#        bin/fm-board.sh without a confirmation on its page only while git
+#        tracks it unchanged in the code root.
+#        tag, split and adopt write the same binding first when it is missing
+#        in a home that uses the board (not a secondmate home, and
+#        state/myshape/token is there), with one line on stderr; so does the
+#        session-start hook, through bind. feed and deliver never write it. To
+#        keep the board from running anything, leave another file at that path
+#        (an empty one will do): nothing here replaces it.
 #
 # split makes a new confirmed topic out of part of <topic-id> with
 # "myshape.sh split", right after it in the same queue, and retags the named
@@ -219,15 +235,73 @@ cmd_tag() {
   printf '%s\n' "ok $task 已標記為 $topic"
 }
 
+BINDING_TEXT='{"v":1,"name":"firstmate","feed":"bin/fm-board.sh","deliver":"bin/fm-board.sh"}'
+
+BINDING_FILE="$CONFIG/myshape-aggregator.json"
+
+binding_present() {
+  [ -e "$BINDING_FILE" ] || [ -L "$BINDING_FILE" ]
+}
+
+# write_binding: the one writer of config/myshape-aggregator.json. Writes
+# BINDING_TEXT and nothing else; a hard link puts it in place, and a link
+# never replaces what is already at that path, a file or a symlink. Returns
+# 1 when something was already there; dies when it could not write.
+write_binding() {
+  local tmp
+  mkdir -p "$CONFIG"
+  tmp=$(mktemp "$CONFIG/.myshape-aggregator.XXXXXX") || tb_die 1 "寫不進 ${CONFIG}，aggregator 設定沒有寫。"
+  if ! { printf '%s\n' "$BINDING_TEXT" > "$tmp" && chmod 644 "$tmp"; }; then
+    rm -f -- "$tmp"
+    tb_die 1 "寫不進 ${BINDING_FILE}，aggregator 設定沒有寫。"
+  fi
+  if ln -- "$tmp" "$BINDING_FILE" 2>/dev/null; then
+    rm -f -- "$tmp"
+    return 0
+  fi
+  rm -f -- "$tmp"
+  binding_present || tb_die 1 "寫不進 ${BINDING_FILE}，aggregator 設定沒有寫。"
+  return 1
+}
+
+cmd_bind() {
+  [ "$#" -eq 0 ] || usage_error "bind 不收參數"
+  if in_secondmate_home; then
+    printf '%s\n' "ok bind secondmate home 不跑看板，不寫 aggregator 設定"
+  elif ! binding_present && write_binding; then
+    printf '%s\n' "ok bind 看板的 aggregator 設定已寫：firstmate"
+  elif [ "$(cat "$BINDING_FILE" 2>/dev/null)" = "$BINDING_TEXT" ]; then
+    printf '%s\n' "ok bind aggregator 設定本來就是 firstmate"
+  else
+    printf '%s\n' "ok bind config/myshape-aggregator.json 已經有別的內容，沒有改"
+  fi
+}
+
+# ensure_binding: before a subcommand that reaches the board, writes the
+# missing binding in a home that uses the board (not a secondmate home, and
+# state/myshape/token is there), saying so in one line on stderr. A command
+# the board itself runs (feed, deliver, and the tag deliver runs for a filing)
+# has MYSHAPE_HOME set by the board, and never writes it.
+ensure_binding() {
+  [ -z "${MYSHAPE_HOME:-}" ] || return 0
+  in_secondmate_home && return 0
+  [ -f "$STATE/myshape/token" ] || return 0
+  binding_present && return 0
+  if write_binding; then
+    printf '%s\n' "看板的 aggregator 設定原本不在，已寫好：firstmate（config/myshape-aggregator.json）" >&2
+  fi
+}
+
 cmd_setup() {
   [ "$#" -eq 0 ] || usage_error "setup 不收參數"
   if [ -e "$CONFIG/fleet-ledger" ]; then
     printf '%s\n' "ok setup 帳本本來就開著"
-    return 0
+  else
+    mkdir -p "$CONFIG"
+    : > "$CONFIG/fleet-ledger"
+    printf '%s\n' "ok setup 帳本已開"
   fi
-  mkdir -p "$CONFIG"
-  : > "$CONFIG/fleet-ledger"
-  printf '%s\n' "ok setup 帳本已開"
+  cmd_bind
 }
 
 # The data directory holding <task-spec>'s tag file: this home's for "<task>",
@@ -584,11 +658,17 @@ main() {
   [ "$#" -gt 0 ] || usage_error "少了子命令"
   local sub=$1
   shift
+  # The subcommands that reach the board write a missing binding first; feed
+  # and deliver, which the board itself runs, never do.
+  case "$sub" in
+    tag | split | adopt) ensure_binding ;;
+  esac
   case "$sub" in
     -h | --help) usage ;;
     --in-home) cmd_in_home "$@" ;;
     tag) cmd_tag "$@" ;;
     setup) cmd_setup "$@" ;;
+    bind) cmd_bind "$@" ;;
     split) cmd_split "$@" ;;
     install-rules) cmd_install_rules "$@" ;;
     rules) cmd_rules "$@" ;;

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { emptyConfirmations } from "./confirmations.js";
 import * as files from "./files.js";
 import { Journal, Offsets, Summaries } from "./journal.js";
 import { boardPaths, parseConfigArgs } from "./layout.js";
@@ -20,7 +21,11 @@ let target: CommitTarget;
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "tb-storage-"));
-  paths = boardPaths({ state: path.join(dir, "state"), data: path.join(dir, "data") });
+  paths = boardPaths({
+    state: path.join(dir, "state"),
+    data: path.join(dir, "data"),
+    config: path.join(dir, "config"),
+  });
   fs.mkdirSync(paths.boardDataDir, { recursive: true });
   saved = [];
   let n = 0;
@@ -43,7 +48,12 @@ function loadTopicState(at: BoardPaths): { state: TopicState; confirmed: unknown
 }
 
 function boardOf(state: TopicState): StoredBoard {
-  return { topics: state, todos: emptyTodos(), outbox: { topics: [], todos: [] } };
+  return {
+    topics: state,
+    todos: emptyTodos(),
+    confirmations: emptyConfirmations(),
+    outbox: { topics: [], todos: [], confirmations: [] },
+  };
 }
 
 /** Saves `next` over `previous` as one topic change with one record. */
@@ -138,7 +148,7 @@ describe("files", () => {
 
 describe("layout", () => {
   it("derives every path from the state and data directories", () => {
-    const result = boardPaths({ state: "/s", data: "/d" });
+    const result = boardPaths({ state: "/s", data: "/d", config: "/c" });
     expect(result).toEqual({
       runtimeDir: "/s/myshape",
       socket: "/s/myshape/board.sock",
@@ -158,6 +168,8 @@ describe("layout", () => {
       aggregator: "/d/myshape/aggregator.json",
       todos: "/d/myshape/todos.json",
       decisions: "/d/myshape/decisions.json",
+      binding: "/c/myshape-aggregator.json",
+      confirmations: "/d/myshape/confirmations.json",
     });
   });
 
@@ -175,11 +187,35 @@ describe("layout", () => {
       "/s",
       "--data",
       "/d",
+      "--config",
+      "/c",
+      "--binding",
+      "-",
+      "--exempt",
+      "bin/a.sh,bin/b",
     ];
     expect(parseConfigArgs([...argv, "--", "move", "--first"])).toEqual({
-      config: { home: "/h", root: "/r", commit: "abc", port: 47819, state: "/s", data: "/d" },
+      config: {
+        home: "/h",
+        root: "/r",
+        commit: "abc",
+        port: 47819,
+        state: "/s",
+        data: "/d",
+        config: "/c",
+        binding: "-",
+        exempt: ["bin/a.sh", "bin/b"],
+      },
       rest: ["move", "--first"],
     });
+    const none = argv.map((value) => (value === "bin/a.sh,bin/b" ? "-" : value));
+    expect(parseConfigArgs(none).config.exempt).toEqual([]);
+    // A start without the binding's flags is refused rather than read as "no binding".
+    expect(() => parseConfigArgs(argv.slice(0, -6))).toThrow("missing --binding");
+    expect(() => parseConfigArgs(argv.slice(0, -2))).toThrow("missing --exempt");
+    expect(() =>
+      parseConfigArgs(argv.map((value) => (value === "-" ? "not-a-sha" : value))),
+    ).toThrow("--binding is not a SHA-256 or -");
     expect(parseConfigArgs(argv).rest).toEqual([]);
     expect(() => parseConfigArgs(argv.slice(2))).toThrow("missing --home");
     expect(() => parseConfigArgs(["--bogus", "x", ...argv])).toThrow(

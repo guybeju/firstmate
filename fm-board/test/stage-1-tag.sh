@@ -254,10 +254,41 @@ test_setup_is_idempotent() {
   out=$(tb_run "$home" "$BOARD" setup)
   assert_present "$home/config/fleet-ledger" "setup did not create the ledger flag"
   assert_contains "$out" "ok setup" "setup did not report success"
+  assert_equals '{"v":1,"name":"firstmate","feed":"bin/fm-board.sh","deliver":"bin/fm-board.sh"}' \
+    "$(cat "$home/config/myshape-aggregator.json")" "setup must bind the board to firstmate's two programs, paths only"
+  assert_equals "-rw-r--r--" "$(tb_mode "$home/config/myshape-aggregator.json")" \
+    "the binding must be readable by others and writable by its owner only, whatever the umask"
+  assert_contains "$out" "ok bind 看板的 aggregator 設定已寫：firstmate" "setup did not say it wrote the binding"
   out=$(tb_run "$home" "$BOARD" setup)
   assert_contains "$out" "本來就開著" "second setup did not report the existing flag"
+  assert_contains "$out" "aggregator 設定本來就是 firstmate" "second setup did not report the existing binding"
+  printf '%s\n' '{"v":1,"name":"other","feed":"/opt/other/feed","deliver":"/opt/other/deliver"}' \
+    > "$home/config/myshape-aggregator.json"
+  out=$(tb_run "$home" "$BOARD" bind)
+  assert_contains "$out" "已經有別的內容，沒有改" "bind must leave another aggregator's binding alone"
+  assert_contains "$(cat "$home/config/myshape-aggregator.json")" '"name":"other"' "bind rewrote another binding"
   expect_code 2 "$(tb_code "$home" "$BOARD" setup extra)" "setup with an argument"
-  pass "setup creates the ledger flag once"
+  expect_code 2 "$(tb_code "$home" "$BOARD" bind extra)" "bind with an argument"
+  pass "setup creates the ledger flag and the binding once, and bind never rewrites a binding"
+}
+
+# The binding bind writes, the one the session-start hook asks for, names only
+# the tracked bin/fm-board.sh: no argument, variable or file changes what it writes.
+test_bind_writes_only_firstmates_program() {
+  local home out rc=0
+  home=$(tb_make_home bind-only)
+  expect_code 2 "$(tb_code "$home" "$BOARD" bind /tmp/evil)" "bind with a path argument"
+  expect_code 2 "$(tb_code "$home" "$BOARD" bind --feed /tmp/evil)" "bind with an option"
+  assert_absent "$home/config/myshape-aggregator.json" "a refused bind must write nothing"
+  mkdir -p "$home/data" "$home/state"
+  printf '%s\n' '{"v":1,"name":"evil","feed":"/tmp/evil","deliver":"/tmp/evil"}' > "$home/data/myshape-aggregator.json"
+  printf '%s\n' '{"v":1,"name":"evil","feed":"/tmp/evil","deliver":"/tmp/evil"}' > "$home/state/myshape-aggregator.json"
+  out=$(BINDING_TEXT='{"v":1,"name":"evil","feed":"/tmp/evil","deliver":"/tmp/evil"}' FM_BINDING=/tmp/evil \
+    MYSHAPE_FEED=/tmp/evil FM_BOARD_PROGRAM=/tmp/evil tb_run "$home" "$BOARD" bind 2>&1) || rc=$?
+  assert_equals 0 "$rc" "bind must succeed: $out"
+  assert_equals '{"v":1,"name":"firstmate","feed":"bin/fm-board.sh","deliver":"bin/fm-board.sh"}' \
+    "$(cat "$home/config/myshape-aggregator.json")" "no argument, variable or file may change the binding bind writes"
+  pass "bind writes only the binding naming the tracked bin/fm-board.sh, whatever the environment or files say"
 }
 
 test_in_home_routes_to_a_local_secondmate() {
@@ -273,6 +304,7 @@ test_in_home_routes_to_a_local_secondmate() {
   tb_run "$home" "$BOARD" --in-home sm1 setup >/dev/null
   assert_present "$sm/config/fleet-ledger" "--in-home setup did not open the secondmate ledger"
   assert_absent "$home/config/fleet-ledger" "--in-home setup opened the main ledger"
+  assert_absent "$sm/config/myshape-aggregator.json" "a secondmate home runs no board, so setup must not bind one there"
   out=$(tb_run "$home" "$BOARD" --in-home far1 tag task-9 billing 2>&1) && fail "--in-home accepted a remote secondmate"
   assert_contains "$out" "far1 是遠端的 secondmate" "remote refusal did not say the secondmate is remote"
   expect_code 1 "$(tb_code "$home" "$BOARD" --in-home nobody tag task-9 billing)" "--in-home with an unknown id"
@@ -343,5 +375,5 @@ fm_test_run test_tag_writes_and_is_idempotent test_tag_validates_in_main_home \
   test_local_child_of_a_remote_mate_checks_its_copy test_mate_tag_without_a_source_tags_and_says_why \
   test_mate_tag_without_jq_tags_and_says_why test_mate_tag_from_copies_unchecked \
   test_tag_and_order_agree_on_the_source test_tag_without_jq_warns_and_writes \
-  test_setup_is_idempotent test_in_home_routes_to_a_local_secondmate \
+  test_setup_is_idempotent test_bind_writes_only_firstmates_program test_in_home_routes_to_a_local_secondmate \
   test_in_home_answers_passes_through test_variables_are_braced_before_wide_characters test_usage
