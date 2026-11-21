@@ -36,7 +36,15 @@ function feedArgs(command) {
         refuse("offset must be a non-negative integer");
     if (!SHA.test(command.sha))
         refuse("prefix hash must be 64 hex characters or '-'");
-    return ["feed", command.home, String(command.offset), command.sha];
+    const args = ["feed", command.home, String(command.offset), command.sha];
+    const { closed } = command;
+    if (closed === undefined)
+        return args;
+    if (!Number.isInteger(closed.offset) || closed.offset < 0)
+        refuse("closed offset must be a non-negative integer");
+    if (!SHA.test(closed.sha))
+        refuse("closed prefix hash must be 64 hex characters or '-'");
+    return [...args, String(closed.offset), closed.sha];
 }
 /** Turns an allowed command into the arguments to run; throws CommandRefused otherwise. */
 export function invocationFor(command) {

@@ -42,7 +42,42 @@ function parseHold(raw) {
         hold_age_days: typeof age === "number" ? age : null,
         origin: textField(raw, "origin"),
         on_answer: onAnswerOf(raw["on_answer"]),
+        hold_set: stringField(raw, "hold_set"),
     };
+}
+function epochOrNull(value) {
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+function parseClosedHold(raw) {
+    const id = stringField(raw, "id");
+    const digest = stringField(raw, "digest");
+    const occurrence = raw["occurrence"];
+    if (id === null || digest === null || typeof occurrence !== "number")
+        return null;
+    return {
+        id,
+        title: textField(raw, "title"),
+        origin: textField(raw, "origin"),
+        mode: textField(raw, "mode"),
+        answer: textField(raw, "answer"),
+        label: textField(raw, "label"),
+        source: textField(raw, "source"),
+        digest,
+        occurrence,
+        opened_at: epochOrNull(raw["opened_at"]),
+        closed_at: epochOrNull(raw["closed_at"]),
+    };
+}
+const CURSOR_STATUSES = ["start", "delta", "continuity-broken", "absent"];
+function parseClosedCursor(raw) {
+    if (!isRecord(raw))
+        return null;
+    const status = CURSOR_STATUSES.find((name) => name === raw["status"]);
+    const offset = raw["to_offset"];
+    const sha = stringField(raw, "to_prefix_sha256");
+    if (status === undefined || typeof offset !== "number" || sha === null)
+        return null;
+    return { status, to_offset: offset, to_prefix_sha256: sha, more: raw["more"] === true };
 }
 function parseLedger(raw) {
     if (!isRecord(raw))
@@ -158,6 +193,8 @@ export function parseReport(stdout) {
             ledger_hint: stringField(raw, "ledger_hint"),
             aggregator: parseAggregator(raw["aggregator"]),
             secondmates: records(raw["secondmates"]).map(parseFeedHome).filter(present),
+            closed_holds: records(raw["closed_holds"]).map(parseClosedHold).filter(present),
+            closed_cursor: parseClosedCursor(raw["closed_cursor"]),
         },
     };
 }

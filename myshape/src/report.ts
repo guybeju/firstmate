@@ -51,6 +51,35 @@ export interface ReportHold {
   origin: string;
   /** Null when the hold records no outcome, or the home's code is too old to report one. */
   on_answer: OnAnswer | null;
+  /** When the hold was set ("Captain hold set:", UTC ISO or a date); null when unknown. */
+  hold_set: string | null;
+}
+
+/** A decision that closed, as the home's backlog recorded it (contracts section 4). */
+export interface ClosedHold {
+  id: string;
+  title: string;
+  origin: string;
+  /** The record's Resolution mode: answered, released, repaired, reconciled, forge-closed, forge-released, or "". */
+  mode: string;
+  answer: string;
+  label: string;
+  /** Where a keyed answer came from (for example "myshape"); "" for words recorded directly. */
+  source: string;
+  digest: string;
+  /** Which hold of the task this was: 1 for the first, one more for each re-hold. */
+  occurrence: number;
+  /** Epoch seconds from the home's hold lines, or null when it has none. */
+  opened_at: number | null;
+  closed_at: number | null;
+}
+
+/** Where the board stopped reading a home's closed decisions in its archive. */
+export interface ClosedCursor {
+  status: "start" | "delta" | "continuity-broken" | "absent";
+  to_offset: number;
+  to_prefix_sha256: string;
+  more: boolean;
 }
 
 export interface ReportQuestion {
@@ -114,6 +143,10 @@ export interface HomeReport {
   aggregator: Aggregator | null;
   /** The further homes; read only from the root report. */
   secondmates: FeedHome[];
+  /** Empty for a home whose code does not report closed decisions. */
+  closed_holds: ClosedHold[];
+  /** Null for a home whose code does not report closed decisions. */
+  closed_cursor: ClosedCursor | null;
 }
 
 export type ParsedReport =
@@ -158,7 +191,43 @@ function parseHold(raw: Record<string, unknown>): ReportHold | null {
     hold_age_days: typeof age === "number" ? age : null,
     origin: textField(raw, "origin"),
     on_answer: onAnswerOf(raw["on_answer"]),
+    hold_set: stringField(raw, "hold_set"),
   };
+}
+
+function epochOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function parseClosedHold(raw: Record<string, unknown>): ClosedHold | null {
+  const id = stringField(raw, "id");
+  const digest = stringField(raw, "digest");
+  const occurrence = raw["occurrence"];
+  if (id === null || digest === null || typeof occurrence !== "number") return null;
+  return {
+    id,
+    title: textField(raw, "title"),
+    origin: textField(raw, "origin"),
+    mode: textField(raw, "mode"),
+    answer: textField(raw, "answer"),
+    label: textField(raw, "label"),
+    source: textField(raw, "source"),
+    digest,
+    occurrence,
+    opened_at: epochOrNull(raw["opened_at"]),
+    closed_at: epochOrNull(raw["closed_at"]),
+  };
+}
+
+const CURSOR_STATUSES = ["start", "delta", "continuity-broken", "absent"] as const;
+
+function parseClosedCursor(raw: unknown): ClosedCursor | null {
+  if (!isRecord(raw)) return null;
+  const status = CURSOR_STATUSES.find((name) => name === raw["status"]);
+  const offset = raw["to_offset"];
+  const sha = stringField(raw, "to_prefix_sha256");
+  if (status === undefined || typeof offset !== "number" || sha === null) return null;
+  return { status, to_offset: offset, to_prefix_sha256: sha, more: raw["more"] === true };
 }
 
 function parseLedger(raw: unknown): ReportLedger | null {
@@ -276,6 +345,8 @@ export function parseReport(stdout: string): ParsedReport {
       ledger_hint: stringField(raw, "ledger_hint"),
       aggregator: parseAggregator(raw["aggregator"]),
       secondmates: records(raw["secondmates"]).map(parseFeedHome).filter(present),
+      closed_holds: records(raw["closed_holds"]).map(parseClosedHold).filter(present),
+      closed_cursor: parseClosedCursor(raw["closed_cursor"]),
     },
   };
 }

@@ -38,7 +38,8 @@ import { DispatchNotifier, fileStore } from "./notifier.js";
 import type { Dispatchable } from "./notifier.js";
 import { DEFAULT_TIMINGS, Poller } from "./poller.js";
 import type { PollTimings } from "./poller.js";
-import type { Aggregator } from "./report.js";
+import type { Aggregator, HomeReport } from "./report.js";
+import { DecisionStore, decisionStep } from "./decisions.js";
 import { applyOperation, operationOf } from "./ops.js";
 import type { PageNotice } from "./ops.js";
 import type { Draft } from "./records.js";
@@ -93,6 +94,8 @@ interface Service extends Boot {
   unavailable: string | null;
   /** The last root report's aggregator block, kept across starts. */
   aggregator: Aggregator | null;
+  /** What the last read of each home showed of its decisions (data/myshape/decisions.json). */
+  decisions: DecisionStore;
 }
 
 function log(message: string): void {
@@ -640,6 +643,35 @@ function saveRecords(
   service.version += 1;
 }
 
+/**
+ * Records the decisions one good read of `home` opened or closed, then
+ * remembers what the read showed. Records first, memory second: a crash in
+ * between reads the same piece again, and the records' keys keep it once.
+ */
+function recordDecisions(service: Service, home: string, report: HomeReport): void {
+  const homes = service.poller.snapshots();
+  const step = decisionStep({
+    home,
+    previous: service.decisions.get(home),
+    report,
+    readAt: epochSeconds(),
+    saved: (key) => service.journal.hasKey(key),
+    topicOf: (task, origin) => {
+      const own = placeTask(service.board.topics, homes, home, task).topic;
+      if (own !== null || origin === "") return own;
+      return placeTask(service.board.topics, homes, home, origin).topic;
+    },
+  });
+  const [first, ...rest] = step.drafts;
+  if (first !== undefined) {
+    const before = service.board;
+    saveRecords(service, [first, ...rest], "board");
+    // A record that could not be saved is read again next time, so nothing is remembered yet.
+    if (service.board === before) return;
+  }
+  service.decisions.set(home, step.next);
+}
+
 /** Records how a page write that changes another home ended, and re-reads that home. */
 function recordFinished(service: Service, record: WriteRecord): void {
   const draft = deliveryRecord(record);
@@ -704,9 +736,11 @@ function loadService(boot: Boot): Service {
   const bump = (): void => {
     service.version += 1;
   };
+  const decisions = new DecisionStore(paths.decisions);
   const service: Service = {
     ...boot,
     board: loaded.board,
+    decisions,
     journal,
     records: starting.records,
     summaries: new Summaries(paths.summaries),
@@ -723,6 +757,9 @@ function loadService(boot: Boot): Service {
       {
         onChange: bump,
         onAggregator: (reported) => rememberAggregator(service, reported),
+        closedCursor: (home) => decisions.get(home)?.cursor ?? null,
+        onReport: (home, report) => recordDecisions(service, home, report),
+        onCursorRefused: (home) => decisions.forget(home),
       },
       unavailable,
     ),

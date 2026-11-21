@@ -25,6 +25,10 @@ interface Setup {
   answers: Map<string, (command: AllowedCommand) => CommandResult | Promise<CommandResult>>;
   changes: () => number;
   aggregators: unknown[];
+  /** The closed decisions' cursor the host hands out per home, the homes it was told of, and refusals. */
+  cursors: Map<string, { offset: number; sha: string }>;
+  reported: string[];
+  refused: string[];
 }
 
 let dir: string;
@@ -63,6 +67,9 @@ function setup(timings: PollTimings = TIMINGS, unavailable: string | null = null
   const answers: Setup["answers"] = new Map();
   let changes = 0;
   const aggregators: unknown[] = [];
+  const cursors: Setup["cursors"] = new Map();
+  const reported: string[] = [];
+  const refused: string[] = [];
   const poller = new Poller(
     async (command, timeout) => {
       calls.push({ command, timeout });
@@ -78,11 +85,25 @@ function setup(timings: PollTimings = TIMINGS, unavailable: string | null = null
         changes += 1;
       },
       onAggregator: (aggregator) => aggregators.push(aggregator),
+      closedCursor: (home) => cursors.get(home) ?? null,
+      onReport: (home, parsed) => reported.push(`${home}:${parsed.closed_holds.length}`),
+      onCursorRefused: (home) => refused.push(home),
     },
     unavailable,
   );
   pollers.push(poller);
-  return { poller, journal, offsets, calls, answers, changes: () => changes, aggregators };
+  return {
+    poller,
+    journal,
+    offsets,
+    calls,
+    answers,
+    changes: () => changes,
+    aggregators,
+    cursors,
+    reported,
+    refused,
+  };
 }
 
 beforeEach(() => {
@@ -141,6 +162,59 @@ describe("reading the main home", () => {
     expect(s.aggregators).toEqual([null]);
     expect(s.changes()).toBe(1);
     expect(await s.poller.readNow("nobody")).toBe(false);
+  });
+
+  it("passes a home its closed decisions' cursor and hands each good report over", async () => {
+    const s = setup();
+    s.cursors.set("main", { offset: 9, sha: "b".repeat(64) });
+    const closed = [{ id: "x", digest: "d", occurrence: 1 }];
+    s.answers.set("main", () => report({ closed_holds: closed }));
+    await s.poller.readNow("main");
+    expect(s.calls[0]?.command).toEqual({
+      kind: "feed",
+      home: "main",
+      offset: 0,
+      sha: "-",
+      closed: { offset: 9, sha: "b".repeat(64) },
+    });
+    expect(s.reported).toEqual(["main:1"]);
+    s.answers.set("main", () => ({ code: 3, stdout: "", stderr: "boom" }));
+    await s.poller.readNow("main");
+    expect(s.reported).toEqual(["main:1"]);
+  });
+
+  it("forgets the cursor of a home that refuses it, and only then", async () => {
+    const s = setup();
+    s.answers.set("main", () => ({ code: 2, stdout: "", stderr: "usage" }));
+    await s.poller.readNow("main");
+    expect(s.refused).toEqual([]);
+    s.cursors.set("main", { offset: 1, sha: "-" });
+    await s.poller.readNow("main");
+    expect(s.refused).toEqual(["main"]);
+  });
+
+  it("reads again at once while the closed decisions' archive has more", async () => {
+    const s = setup();
+    let left = 2;
+    s.answers.set("main", () => {
+      left -= 1;
+      const more = left > 0;
+      return report({
+        closed_cursor: { status: "delta", to_offset: 0, to_prefix_sha256: "-", more },
+      });
+    });
+    await s.poller.readNow("main");
+    expect(s.calls).toHaveLength(2);
+  });
+
+  it("does not count a change in closed decisions alone as something a viewer sees", async () => {
+    const s = setup();
+    await s.poller.readNow("main");
+    s.answers.set("main", () =>
+      report({ closed_holds: [{ id: "x", digest: "d", occurrence: 1 }] }),
+    );
+    await s.poller.readNow("main");
+    expect(s.changes()).toBe(1);
   });
 
   it("follows the root report's list: new and removed homes", async () => {

@@ -13,7 +13,7 @@ import {
   writeFileAtomic,
 } from "./files.js";
 import type { BoardPaths } from "./layout.js";
-import { stampRecord } from "./records.js";
+import { OPTIONAL_TEXT_FIELDS, stampRecord } from "./records.js";
 import type { Actor, Draft, Frozen, Records, StoredRecord } from "./records.js";
 import {
   GOAL_MAX,
@@ -223,7 +223,7 @@ function parseFile<T>(file: string, raw: unknown, parse: (raw: unknown) => T): T
   }
 }
 
-const OPTIONAL_RECORD_FIELDS = ["item", "outcome", "reason"] as const;
+const OPTIONAL_RECORD_FIELDS = ["item", ...OPTIONAL_TEXT_FIELDS] as const;
 
 function parseRecord(raw: unknown): StoredRecord | null {
   if (!isRecord(raw) || raw["src"] !== "board") return null;

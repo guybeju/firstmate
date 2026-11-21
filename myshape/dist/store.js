@@ -5,7 +5,7 @@
 // journal still lacks.
 import fs from "node:fs";
 import { isRecord, readJsonFile, stringField, stringRecord, textField, writeFileAtomic, } from "./files.js";
-import { stampRecord } from "./records.js";
+import { OPTIONAL_TEXT_FIELDS, stampRecord } from "./records.js";
 import { GOAL_MAX, HISTORY_ACTORS, HISTORY_KINDS, QUEUES, QUEUE_LABEL, TODO_STATES, emptyState, isQueue, oneLine, } from "./topics.js";
 import { carryMarks, emptyTodos, isValidItemId, withProjection } from "./todos.js";
 const FILE_MODE = 0o644;
@@ -172,7 +172,7 @@ function parseFile(file, raw, parse) {
         throw new Error(`${file} 讀不懂：${error.message}`, { cause: error });
     }
 }
-const OPTIONAL_RECORD_FIELDS = ["item", "outcome", "reason"];
+const OPTIONAL_RECORD_FIELDS = ["item", ...OPTIONAL_TEXT_FIELDS];
 function parseRecord(raw) {
     if (!isRecord(raw) || raw["src"] !== "board")
         return null;

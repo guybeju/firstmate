@@ -22,6 +22,7 @@ import { boardPaths, parseConfigArgs } from "./layout.js";
 import { MAX_REQUEST_BYTES } from "./protocol.js";
 import { DispatchNotifier, fileStore } from "./notifier.js";
 import { DEFAULT_TIMINGS, Poller } from "./poller.js";
+import { DecisionStore, decisionStep } from "./decisions.js";
 import { applyOperation, operationOf } from "./ops.js";
 import { commitChange, loadBoard } from "./store.js";
 import * as topics from "./topics.js";
@@ -531,6 +532,36 @@ function saveRecords(service, records, by) {
         log(`records wait in the outbox: ${saved.appendError}`);
     service.version += 1;
 }
+/**
+ * Records the decisions one good read of `home` opened or closed, then
+ * remembers what the read showed. Records first, memory second: a crash in
+ * between reads the same piece again, and the records' keys keep it once.
+ */
+function recordDecisions(service, home, report) {
+    const homes = service.poller.snapshots();
+    const step = decisionStep({
+        home,
+        previous: service.decisions.get(home),
+        report,
+        readAt: epochSeconds(),
+        saved: (key) => service.journal.hasKey(key),
+        topicOf: (task, origin) => {
+            const own = placeTask(service.board.topics, homes, home, task).topic;
+            if (own !== null || origin === "")
+                return own;
+            return placeTask(service.board.topics, homes, home, origin).topic;
+        },
+    });
+    const [first, ...rest] = step.drafts;
+    if (first !== undefined) {
+        const before = service.board;
+        saveRecords(service, [first, ...rest], "board");
+        // A record that could not be saved is read again next time, so nothing is remembered yet.
+        if (service.board === before)
+            return;
+    }
+    service.decisions.set(home, step.next);
+}
 /** Records how a page write that changes another home ended, and re-reads that home. */
 function recordFinished(service, record) {
     const draft = deliveryRecord(record);
@@ -602,9 +633,11 @@ function loadService(boot) {
     const bump = () => {
         service.version += 1;
     };
+    const decisions = new DecisionStore(paths.decisions);
     const service = {
         ...boot,
         board: loaded.board,
+        decisions,
         journal,
         records: starting.records,
         summaries: new Summaries(paths.summaries),
@@ -616,6 +649,9 @@ function loadService(boot) {
         poller: new Poller(run, journal, new Offsets(paths), timings, {
             onChange: bump,
             onAggregator: (reported) => rememberAggregator(service, reported),
+            closedCursor: (home) => decisions.get(home)?.cursor ?? null,
+            onReport: (home, report) => recordDecisions(service, home, report),
+            onCursorRefused: (home) => decisions.forget(home),
         }, unavailable),
         confirm: new ConfirmStore(),
         notifier: new DispatchNotifier(notifyDelay(), fileStore(paths.notifyPending), (ready) => notifyDispatchable(service, ready)),

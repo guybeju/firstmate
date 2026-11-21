@@ -1,0 +1,245 @@
+// The records of decisions (captain holds) that open and close outside the
+// page, from what each read of a home reports: an opening when a hold is
+// first seen, and a close for each closed decision the home reports
+// (contracts sections 3.3 and 4). Each record carries a key, so the journal
+// never takes the same opening or close twice, and decisions.json keeps what
+// the last read of each home showed, so a read never records what was already
+// there before the board started watching.
+import { isRecord, readJsonFile, stringField, writeFileAtomic } from "./files.js";
+const FILE_MODE = 0o644;
+const LINE_MAX = 200;
+/** The source of an answer the page itself delivered: its own hold.answered record is that close. */
+export const PAGE_SOURCE = "myshape";
+function oneLine(text) {
+    const line = (text.split("\n")[0] ?? "").trim();
+    return line.length > LINE_MAX ? `${line.slice(0, LINE_MAX)}…` : line;
+}
+function pad(value) {
+    return String(value).padStart(2, "0");
+}
+/** "MM-DD HH:mm" in this machine's time zone, as the page prints a record's time. */
+export function shortTime(epochSeconds) {
+    const date = new Date(epochSeconds * 1000);
+    return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+/** Epoch seconds of a "Captain hold set:" stamp with a time; null for a date or nothing. */
+export function holdSetSeconds(stamp) {
+    if (stamp === null || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(stamp))
+        return null;
+    const ms = Date.parse(stamp);
+    return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+}
+function named(title) {
+    const shown = oneLine(title);
+    return shown === "" ? "待決事項" : `待決事項「${shown}」`;
+}
+/** The time of a record and, when the home did not say, the words that say it is a bound. */
+function timing(at, readAt) {
+    return at === null ? { at: readAt, suffix: `（最晚 ${shortTime(readAt)}）` } : { at, suffix: "" };
+}
+function openKey(home, task, holdSet) {
+    return `hold.opened\t${home}\t${task}\t${holdSet}`;
+}
+function closeKey(home, task, digest) {
+    return `hold.closed\t${home}\t${task}\t${digest}`;
+}
+function openingOf(read, hold) {
+    const when = timing(holdSetSeconds(hold.hold_set), read.readAt);
+    const question = oneLine(hold.question);
+    return {
+        kind: "hold.opened",
+        topic: read.topicOf(hold.id, hold.origin),
+        home: read.home,
+        task: hold.id,
+        key: openKey(read.home, hold.id, hold.hold_set ?? ""),
+        at: when.at,
+        text: `${named(hold.title)}已開${question === "" ? "" : `：${question}`}${when.suffix}`,
+    };
+}
+/** Where the answer came from, as the page says it. */
+function viaWords(source) {
+    if (source === "")
+        return "聊天";
+    return source === PAGE_SOURCE ? "看板" : source;
+}
+/** What a close says happened, by the record's mode. */
+function closeWords(closed) {
+    const answer = oneLine(closed.label === "" ? closed.answer : closed.label);
+    const said = answer === "" ? "" : `：${answer}`;
+    const via = viaWords(closed.source);
+    switch (closed.mode) {
+        case "":
+        case "answered":
+        case "routed":
+            return `已回答${said}（經${via}）`;
+        case "repaired":
+            return `已回答${said}（經${via}，事後補記）`;
+        case "released":
+            return `已回答並放行，工作繼續${said}（經${via}）`;
+        case "reconciled":
+            return `已對帳結束，不必再答${said}`;
+        case "forge-closed":
+            return `隨 PR 結束而關閉${said}`;
+        case "forge-released":
+            return `隨 PR 結束而放行，工作繼續${said}`;
+        default:
+            return `已結束（${closed.mode}）${said}`;
+    }
+}
+function closeOf(read, closed) {
+    const when = timing(closed.closed_at, read.readAt);
+    return {
+        kind: "hold.closed",
+        topic: read.topicOf(closed.id, closed.origin),
+        home: read.home,
+        task: closed.id,
+        key: closeKey(read.home, closed.id, closed.digest),
+        at: when.at,
+        outcome: closed.mode === "" ? "answered" : closed.mode,
+        answer: closed.answer,
+        source: closed.source === "" ? "chat" : closed.source,
+        text: `${named(closed.title)}${closeWords(closed)}${when.suffix}`,
+    };
+}
+/** The opening of a decision that opened and closed between two reads, when the home timed it. */
+function gapOpeningOf(read, closed, at) {
+    return {
+        kind: "hold.opened",
+        topic: read.topicOf(closed.id, closed.origin),
+        home: read.home,
+        task: closed.id,
+        key: `hold.opened\t${read.home}\t${closed.id}\t#${closed.digest}`,
+        at,
+        text: `${named(closed.title)}已開`,
+    };
+}
+function openingsOf(read) {
+    const { previous, report } = read;
+    // A first read, or a reader on other code, is where watching starts: what it shows was there before.
+    if (previous === undefined || previous.code_commit !== report.code_commit)
+        return [];
+    const seen = new Set(previous.openSeen);
+    return report.holds
+        .filter((hold) => !seen.has(`${hold.id}\t${hold.hold_set ?? ""}`))
+        .filter((hold) => !read.saved(openKey(read.home, hold.id, hold.hold_set ?? "")))
+        .map((hold) => openingOf(read, hold));
+}
+function closesOf(read) {
+    const { previous, report } = read;
+    // Without a cursor the read started at the present: every close it shows was there before.
+    if (report.closed_cursor === null || previous === undefined || previous.cursor === null)
+        return [];
+    const seen = new Set(previous.closedSeen);
+    const wasOpen = new Set(previous.openSeen.map((key) => key.split("\t")[0]));
+    const drafts = [];
+    for (const closed of report.closed_holds) {
+        if (seen.has(`${closed.id}\t${closed.digest}`))
+            continue;
+        if (closed.source === PAGE_SOURCE)
+            continue;
+        if (read.saved(closeKey(read.home, closed.id, closed.digest)))
+            continue;
+        const gapOpen = closed.opened_at !== null && !wasOpen.has(closed.id);
+        if (gapOpen && closed.opened_at !== null)
+            drafts.push(gapOpeningOf(read, closed, closed.opened_at));
+        drafts.push(closeOf(read, closed));
+    }
+    return drafts.filter((draft) => draft.key === undefined || !read.saved(draft.key));
+}
+/**
+ * The records one good read of a home leaves, and what to remember of it. A
+ * hold not seen at the last read gets an opening at its set time; a closed
+ * decision not seen before gets a close at the time the home's hold line
+ * gives, or "at the latest" this read. A close the page delivered itself
+ * (source myshape) is already its hold.answered record, so it leaves none.
+ */
+export function decisionStep(read) {
+    const { report } = read;
+    const cursor = report.closed_cursor;
+    return {
+        drafts: [...openingsOf(read), ...closesOf(read)],
+        next: {
+            code_commit: report.code_commit,
+            cursor: cursor === null ? null : { offset: cursor.to_offset, sha: cursor.to_prefix_sha256 },
+            openSeen: report.holds.map((hold) => `${hold.id}\t${hold.hold_set ?? ""}`),
+            closedSeen: report.closed_holds.map((closed) => `${closed.id}\t${closed.digest}`),
+        },
+    };
+}
+function stringList(raw) {
+    return Array.isArray(raw)
+        ? raw.filter((value) => typeof value === "string")
+        : [];
+}
+function parseCursor(raw) {
+    if (!isRecord(raw))
+        return null;
+    const sha = stringField(raw, "sha");
+    const offset = raw["offset"];
+    return typeof offset === "number" && sha !== null ? { offset, sha } : null;
+}
+function parseHome(raw) {
+    if (!isRecord(raw))
+        return null;
+    return {
+        code_commit: stringField(raw, "code_commit") ?? "",
+        cursor: parseCursor(raw["cursor"]),
+        openSeen: stringList(raw["open_seen"]),
+        closedSeen: stringList(raw["closed_seen"]),
+    };
+}
+/**
+ * data/myshape/decisions.json, the one place that keeps it. It is saved after
+ * a read's records, so a crash in between reads that piece again and the
+ * records' keys keep it from being recorded twice. A missing or unreadable
+ * file is a board that has not watched any home yet.
+ */
+export class DecisionStore {
+    file;
+    homes = new Map();
+    constructor(file) {
+        this.file = file;
+        let raw = null;
+        try {
+            raw = readJsonFile(file);
+        }
+        catch {
+            raw = null;
+        }
+        if (!isRecord(raw) || raw["v"] !== 1 || !isRecord(raw["homes"]))
+            return;
+        for (const [home, value] of Object.entries(raw["homes"])) {
+            const parsed = parseHome(value);
+            if (parsed !== null)
+                this.homes.set(home, parsed);
+        }
+    }
+    get(home) {
+        return this.homes.get(home);
+    }
+    /** Remembers a home's last read; the file is rewritten only when something changed. */
+    set(home, value) {
+        if (JSON.stringify(this.homes.get(home)) === JSON.stringify(value))
+            return;
+        this.homes.set(home, value);
+        this.save();
+    }
+    /** Forgets a home, so its next read starts watching again. */
+    forget(home) {
+        if (!this.homes.delete(home))
+            return;
+        this.save();
+    }
+    save() {
+        const homes = Object.fromEntries([...this.homes].map(([home, value]) => [
+            home,
+            {
+                code_commit: value.code_commit,
+                cursor: value.cursor,
+                open_seen: value.openSeen,
+                closed_seen: value.closedSeen,
+            },
+        ]));
+        writeFileAtomic(this.file, `${JSON.stringify({ v: 1, homes }, null, 2)}\n`, FILE_MODE);
+    }
+}

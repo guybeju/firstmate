@@ -11,7 +11,14 @@ import type { BoardConfig } from "./layout.js";
 export const AGGREGATOR_PROGRAM = path.join("bin", "fm-board.sh");
 
 export type AllowedCommand =
-  | { kind: "feed"; home: string; offset: number; sha: string }
+  | {
+      kind: "feed";
+      home: string;
+      offset: number;
+      sha: string;
+      /** The closed decisions' cursor, passed only to a home whose last report carried one. */
+      closed?: { offset: number; sha: string };
+    }
   | { kind: "deliver"; record: string };
 
 export interface CommandResult {
@@ -55,7 +62,13 @@ function feedArgs(command: Extract<AllowedCommand, { kind: "feed" }>): string[] 
   if (!Number.isInteger(command.offset) || command.offset < 0)
     refuse("offset must be a non-negative integer");
   if (!SHA.test(command.sha)) refuse("prefix hash must be 64 hex characters or '-'");
-  return ["feed", command.home, String(command.offset), command.sha];
+  const args = ["feed", command.home, String(command.offset), command.sha];
+  const { closed } = command;
+  if (closed === undefined) return args;
+  if (!Number.isInteger(closed.offset) || closed.offset < 0)
+    refuse("closed offset must be a non-negative integer");
+  if (!SHA.test(closed.sha)) refuse("closed prefix hash must be 64 hex characters or '-'");
+  return [...args, String(closed.offset), closed.sha];
 }
 
 /** Turns an allowed command into the arguments to run; throws CommandRefused otherwise. */

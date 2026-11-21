@@ -290,9 +290,28 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-afk-contract.sh"
 
+# Fork addition (myshape/spec/contracts.markdown section 2): every hold and
+# resolution this script publishes also appends one line to
+# state/captain-hold-events.jsonl, in every home, with the time the backlog
+# keeps nowhere: {"v":1,"ts":<epoch>,"task":"<id>","occurrence":<n>,
+# "event":"held"|"resolved"}. <n> is the parent-channel key's lifecycle
+# number. A replay appends again, so a reader takes the earliest line per
+# task, occurrence and event. The change is already durable in the backlog, so
+# a line that cannot be appended is reported as `actionable:` on stderr, like
+# a parent channel that cannot be written, and changes nothing else.
+record_hold_line() {  # <task-id> <occurrence> <verb>
+  local event=resolved
+  [ "$3" = resolved ] || event=held
+  printf '{"v":1,"ts":%s,"task":"%s","occurrence":%s,"event":"%s"}\n' \
+    "$(date +%s)" "$1" "$2" "$event" 2>/dev/null >> "$STATE/captain-hold-events.jsonl" \
+    || printf 'actionable: the %s time of task %s was not recorded in %s\n' \
+      "$event" "$1" "$STATE/captain-hold-events.jsonl" >&2
+}
+
 PARENT_HOLD_PUBLISHED=0
 publish_parent_hold() {  # <task-id> <occurrence> <verb> <note> [until-date]
   local id=$1 occurrence=$2 verb=$3 note=$4 until=${5:-} head rc=0
+  record_hold_line "$id" "$occurrence" "$verb"
   PARENT_HOLD_PUBLISHED=0
   head="$verb [key=captain-hold-$id-$occurrence]"
   [ -z "$until" ] || head="$head [until=$until]"
