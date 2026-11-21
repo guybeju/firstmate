@@ -186,6 +186,7 @@ test_confirms_leftover_proposals() {
   # A home whose older board left proposals behind.
   home=$(tb_make_service_home leftover)
   tb_board_has_run "$home"
+  tb_bind_home "$home"
   cat > "$home/data/topics.json" <<'JSON'
 {
   "v": 1, "next_seq": 1,
