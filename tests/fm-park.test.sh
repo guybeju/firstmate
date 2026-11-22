@@ -1122,7 +1122,7 @@ SH
   for _ in $(seq 1 100); do [ -e "$w/teardown.started" ] && break; sleep 0.1; done
   pgid=$(cat "$w/cleanup.pgid" 2>/dev/null)
   [ -n "$pgid" ] && [ "$pgid" != "$(ps -o pgid= -p $$ | tr -d ' ')" ] || fail "land-killed: no detached cleanup process group found: '$pgid'"
-  kill -KILL -- "-$pgid"
+  fm_test_signal KILL --members "$pgid"
   sleep 0.5
   [ -e "$w/state/lane.review-park-land" ] || fail "land-killed: the killed cleanup lost its request"
   ! compgen -G "$w/state/.review-park-report-*" >/dev/null || fail "land-killed: the killed cleanup published an outcome"

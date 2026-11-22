@@ -505,8 +505,10 @@ SH
     waited=$((waited + 1))
   done
   release_sibling_fixture() {
-    kill "$(cat "$dir/worker.pid" 2>/dev/null)" "$(cat "$dir/mcp.pid" 2>/dev/null)" \
-      "$(cat "$dir/native.pid" 2>/dev/null)" "$shim_pid" 2>/dev/null || true
+    fm_test_signal_try TERM --identity "$(cat "$dir/worker.pid" 2>/dev/null)" || true
+    fm_test_signal_try TERM --identity "$(cat "$dir/mcp.pid" 2>/dev/null)" || true
+    fm_test_signal_try TERM --identity "$(cat "$dir/native.pid" 2>/dev/null)" || true
+    kill "$shim_pid" 2>/dev/null || true
     wait "$shim_pid" 2>/dev/null || true
   }
   { [ -e "$ready" ] && [ -s "$dir/mcp.pid" ] && [ -s "$dir/worker.pid" ]; } \
@@ -595,8 +597,9 @@ SH
     waited=$((waited + 1))
   done
   release_deep_mcp_fixture() {
-    kill "$(cat "$dir/mcp.pid" 2>/dev/null)" "$(cat "$dir/native.pid" 2>/dev/null)" \
-      "$shim_pid" 2>/dev/null || true
+    fm_test_signal_try TERM --identity "$(cat "$dir/mcp.pid" 2>/dev/null)" || true
+    fm_test_signal_try TERM --identity "$(cat "$dir/native.pid" 2>/dev/null)" || true
+    kill "$shim_pid" 2>/dev/null || true
     wait "$shim_pid" 2>/dev/null || true
   }
   { [ -e "$ready" ] && [ -s "$dir/mcp.pid" ]; } \
@@ -689,7 +692,9 @@ SH
     mcp_pid=$(cat "$dir/mcp.pid" 2>/dev/null || true)
     native_pid=$(cat "$dir/native.pid" 2>/dev/null || true)
     release_equal_depth_fixture() {
-      kill "$mcp_pid" "$native_pid" "$shim_pid" 2>/dev/null || true
+      fm_test_signal_try TERM --identity "$mcp_pid" || true
+      fm_test_signal_try TERM --identity "$native_pid" || true
+      kill "$shim_pid" 2>/dev/null || true
       wait "$shim_pid" 2>/dev/null || true
     }
     { [ -e "$ready" ] && [ -n "$mcp_pid" ] && [ -n "$native_pid" ]; } \

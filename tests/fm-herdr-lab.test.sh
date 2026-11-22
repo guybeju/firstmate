@@ -191,7 +191,7 @@ test_captured_provision_returns_promptly() {
   : "$(FM_FAKE_HERDR_SERVER_STAY=20 run_with_fake fm_herdr_lab_provision "$name" 2>&1)"
   elapsed=$(($(date +%s) - started))
   pid=$(cat "$FAKE_STATE/$name.pid" 2>/dev/null || true)
-  [ -z "$pid" ] || kill "$pid" 2>/dev/null || true
+  [ -z "$pid" ] || fm_test_signal_try TERM --identity "$pid" || true
   [ "$elapsed" -lt 10 ] || fail "captured provision held its output pipe open for ${elapsed}s"
   run_with_fake fm_herdr_lab_teardown "$name" >/dev/null 2>&1 || true
   pass "fm-herdr-lab: provision does not hold a captured output pipe open"

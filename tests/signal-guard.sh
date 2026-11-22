@@ -24,8 +24,11 @@
 # nothing and appends its record to FM_TEST_SIGNAL_LOG.
 #
 # Every form refuses pid 1 or less, the test script FM_TEST_SUITE_PID, its
-# parent FM_TEST_SUITE_PARENT, the signalling shell, any ancestor of the
-# signalling shell, any systemd process (the user's service manager adopts
+# parent FM_TEST_SUITE_PARENT, the signalling shell, every ancestor of the
+# signalling shell from the test script upward (all of its ancestors when the
+# test script is not among them; an ancestor between the test script and the
+# signalling shell, such as the script a stand-in interrupts, still needs its
+# own evidence), any systemd process (the user's service manager adopts
 # orphans on a desktop, and the same user may signal it), and every argument
 # that is not exactly one positive pid in digits with no leading 0 (empty or
 # missing, 0, -1, negative pids, flags, several pids). Accepted signal names:
@@ -204,6 +207,17 @@ self_chain() {  # the pids from <self-pid> up to pid 1, space-separated with a l
   printf '%s\n' "$chain"
 }
 
+protected_chain() {  # the shell's ancestors from the test script up, or all of them.
+  chain=" " pid=$(ps_field ppid "$self") levels=0 seen_suite=0 below=" "
+  while [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && [ "$levels" -lt 64 ]; do
+    [ "$pid" != "${FM_TEST_SUITE_PID:-}" ] || seen_suite=1
+    if [ "$seen_suite" -eq 1 ]; then chain="$chain$pid "; else below="$below$pid "; fi
+    pid=$(ps_field ppid "$pid")
+    levels=$((levels + 1))
+  done
+  if [ "$seen_suite" -eq 1 ]; then printf '%s\n' "$chain"; else printf '%s\n' "$below$chain"; fi
+}
+
 own_groups() {  # the groups of the test script, its parent, the shell and its ancestors.
   for pid in ${FM_TEST_SUITE_PID:-} ${FM_TEST_SUITE_PARENT:-} $(self_chain); do
     ps_field pgid "$pid"
@@ -262,8 +276,8 @@ judge_identity() {  # <pid> [group]: prints the verdict on the --identity form.
     "${FM_TEST_SUITE_PARENT:-}") echo "refused: pid $1 is the test script's parent"; return ;;
     "$self") echo "refused: pid $1 is the signalling shell itself"; return ;;
   esac
-  case "$(self_chain)" in
-    *" $1 "*) echo "refused: pid $1 is an ancestor of the signalling shell $self"; return ;;
+  case "$(protected_chain)" in
+    *" $1 "*) echo "refused: pid $1 is an ancestor of the signalling shell $self at or above the test script"; return ;;
   esac
   case "$identity_command" in
     *systemd*) echo "refused: pid $1 is the service manager '$identity_command'"; return ;;

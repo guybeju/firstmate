@@ -377,6 +377,11 @@ FM_TEST_RUN_ROOTS=$FM_TEST_CLEANUP_REGISTRY
 FM_TEST_RUN_MARK="fm-test-run-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
 FM_TEST_RUN_MARKS="${FM_TEST_RUN_MARKS:+$FM_TEST_RUN_MARKS }$FM_TEST_RUN_MARK"
 export FM_TEST_RUN_ROOTS FM_TEST_RUN_MARK FM_TEST_RUN_MARKS
+# Stand-ins and Perl, Python or Node test code send a computed signal by
+# running "$FM_TEST_SIGNAL_GUARD" --send <source> <signal> <form> directly,
+# with an argument list, so the guard sees them as its caller.
+FM_TEST_SIGNAL_GUARD="$ROOT/tests/signal-guard.sh"
+export FM_TEST_SIGNAL_GUARD
 
 # fm_test_nonplatform_binary <binary> <dir>: print a path that runs <binary> as
 # a non-platform process. macOS hides a platform binary's environment from
@@ -783,6 +788,15 @@ fm_test_signal_dry_run() {
   [ -n "${FM_TEST_SIGNAL_DRY_RUN:-}" ]
 }
 
+# fm_test_signal_skipped <case>: right after a signal a case depends on, in
+# log-only mode only, report the case as skipped (its signal was logged, not
+# sent) and return 0 so the caller returns; otherwise return 1 and print
+# nothing. Use: fm_test_signal_skipped "<case>" && return 0
+fm_test_signal_skipped() {
+  fm_test_signal_dry_run || return 1
+  pass "skip: log-only run, the signal was logged and not sent: $1"
+}
+
 fm_test_record_child() {  # <pid that $! just gave>
   case "${1:-}" in
     '' | 0* | *[!0-9]*) fail "fm_test_record_child: '${1:-}' is not a pid from \$!" ;;
@@ -830,6 +844,19 @@ fm_test_signal_try() {
     *) accepted= ;;
   esac
   FM_TEST_SIGNALLED_PID=${accepted%% *}
+  return "$rc"
+}
+
+# fm_test_signal_children <signal-name> <pid>: each live child of <pid>,
+# listed with pgrep -P, is sent <signal-name> through the guard's --identity
+# check one at a time; nothing is signalled by name or pattern. List them
+# before <pid> itself is signalled, or they are no longer its children.
+# Returns 1 when any child was refused (it is left running).
+fm_test_signal_children() {
+  local child rc=0
+  for child in $(pgrep -P "$2" 2>/dev/null); do
+    fm_test_signal_try "$1" --identity "$child" || rc=1
+  done
   return "$rc"
 }
 

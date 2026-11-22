@@ -796,7 +796,7 @@ test_registered_agent_with_an_agent_descendant_outside_the_foreground_stays_aliv
   shell_pid=$!
   sleep 0.3
   out=$(stale_registration_case descendant idle "$(shell_only_process_info "$shell_pid")")
-  pkill -P "$shell_pid" 2>/dev/null || true
+  fm_test_signal_children TERM "$shell_pid" || true
   kill "$shell_pid" 2>/dev/null || true
   [ "$out" = "live alive refused" ] \
     || fail "a registered agent with a live agent-named descendant must stay live/alive, got '$out'"
@@ -827,7 +827,7 @@ test_agent_descendant_under_a_spaced_install_path_stays_alive() {
   shell_pid=$!
   sleep 0.3
   out=$(stale_registration_case spaced-descendant idle "$(shell_only_process_info "$shell_pid")")
-  pkill -P "$shell_pid" 2>/dev/null || true
+  fm_test_signal_children TERM "$shell_pid" || true
   kill "$shell_pid" 2>/dev/null || true
   [ "$out" = "live alive refused" ] \
     || fail "an agent-named descendant under a spaced install path must stay live/alive, got '$out'"

@@ -283,17 +283,17 @@ try:
     assert not list((root / "state").glob(".osc7501watch-*")), "failed probe armed a reporter"
     assert tty.read_bytes() == b"", "failed native probe wrote terminal records"
 finally:
-    try:
-        os.killpg(launch.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    # Every computed signal goes through the test's guarded helper, run
+    # directly so this program is its caller: the group's live members one by
+    # one (its leader has already exited), then each recorded probe pid.
+    guard = os.environ["FM_TEST_SIGNAL_GUARD"]
+    subprocess.run([guard, "--send", "osc7501-stubborn-probe", "KILL", "--members", str(launch.pid)],
+                   stdout=subprocess.DEVNULL, check=False)
     pidfile = root / "probe-pids"
     if pidfile.exists():
         for pid in pidfile.read_text().splitlines():
-            try:
-                os.kill(int(pid), signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            subprocess.run([guard, "--send", "osc7501-stubborn-probe", "KILL", "--identity", pid.strip()],
+                           stdout=subprocess.DEVNULL, check=False)
     launch.wait()
 PYTEST
   then
@@ -599,7 +599,7 @@ t_arm_clears_stale_record() {
   local wpid
   wpid=$(watcher_pid "$d/state") || fail "clear: no first watcher"
   wait_cap 'state=working' "$d/cap" 60 || fail "clear: the first watcher never reported working"
-  kill -KILL "$wpid" 2>/dev/null
+  fm_test_signal_try KILL --identity "$wpid" || true
   wait_gone "$wpid" || true
   : >"$d/cap"
   rm -f "$d/state/t32.busy-state" "$d/state/t32.busy-gen"
@@ -715,7 +715,7 @@ t_unarmed_relaunch_clears_leftover() {
       --state "$d/state" --config "$d/config"
     wpid=$(watcher_pid "$d/state") || fail "leftover $kind: no watcher armed"
     wait_cap 'state=working' "$d/cap" 60 || fail "leftover $kind: no working record"
-    kill -KILL "$wpid" 2>/dev/null; wait "$wpid" 2>/dev/null || true
+    fm_test_signal_try KILL --identity "$wpid" || true; wait "$wpid" 2>/dev/null || true
     n0=$(grep -o 'state=' "$d/cap" | wc -l | tr -d ' ')
     # the real launch order runs disarm after the agent command returns;
     # the pidfile names a watcher that is already gone, so disarm writes
@@ -774,7 +774,7 @@ t_killed_watcher_still_gets_final() {
     n0=$(grep -o 'state=' "$d/cap" | wc -l | tr -d ' ')
     env "${CLEAN_UNSET[@]}" FM_OSC7501_TTY="$TERM_SLAVE" bash "$SCRIPT" disarm --state "$d/state"
     kill -0 "$wpid" 2>/dev/null && fail "killed $kind: disarm returned with the stuck watcher still running"
-    kill "$stuck" 2>/dev/null || true
+    fm_test_signal_try TERM --identity "$stuck" || true
     assert_equals "$((n0 + 1))" "$(grep -o 'state=' "$d/cap" | wc -l | tr -d ' ')" \
       "killed $kind: retirement wrote exactly one final record for the killed watcher"
     assert_equals "state=idle" "$(grep -o 'state=[a-z]*' "$d/cap" | tail -1)" \
@@ -930,8 +930,8 @@ t_concurrent_panes_keep_their_reporters() {
   pids=$(cat "$d/state"/.osc7501watch-* 2>/dev/null | awk '{print $1}')
   assert_equals 2 "$(printf '%s\n' "$pids" | grep -c .)" "one reporter per controlling terminal"
   for pid in $pids; do kill -0 "$pid" 2>/dev/null || fail "a pane's reporter was retired by the other pane's launch"; done
-  for pid in $pids; do kill "$pid" 2>/dev/null; done
-  kill "$(cat "$d/a/shell")" "$(cat "$d/b/shell")" 2>/dev/null || true
+  for pid in $pids; do fm_test_signal_try TERM --identity "$pid" || true; done
+  fm_test_signal_try TERM --identity "$(cat "$d/a/shell")" || true; fm_test_signal_try TERM --identity "$(cat "$d/b/shell")" || true
   TERM_PID=$a stop_term
   TERM_PID=$b stop_term
   pass "concurrent panes: each controlling terminal keeps its own reporter"
@@ -1147,12 +1147,12 @@ t_retire_waits_for_slow_reporter() {
     --task t17 --harness opencode --agent-bin opencode --backend tmux --kind ship \
     --state "$d/state" --config "$d/config"
   if kill -0 "$first" 2>/dev/null; then
-    kill -KILL "$first" 2>/dev/null
+    fm_test_signal_try KILL --identity "$first" || true
     fail "slow: replacement armed while the old reporter could still write"
   fi
   second=$(watcher_pid "$d/state") || fail "slow: no replacement watcher"
   [ "$first" != "$second" ] || fail "slow: replacement reused the old reporter"
-  kill -KILL "$second" 2>/dev/null
+  fm_test_signal_try KILL --identity "$second" || true
   wait_gone "$second" || true
   stop_term
   pass "lifecycle: relaunch confirms the old reporter is gone before arming"
@@ -1172,7 +1172,7 @@ t_hc_terminal_with_inherited_herdr_markers() {
   wpid=$(watcher_pid "$d/state") || fail "hc inside herdr: no watcher armed"
   assert_equals "state=idle " "$(grep -o 'state=[a-z]*' "$d/cap" | sort -u | tr '\n' ' ')" \
     "hc inside herdr: the only bytes are the arm-time idle clear - no capability probe"
-  kill "$wpid" 2>/dev/null
+  fm_test_signal_try TERM --identity "$wpid" || true
   wait_gone "$wpid" || true
   stop_term
   pass "known-aware: an hc terminal reports despite inherited HERDR markers"

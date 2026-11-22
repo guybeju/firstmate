@@ -3340,7 +3340,7 @@ test_wedge_alarm_backgrounded_command_times_out_and_reaps_descendant() {
   grep -F 'command notifier timed out' "$daemon_log" >/dev/null \
     || fail "a backgrounded command notifier bypassed its timeout: $(cat "$daemon_log" 2>/dev/null)"
   if is_live_non_zombie "$child"; then
-    kill -TERM "$child" 2>/dev/null || true
+    fm_test_signal_try TERM --identity "$child" || true
     fail "a timed-out command notifier left its descendant running (pid $child)"
   fi
   pass "a backgrounded command notifier remains bounded until its process group is reaped"

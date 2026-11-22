@@ -200,7 +200,7 @@ KILL_PID=$(lab pane process-info --pane "$P_KILL" | jq -r '
 ' | head -1)
 [ -n "$KILL_PID" ] && [ "$KILL_PID" != null ] \
   || fail 'SIGKILL pane had no pi pid in process-info'
-kill -KILL "$KILL_PID" || fail "kill -KILL $KILL_PID failed"
+fm_test_signal KILL --identity "$KILL_PID"
 
 wait_until "$P_QUIT" gone || fail '/quit pane never dropped off agent get'
 wait_until "$P_KILL" gone || fail 'SIGKILL pane never dropped off agent get'

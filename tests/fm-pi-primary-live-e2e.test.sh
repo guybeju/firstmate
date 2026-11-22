@@ -91,10 +91,10 @@ cleanup() {
   "$TMUX" -L "$SOCKET" kill-server 2>/dev/null || true
   sleep 0.1
   if [ -n "$watcher_pid" ] && lab_pid_is_safe "$watcher_pid"; then
-    kill -TERM "$watcher_pid" 2>/dev/null || true
+    fm_test_signal_try TERM --identity "$watcher_pid" || true
   fi
   if [ -n "$arm_pid" ] && lab_pid_is_safe "$arm_pid"; then
-    kill -TERM "$arm_pid" 2>/dev/null || true
+    fm_test_signal_try TERM --identity "$arm_pid" || true
   fi
   rm -rf "$LAB"
 }
@@ -366,7 +366,7 @@ printf '%s\n' '#!/usr/bin/env bash' \
   'echo "watcher: FAILED - intentional isolated live-E2E stop"' \
   'exit 1' > "$PROJECT/bin/fm-watch-arm.sh"
 chmod +x "$PROJECT/bin/fm-watch-arm.sh"
-kill -TERM "$arm_pid" 2>/dev/null || fail "could not intentionally stop the isolated arm chain"
+fm_test_signal_try TERM --identity "$arm_pid" || fail "could not intentionally stop the isolated arm chain: $FM_TEST_SIGNAL_VERDICT"
 wait_pid_dead "$watcher_pid" || fail "intentionally stopped watcher stayed alive"
 wait_pid_dead "$arm_pid" || fail "intentionally stopped arm stayed alive"
 sleep 2

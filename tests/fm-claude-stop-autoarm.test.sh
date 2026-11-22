@@ -977,7 +977,7 @@ test_term_mid_arm_commits_failure_and_rewakes() {
   [ -n "$hook_pid" ] || fail "auto-arm did not publish its generation owner before TERM"
   [ -e "$dir/state/arm-ran" ] || fail "auto-arm did not enter the foreground arm before TERM"
 
-  kill -TERM "$hook_pid" 2>/dev/null || fail "could not TERM the foreground auto-arm owner"
+  fm_test_signal_try TERM --identity "$hook_pid" || fail "could not TERM the foreground auto-arm owner: $FM_TEST_SIGNAL_VERDICT"
   wait "$RUN_AUTOARM_BG_PID" || status=$?
 
   expect_code 2 "$status" "TERM mid-arm must preserve Claude's rewake-triggering hook exit"
@@ -1008,7 +1008,7 @@ test_replacement_retires_interrupted_session_episode() {
       i=$((i + 1))
     done
     [ -n "$hook_pid" ] && [ -e "$dir/state/arm-ran" ] || fail "$signal hook did not park"
-    kill -"$signal" "$hook_pid" || fail "could not signal $signal hook"
+    fm_test_signal_try "$signal" --identity "$hook_pid" || fail "could not signal $signal hook: $FM_TEST_SIGNAL_VERDICT"
     status=0
     wait "$RUN_AUTOARM_BG_PID" || status=$?
     expect_code 2 "$status" "$signal in a live session must retain timeout recovery"
@@ -1124,7 +1124,7 @@ test_missing_lock_interruption_is_silent() {
     done
     [ -n "$hook_pid" ] && [ -e "$dir/state/arm-ran" ] || fail "$signal hook did not park before lock loss"
     mv "$dir/state/.lock" "$dir/state/retired-lock"
-    kill -"$signal" "$hook_pid" || fail "could not signal ended $signal hook"
+    fm_test_signal_try "$signal" --identity "$hook_pid" || fail "could not signal ended $signal hook: $FM_TEST_SIGNAL_VERDICT"
     status=0
     wait "$RUN_AUTOARM_BG_PID" || status=$?
     expect_code 0 "$status" "$signal after lock loss must exit silently"
@@ -1160,7 +1160,7 @@ test_signal_session_identity_proof() {
           old=$(cat "$FM_HOME/state/.lock")
           "$FM_HOME/bin/fm-lock.sh" || exit 90
           [ "$(cat "$FM_HOME/state/.lock")" = "$$" ] && [ "$old" != "$$" ] || exit 91
-          kill -"$2" "$1" || exit 92
+          "$FM_TEST_SIGNAL_GUARD" --send reanchor-claude "$2" --identity "$1" >/dev/null || exit 92
           for _ in $(seq 1 500); do
             kill -0 "$1" 2>/dev/null || exit 0
             sleep 0.02
@@ -1172,7 +1172,7 @@ test_signal_session_identity_proof() {
         # Keep the lock pid and its identity unchanged, varying only the
         # independently recorded session id, as on Windows process-number reuse.
         printf 'sess-replacement\n' > "$dir/state/.lock-session"
-        kill -"$signal" "$hook_pid" || fail "could not signal replacement-id $signal hook"
+        fm_test_signal_try "$signal" --identity "$hook_pid" || fail "could not signal replacement-id $signal hook: $FM_TEST_SIGNAL_VERDICT"
       fi
       status=0
       wait "$RUN_AUTOARM_BG_PID" || status=$?
@@ -1676,7 +1676,7 @@ test_orphaned_claim_from_dead_session_is_superseded_by_replacement() {
   wait "$RUN_AUTOARM_BG_PID"; status=$?
   out=$(cat "$dir/state/replacement-out")
   for i in $(seq 1 250); do kill -0 "$orphan_pid" 2>/dev/null || break; sleep 0.02; done
-  kill -0 "$orphan_pid" 2>/dev/null && { kill "$orphan_pid" 2>/dev/null; fail "the orphaned hook never finished after its cycle closed"; }
+  kill -0 "$orphan_pid" 2>/dev/null && { fm_test_signal_try TERM --identity "$orphan_pid" || true; fail "the orphaned hook never finished after its cycle closed"; }
 
   expect_code 2 "$status" "the replacement session's first Stop must supersede the dead session's orphaned claim and rewake, not defer to it"
   assert_contains "$out" "firstmate watcher wake" "the replacement's rewake must carry the wake banner"
@@ -1747,7 +1747,7 @@ test_resumed_same_id_session_supersedes_the_orphan() {
   wait "$RUN_AUTOARM_BG_PID"; status=$?
   out=$(cat "$dir/state/replacement-out")
   for i in $(seq 1 250); do kill -0 "$orphan_pid" 2>/dev/null || break; sleep 0.02; done
-  kill -0 "$orphan_pid" 2>/dev/null && { kill "$orphan_pid" 2>/dev/null; fail "the orphaned hook never finished after its cycle closed"; }
+  kill -0 "$orphan_pid" 2>/dev/null && { fm_test_signal_try TERM --identity "$orphan_pid" || true; fail "the orphaned hook never finished after its cycle closed"; }
   unset CLAUDE_CODE_SESSION_ID
 
   expect_code 2 "$status" "a resumed session sharing the dead session's id must supersede its orphaned claim and rewake, not defer to it"

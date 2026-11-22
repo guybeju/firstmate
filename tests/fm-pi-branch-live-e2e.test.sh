@@ -71,7 +71,7 @@ fi
 if [ "${1:-}" = --restart ] && [ -f "${FM_LIVE_WATCH_LOG:?}" ]; then
   previous=$(awk '/^arm pid=/ { pid = substr($0, 9) } END { print pid }' "$FM_LIVE_WATCH_LOG")
   if [ -n "$previous" ]; then
-    kill -TERM "$previous" 2>/dev/null || true
+    "$FM_TEST_SIGNAL_GUARD" --send fm-watch-arm-stand-in TERM --identity "$previous" >/dev/null 2>&1 || true
     printf 'retire pid=%s\n' "$previous" >> "$FM_LIVE_WATCH_LOG"
   fi
 fi

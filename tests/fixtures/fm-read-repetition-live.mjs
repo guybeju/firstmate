@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { cpSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -64,7 +64,16 @@ lines.on("line", (line) => {
     const settle = pending.get(event.id); pending.delete(event.id); settle(event);
   }
 });
-const deadline = setTimeout(() => { process.kill(-child.pid, "SIGTERM"); }, 45000);
+// A group signal goes through the test's guarded helper (signal policy P-010),
+// run directly so this process is its caller; it checks the leader is alive,
+// leads its own group and belongs to this run before it sends.
+const signalGroup = (signal) => {
+  const guard = process.env.FM_TEST_SIGNAL_GUARD;
+  if (!guard) throw new Error("FM_TEST_SIGNAL_GUARD is not set; run this fixture from tests/fm-read-repetition-live.test.sh");
+  return spawnSync(guard, ["--send", "fm-read-repetition-live", signal, "--group", String(child.pid)],
+    { stdio: ["ignore", "pipe", "inherit"], encoding: "utf8" });
+};
+const deadline = setTimeout(() => { signalGroup("TERM"); }, 45000);
 const exited = once(child, "exit");
 const command = (type, fields = {}) => new Promise((settle, reject) => {
   const id = `request-${++seq}`;
@@ -106,7 +115,8 @@ try {
   clearTimeout(deadline);
   lines.close();
   if (child.exitCode === null) {
-    try { process.kill(-child.pid, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+    const sent = signalGroup("TERM");
+    if (sent.status !== 0 && child.exitCode === null) throw new Error(`the signal guard did not end the Pi fixture group: ${sent.stdout}`);
   }
   await exited;
   // No fixture child or descendant may survive this guard.

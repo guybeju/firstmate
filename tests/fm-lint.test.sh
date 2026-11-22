@@ -1566,7 +1566,7 @@ SH
       done
       if kill -0 "$shellcheck_pid" 2>/dev/null; then
         survivor=1
-        kill -KILL "$shellcheck_pid" 2>/dev/null || true
+        fm_test_signal_try KILL --identity "$shellcheck_pid" || true
       fi
       [ "$parent_rc" -eq 143 ] \
         || fail "jobs=$jobs telemetry=$telemetry signal exit was $parent_rc, expected 143"

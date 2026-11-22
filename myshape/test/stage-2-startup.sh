@@ -22,7 +22,7 @@ HOLDERS=()
 stop_holders() {
   local pid
   for pid in "${HOLDERS[@]+"${HOLDERS[@]}"}"; do
-    pkill -P "$pid" 2>/dev/null || true
+    fm_test_signal_children TERM "$pid" || true
     kill "$pid" 2>/dev/null || true
   done
 }
@@ -50,7 +50,7 @@ chmod +x "$HARNESS_DIR/claude"
 probe=$!
 sleep 0.2
 probe_name=$(ps -o comm= -p "$probe" 2>/dev/null || true)
-pkill -P "$probe" 2>/dev/null || true
+fm_test_signal_children TERM "$probe" || true
 kill "$probe" 2>/dev/null || true
 if [ "${probe_name##*/}" != claude ]; then
   echo "skip: this platform names a script's process '${probe_name##*/}', so the stand-in harness is not seen as claude"
@@ -121,7 +121,8 @@ test_restarts_a_board_that_does_not_answer() {
   tb_bind_home "$home"
   tb_run "$home" "$TOPIC" open >/dev/null || fail "the board did not start"
   pid=$(tb_board_pid "$home")
-  kill -STOP "$pid"
+  fm_test_signal STOP --identity "$pid"
+  fm_test_signal_skipped "a board that does not answer is replaced" && return 0
   out=$(session_start "$home")
   assert_equals "看板服務：原本沒有回應，已重新啟動" "$(board_lines "$out")" \
     "a board that does not answer must get exactly the restarted line"

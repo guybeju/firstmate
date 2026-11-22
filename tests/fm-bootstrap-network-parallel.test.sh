@@ -806,13 +806,13 @@ SH
       grep -Eq '^START host-sm fm-remote-inherit[.]sh (put|absent) ' "$CF_LOG" \
         || fail "config-push kill was triggered by the query before any payload write"$'\n'"$(cat "$CF_LOG")"
     fi
-    kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+    fm_test_signal_try TERM --group "$pid" || kill -TERM "$pid" 2>/dev/null || true
     sleep 1
-    kill -KILL -- "-$pid" 2>/dev/null || true
+    fm_test_signal_try KILL --members "$pid" || true
     wait "$pid" 2>/dev/null || true
     own_pg=$(ps -o pgid= -p $$ | tr -d ' ')
     for pg in $(ps -eo pgid=,args= | awk -v f="$CF_FAKEBIN/fake-ssh" 'index($0, f) { print $1 }' | sort -u); do
-      [ "$pg" = "$own_pg" ] || kill -KILL -- "-$pg" 2>/dev/null || true
+      [ "$pg" = "$own_pg" ] || fm_test_signal_try KILL --members "$pg" || true
     done
     assert_grep 'owed=1' "$marker" \
       "$script killed mid-mutation must keep the re-read owed"

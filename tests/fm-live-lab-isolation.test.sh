@@ -41,7 +41,7 @@ DECOY_POLLS=100
 
 # signal_decoy <signal> <pid>: one seam, so a case can stand in an unkillable process.
 signal_decoy() {
-  kill -"$1" "$2" 2>/dev/null
+  fm_test_signal_try "$1" --identity "$2" >/dev/null 2>&1
 }
 
 # pid_running <pid>: succeeds while the process exists and has not exited.
@@ -90,7 +90,7 @@ isolation_cleanup() {
   local rc=0
   [ ! -S "$GATE_SOCKET" ] || tmux -S "$GATE_SOCKET" kill-server 2>/dev/null
   if [ -n "$STUCK_PID" ]; then
-    kill -CONT "$STUCK_PID" 2>/dev/null
+    fm_test_signal_try CONT --identity "$STUCK_PID" || true
     stop_decoy "$STUCK_PID" "$STUCK_SOCKET" || rc=1
   fi
   if [ -n "$DECOY_PID" ]; then
@@ -148,12 +148,12 @@ if [ -z "${FM_LAB_ISO_HOST_MARKER:-}" ] && [ -z "${FM_LAB_ISO_TMP_COPY:-}" ]; th
   tmux -S "$STUCK_SOCKET" -f /dev/null new-session -d -s stuck 'exec sleep 600' || fail "cannot start the stuck server"
   STUCK_PID=$(tmux -S "$STUCK_SOCKET" display-message -p '#{pid}')
   [ -n "$STUCK_PID" ] || fail "the stuck server has no pid"
-  kill -STOP "$STUCK_PID" || fail "cannot stop the stuck server"
+  fm_test_signal STOP --identity "$STUCK_PID"
   start=$(date +%s)
   # shellcheck disable=SC2016 # $1 and $2 expand in the bounded shell.
   out=$(FM_TMUX_ISOLATION_PROBE_SECONDS=1 fm_run_timed 30 bash -c '. "$1/tests/lib.sh"; fm_tmux_isolation_gate "$2"; echo RAN' _ "$ROOT" "$TMP_ROOT/stuck" 2>&1)
   code=$?
-  kill -CONT "$STUCK_PID" 2>/dev/null
+  fm_test_signal_try CONT --identity "$STUCK_PID" || true
   stop_decoy "$STUCK_PID" "$STUCK_SOCKET" || fail "cannot stop the stuck server"
   STUCK_PID=''
   expect_code 0 "$code" "the gate returns from a server that never answers: $out"
@@ -182,7 +182,7 @@ if [ -z "${FM_LAB_ISO_HOST_MARKER:-}" ] && [ -z "${FM_LAB_ISO_TMP_COPY:-}" ]; th
   start=$(date +%s)
   out=$(signal_decoy() { :; }; stop_decoy "$victim" "$TMP_ROOT/no-such-socket" 3 2>&1)
   code=$?
-  kill -KILL "$victim" 2>/dev/null
+  fm_test_signal_try KILL --identity "$victim" || true
   expect_code 1 "$code" "cleanup reports a decoy it cannot stop: $out"
   assert_contains "$out" "decoy server $victim survived" "the failure names the surviving decoy"
   [ $(($(date +%s) - start)) -lt 5 ] || fail "cleanup of an unstoppable decoy waited past its bound"
@@ -194,7 +194,7 @@ if [ -z "${FM_LAB_ISO_HOST_MARKER:-}" ] && [ -z "${FM_LAB_ISO_TMP_COPY:-}" ]; th
   sleep 0.5
   kill -0 "$victim" 2>/dev/null || fail "the zombie fixture was reaped, so the case would be vacuous"
   stop_decoy "$victim" "$TMP_ROOT/no-such-socket" 3 || fail "cleanup reported failure for an exited, unreaped decoy"
-  { kill -KILL "$zombie_parent"; wait "$zombie_parent"; } 2>/dev/null
+  { fm_test_signal_try KILL --identity "$zombie_parent"; wait "$zombie_parent"; } 2>/dev/null
 
   pass "decoy cleanup is bounded, escalates to TERM and KILL, and reports a decoy it cannot stop"
 fi

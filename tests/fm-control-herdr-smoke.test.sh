@@ -297,7 +297,7 @@ pass "real herdr: no control verb removed the endpoint or the task's local copy"
 AGENT_PID=$(herdr pane process-info --pane "$PANE_ID" --session "$SESSION" 2>/dev/null \
   | jq -r '.result.process_info.foreground_processes[0].pid // empty')
 [ -n "$AGENT_PID" ] || fail "could not read the agent-named process pid from pane process-info"
-kill "$AGENT_PID" 2>/dev/null || fail "could not stop the agent-named process"
+fm_test_signal_try TERM --identity "$AGENT_PID" || fail "could not stop the agent-named process: $FM_TEST_SIGNAL_VERDICT"
 wait_process_state shell 50 \
   || version_fail "after the agent process exited the pane reads '$(fm_backend_herdr_pane_process_state "$SESSION" "$PANE_ID")' rather than 'shell' through pane process-info. Raw process-info: $(herdr pane process-info --pane "$PANE_ID" --session "$SESSION" 2>&1 | tr -d '\n')"
 

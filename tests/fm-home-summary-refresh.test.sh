@@ -29,9 +29,10 @@ cleanup() {
   local pid
   case "$SLOW_WORKER_PGID" in
     ''|*[!0-9]*) ;;
-    *) kill -KILL -- "-$SLOW_WORKER_PGID" >/dev/null 2>&1 || true ;;
+    *) fm_test_signal_try KILL --members "$SLOW_WORKER_PGID" || true ;;
   esac
-  for pid in "$WATCH_PID" "$SLOW_WRITER_PID" "$SLOW_NM_PID" "$LOCK_HOLDER_PID"; do
+  [ -z "$SLOW_NM_PID" ] || fm_test_signal_try KILL --identity "$SLOW_NM_PID" || true
+  for pid in "$WATCH_PID" "$SLOW_WRITER_PID" "$LOCK_HOLDER_PID"; do
     [ -n "$pid" ] || continue
     kill -KILL "$pid" >/dev/null 2>&1 || true
   done
@@ -398,8 +399,8 @@ case "$SLOW_WORKER_PGID" in
 esac
 [ "$SLOW_WORKER_PGID" != "$writer_pgid" ] \
   || fail "the bounded worker did not have an isolated process group"
-kill -KILL -- "-$SLOW_WORKER_PGID" >/dev/null 2>&1 \
-  || fail "the bounded writer process group could not be terminated"
+fm_test_signal_try KILL --group "$SLOW_WORKER_PGID" \
+  || fail "the bounded writer process group could not be terminated: $FM_TEST_SIGNAL_VERDICT"
 wait "$SLOW_WRITER_PID" >/dev/null 2>&1 || true
 SLOW_WRITER_PID=
 SLOW_WORKER_PGID=

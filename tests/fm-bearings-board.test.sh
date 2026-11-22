@@ -606,8 +606,9 @@ test_build_starts_a_listener_for_an_already_armed_board() {
   # would, then rebuild. `already-armed` must not be the end of the story.
   claim="$home/procevent-claims/$sid.claim"
   assert_present "$claim" "the first build left no listener to lose"
-  kill -KILL -"$(sed -n '2p' "$claim")" 2>/dev/null || true
-  kill -KILL "$(sed -n '2p' "$claim")" 2>/dev/null || true
+  fm_test_signal KILL --members "$(sed -n '2p' "$claim")"
+  fm_test_signal_try KILL --identity "$(sed -n '2p' "$claim")" || true
+  fm_test_signal_skipped "a lost listener is re-armed by the rebuild" && return 0
   sleep 1
 
   out=$(run_board "$home" build "$data") || fail "the rebuild failed"

@@ -937,7 +937,7 @@ test_workspace_lock_serializes_spawn_and_retire() {
   PATH="$fb:$PATH" FM_PASEO_LOG="$dir/log" FM_PASEO_RESPONSES="$dir/responses" FM_HOME="$TMP_ROOT/retire-locked/home" FM_BACKEND_PASEO_LOCK_ATTEMPTS=3 \
     bash -c 'unset PASEO_WORKSPACE_ID PASEO_AGENT_ID; . "$0/bin/backends/paseo.sh"; fm_backend_paseo_create_task fm-locked /tmp/proj' "$ROOT" >/dev/null 2>&1
   status=$?
-  kill "$holder" 2>/dev/null
+  fm_test_signal_try TERM --identity "$holder" || true
   wait "$holder" 2>/dev/null
   [ "$status" -ne 0 ] || fail "create_task must refuse while another process holds the workspace lock"
   case "$(cat "$dir/log")" in

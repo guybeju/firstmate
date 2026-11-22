@@ -25,7 +25,11 @@ live_lab_cleanup() {
   for marker in "$TMP_ROOT/orphan-child" "$TMP_ROOT/late-child" "$TMP_ROOT/reused-child"; do
     [ ! -s "$marker" ] || printf '%s\n' "$(<"$marker")" >> "$TMP_ROOT/pids"
   done
-  while read -r pid; do [ -n "$pid" ] && { pkill -P "$pid" 2>/dev/null || true; kill "$pid" 2>/dev/null || true; }; done < "$TMP_ROOT/pids"
+  while read -r pid; do
+    [ -n "$pid" ] || continue
+    fm_test_signal_children TERM "$pid" || true
+    fm_test_signal_try TERM --identity "$pid" || true
+  done < "$TMP_ROOT/pids"
   while read -r dir; do
     [ -n "$dir" ] || continue
     [ -d "$dir" ] || continue
@@ -230,7 +234,7 @@ pass "mirror fails when the feed is unwired or has not recorded a whole turn"
 
 # host: expected on Claude, refused when it should be absent.
 host_pid=$(awk -F '\t' '{print $2}' "$CH/state/.supervision-host")
-kill "$host_pid" 2>/dev/null
+fm_test_signal_try TERM --identity "$host_pid" || true
 wait "$host_pid" 2>/dev/null
 run_check "$C"
 assert_contains "$CHECK_OUT" "fail host: no live supervision host (expected one)" "host names the missing host"
@@ -269,7 +273,7 @@ pass "mate fails when its window is gone or it never reached its charter"
 set_record "$C" host_off yes
 set_record "$C" expect_host no
 host_pid=$(awk -F '\t' '{print $2}' "$CH/state/.supervision-host")
-kill "$host_pid" 2>/dev/null
+fm_test_signal_try TERM --identity "$host_pid" || true
 wait "$host_pid" 2>/dev/null
 mkdir -p "$C/mate/config" "$C/mate/bin"
 cp "$ROOT/bin/fm-supervision-engine-lib.sh" "$C/mate/bin/"
@@ -381,7 +385,7 @@ kill -0 "$STRAY_CHILD" 2>/dev/null || fail "down leaves their descendants alone"
 kill -0 "$UNRELATED" 2>/dev/null || fail "down signalled an unrelated process outside recorded groups"
 assert_absent "$C" "down removes the lab root"
 kill -0 "$SIBLING" 2>/dev/null || fail "down leaves a sibling root's process running"
-pkill -P "$SIBLING" 2>/dev/null
+fm_test_signal_children TERM "$SIBLING" || true
 kill "$SIBLING" 2>/dev/null
 assert_absent "$C_TMUX" "down removes the private tmux directory"
 assert_absent "/tmp/fm-$WORKER_ID" "down removes the worker's task temp dir, even without its meta"
@@ -392,7 +396,8 @@ assert_present "/tmp/fm-$OTHER_ID" "down keeps a task temp dir another home coul
 kept=$(node -e 'const j=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"));console.log(JSON.stringify([j.keep,Object.keys(j.projects).sort()]))' "$HOME/.claude.json")
 assert_equals '[1,["/elsewhere/project"]]' "$kept" "down removes exactly the lab's Claude project entries"
 assert_contains "$out" "removed: 2 Claude project entries" "down reports the removed entries"
-kill "$STRAY" "$STRAY_CHILD" 2>/dev/null || true
+fm_test_signal_try TERM --identity "$STRAY_CHILD" || true
+kill "$STRAY" 2>/dev/null || true
 pass "down stops only recorded lab processes, removes trust entries and task temp dirs"
 
 # The Claude store up selected is the one check and down use, even from a later
