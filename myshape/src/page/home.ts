@@ -6,6 +6,8 @@ import { h } from "./dom.js";
 import type { Child } from "./dom.js";
 import {
   agentRow,
+  closedFold,
+  closedTodoEntries,
   holdCard,
   liveTodos,
   todoCard,
@@ -273,6 +275,16 @@ function untaggedList(view: View): Child {
   );
 }
 
+/** Closed hands-on items that have no topic, folded as on a topic page; shown only when there is one. */
+function noTopic(view: View): Child {
+  const closed = view.closed_todos.filter((entry) => entry.topic === null);
+  if (closed.length === 0) return null;
+  return section(
+    "沒有議題",
+    closedFold("closed-no-topic", closedTodoEntries("closed-no-topic", closed)),
+  );
+}
+
 export function home(page: Page, view: View, actions: Actions): Child {
   const active = ["working", "stuck", "unknown", "decide"];
   return [
@@ -282,6 +294,7 @@ export function home(page: Page, view: View, actions: Actions): Child {
           "要你動手",
           liveTodos(view).map((todo) => todoCard(page, view, actions, todo, true)),
         ),
+    noTopic(view),
     section(
       "等你決定",
       closeProposals(view, actions),

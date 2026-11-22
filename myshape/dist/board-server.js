@@ -650,13 +650,14 @@ function pageAnswerState(service, home, task, answers) {
  * remembers what the read showed. Records first, memory second: a crash in
  * between reads the same piece again, and the records' keys keep it once.
  */
-function recordDecisions(service, home, report) {
+function recordDecisions(service, home, report, readStartedAt) {
     const homes = service.poller.snapshots();
     const step = decisionStep({
         home,
         previous: service.decisions.get(home),
         report,
         readAt: epochSeconds(),
+        readStartedAt,
         saved: (key) => service.journal.hasKey(key),
         topicOf: (task, origin) => {
             const own = placeTask(service.board.topics, homes, home, task).topic;
@@ -760,8 +761,8 @@ function loadService(boot) {
             onChange: bump,
             onAggregator: (reported) => rememberAggregator(service, reported),
             closedCursor: (home) => decisions.get(home)?.cursor ?? null,
-            onReport: (home, report) => {
-                recordDecisions(service, home, report);
+            onReport: (home, report, startedAt) => {
+                recordDecisions(service, home, report, startedAt);
                 // A deliverer that may run again without a start or a confirmation
                 // (a binding put back as it was) hands its waiting writes over here.
                 if (home === MAIN_HOME)

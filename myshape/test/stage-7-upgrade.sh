@@ -53,6 +53,20 @@
 # is read again without it. Going back to the earlier code, its board shows
 # the new lines as text and keeps changing the board.
 #
+# Decisions across an update of the reader, decision records to the update
+# gap: the board at carry's commit before this change reads a home and keeps
+# its decisions.json in that commit's shape; then this working tree's board
+# files are committed on top and the stub's report turns into one from other
+# reader code, as every update makes it: a decision opened since the last
+# read, one closed since, one the older reader reported without its set time.
+# A failed read at the change records nothing. The earlier board's file
+# says nothing of when it last saw the home, so that change keeps the
+# baseline: the next good read writes exactly one close for the closed
+# decision and no opening. At the next change of the reader's code the board
+# continues: a decision set since then gets exactly one opening, one set long
+# before that only the new reader shows (as PR 68's reader shows 動手： holds)
+# gets none, nor does anything open before; reading again writes nothing more.
+#
 # The aggregator under its own name, B3 to B4 (AT5.5): the B3 board, whose
 # one program is a stub under bin/fm-board.sh, is left with a message waiting
 # for a retry, and a second B3 root with no program at all is left with a
@@ -91,6 +105,7 @@ BASE_B3=c5a54085
 BASE_RECORDS=0c320a14
 BASE_DECISIONS=18f63f43
 BASE_B4=e01f25fe
+BASE_GAP=cbe6e42a
 # The older sides run bin/fm-board.sh, where these steps put the stub.
 SA_NO_TRIPWIRE="fm-board.sh"
 # The board's files at the base, under the names they had before the rename.
@@ -98,7 +113,7 @@ BASE_BOARD_FILES="bin/fm-topic.sh bin/fm-topic-lib.sh topic-board/dist topic-boa
 for tool in jq node curl git; do
   command -v "$tool" >/dev/null 2>&1 || { echo "skip: $tool not found"; exit 0; }
 done
-for rev in "$BASE" "$BASE_B2" "$BASE_B3" "$BASE_RECORDS" "$BASE_DECISIONS" "$BASE_B4"; do
+for rev in "$BASE" "$BASE_B2" "$BASE_B3" "$BASE_RECORDS" "$BASE_DECISIONS" "$BASE_B4" "$BASE_GAP"; do
   git -C "$ROOT" cat-file -e "$rev^{commit}" 2>/dev/null || { echo "not ok - base $rev is not in this checkout" >&2; exit 1; }
 done
 TMP_ROOT=$(fm_test_tmproot tb-s7u)
@@ -750,6 +765,125 @@ test_d_going_back_shows_the_lines_as_text() {
   pass "going back keeps every decision record and the earlier board goes on changing"
 }
 
+# --- decision records to the update gap -----------------------------------------
+
+G_DIR=""
+G_OLD_PID=""
+G_LINES_BEFORE=""
+
+# g_report <jq filter>: the stub's main report in this step, an edit of the one before.
+g_report() {
+  local file=$G_DIR/agg/fm/main.json
+  jq "$1" "$file" > "$file.next" && mv "$file.next" "$file"
+}
+
+# g_new_lines: the board's own decision lines since the change landed, as "<kind> <task> <ts>".
+g_new_lines() {
+  tail -n +$((G_LINES_BEFORE + 1)) "$MAIN/data/myshape/events.jsonl" |
+    jq -r 'select(.src == "board" and (.kind | startswith("hold."))) | "\(.kind) \(.task) \(.ts)"'
+}
+
+g_epoch() {  # <UTC ISO time>
+  date -u -d "$1" +%s 2>/dev/null || date -j -u -f %Y-%m-%dT%H:%M:%SZ "$1" +%s
+}
+
+test_g_the_earlier_board_keeps_its_decisions_in_its_shape() {
+  G_DIR=$TMP_ROOT/gap
+  SA_ROOT=$TMP_ROOT/root/gap-board
+  tb_make_board_root "$SA_ROOT" "$BASE_GAP" >/dev/null
+  SA_ENV=(MYSHAPE_TEST=1 MYSHAPE_READ_MS=600000)
+  sa_install_old_stub fm "$G_DIR/agg"
+  MAIN=$(sa_home gap-main)
+  sa_bind "$MAIN" bin/fm-board.sh stub
+  RUNTIME=$MAIN/state/myshape
+  sa_decoys "$MAIN"
+  jq -n --arg sha "$(printf 'b%.0s' $(seq 64))" '
+    def held($id; $title; $set): {id: $id, title: $title, question: "\($title)？", hold_bucket: "live",
+      hold_until: null, unresolved_blocker_ids: [], hold_age_days: 1, origin: "", on_answer: "close"}
+      + (if $set == null then {} else {hold_set: $set} end);
+    {schema: 1, code_commit: "reader-before", ledger_enabled: false, tasks: [], queued: [],
+     holds: [held("before-1"; "更新前就開著"; "2026-11-20T01:00:00Z"),
+             held("closing-1"; "更新中間答掉"; "2026-11-20T02:00:00Z"),
+             held("no-set"; "舊讀取沒給時間"; null)],
+     status_decisions: [],
+     topics: {"before-1": "nas 2026-11-20T00:00:00Z", "closing-1": "nas 2026-11-20T00:00:00Z",
+              "no-set": "nas 2026-11-20T00:00:00Z", "gap-1": "nas 2026-11-20T00:00:00Z"},
+     closed_holds: [],
+     closed_cursor: {status: "start", to_offset: 2048, to_prefix_sha256: $sha, more: false},
+     aggregator: {name: "firstmate", label: "first mate"}}' > "$G_DIR/agg/fm/main.json"
+  sa "$MAIN" open >/dev/null || fail "the earlier board did not start"
+  sa "$MAIN" create "NAS" --goal "n" --id nas >/dev/null
+  d_read
+  g_report '.closed_cursor.status = "delta"'
+  d_read
+  assert_equals 0 "$(grep -c '"kind":"hold\.' "$MAIN/data/myshape/events.jsonl" || true)" \
+    "the earlier board's first reads must record no decision"
+  assert_equals 'closed_seen,code_commit,cursor,open_seen|reader-before|3' \
+    "$(jq -r '.homes.main | "\(keys | join(","))|\(.code_commit)|\(.open_seen | length)"' "$MAIN/data/myshape/decisions.json")" \
+    "the earlier board must keep what it saw in its own shape"
+  G_LINES_BEFORE=$(wc -l < "$MAIN/data/myshape/events.jsonl")
+  G_OLD_PID=$(tb_board_pid "$MAIN")
+  pass "the earlier board remembers the home's open decisions in its decisions.json"
+}
+
+test_g_a_failed_read_at_the_change_records_nothing() {
+  install_board_files "" fm "$G_DIR/agg"
+  g_report '.code_commit = "reader-after"
+    | .holds |= (map(select(.id != "closing-1")) | map(if .id == "no-set" then .hold_set = "2026-11-19T09:00:00Z" else . end))
+    | .holds += [{id: "gap-1", title: "更新中間開的", question: "更新中間開的？", hold_bucket: "live",
+        hold_until: null, unresolved_blocker_ids: [], hold_age_days: 0, origin: "", on_answer: "close",
+        hold_set: "2026-11-21T03:00:00Z"}]
+    | .closed_holds = [{id: "closing-1", title: "更新中間答掉", origin: "", mode: "answered", answer: "要",
+        label: "", source: "", digest: "d-closing-1", occurrence: 1,
+        opened_at: '"$(g_epoch 2026-11-20T02:00:00Z)"', closed_at: '"$(g_epoch 2026-11-21T04:00:00Z)"'}]'
+  ps -p "$G_OLD_PID" >/dev/null 2>&1 || fail "the earlier board must still be running when the change lands"
+  printf 'fail the reader broke\n' > "$G_DIR/agg/control/main"
+  sa "$MAIN" open >/dev/null || fail "the next command after the change landed failed"
+  : > "$SA_TRIP_LOG"
+  assert_not_equals "$G_OLD_PID" "$(tb_board_pid "$MAIN")" "the next command must replace the earlier service"
+  api refresh '{}' >/dev/null
+  printf 'schema2\n' > "$G_DIR/agg/control/main"
+  api refresh '{}' >/dev/null
+  rm -f "$G_DIR/agg/control/main"
+  assert_equals "" "$(g_new_lines)" "a failed read at the change must record no decision"
+  pass "reads that fail or carry another schema at the change record nothing"
+}
+
+test_g_the_first_good_read_after_the_change_continues() {
+  local closed gap_set gap_s
+  closed=$(g_epoch 2026-11-21T04:00:00Z)
+  d_read
+  d_read
+  assert_equals "hold.closed closing-1 $closed" "$(g_new_lines)" \
+    "the first good read after the change must close the closed decision once and, from the earlier board's file, open nothing"
+  assert_equals "reader-after 3 number" \
+    "$(jq -r '.homes.main | "\(.code_commit) \(.open_seen | length) \(.seen_at | type)"' "$MAIN/data/myshape/decisions.json")" \
+    "the board must now remember the new reader's report and when it saw it"
+  gap_s=$(($(date +%s) + 60))
+  gap_set=$(date -u -d "@$gap_s" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$gap_s" +%Y-%m-%dT%H:%M:%SZ)
+  g_report '.code_commit = "reader-after-2"
+    | .holds += [{id: "gap-2", title: "第二次更新中間開的", question: "第二次更新中間開的？", hold_bucket: "live",
+        hold_until: null, unresolved_blocker_ids: [], hold_age_days: 0, origin: "", on_answer: "close",
+        hold_set: "'"$gap_set"'"},
+      {id: "shown-now", title: "新讀取才看得到的", question: "很久以前就開著？", hold_bucket: "live",
+        hold_until: null, unresolved_blocker_ids: [], hold_age_days: 50, origin: "", on_answer: "close",
+        hold_set: "2026-10-01T00:00:00Z"}]'
+  d_read
+  d_read
+  assert_equals "hold.closed closing-1 $closed
+hold.opened gap-2 $gap_s" "$(g_new_lines)" \
+    "at the next change the decision set since must open once, and the long-open one the new reader shows must not"
+  d_read
+  assert_equals 2 "$(g_new_lines | wc -l | tr -d ' ')" "reading again must record nothing more"
+  assert_equals "0 1 1" "$(jq -s '[.[] | select(.kind == "hold.opened" and (.task == "shown-now" or .task == "gap-1" or .task == "before-1"))] | length' "$MAIN/data/myshape/events.jsonl") $(jq -s '[.[] | select(.kind == "hold.opened" and .task == "gap-2")] | length' "$MAIN/data/myshape/events.jsonl") $(jq -s '[.[] | select(.kind == "hold.closed" and .task == "closing-1")] | length' "$MAIN/data/myshape/events.jsonl")" \
+    "one decision, one opening line and one close line"
+  sa "$MAIN" stop >/dev/null
+  sa_check_decoys "$MAIN"
+  sa_assert_no_boards
+  sa_assert_no_trips
+  pass "across updates the board keeps the earlier board's baseline once, then opens only what was set since (none twice, none from before)"
+}
+
 # --- B3 to B4 -------------------------------------------------------------------
 
 B4_DIR=""
@@ -858,6 +992,8 @@ fm_test_run test_the_old_board_makes_its_data test_the_new_code_refuses_until_th
   test_d_the_earlier_board_runs_with_an_older_reader test_d_the_first_reads_record_no_past_decision \
   test_d_new_decisions_open_and_close_once test_d_a_reader_that_refuses_the_cursor_is_read_without_it \
   test_d_going_back_shows_the_lines_as_text \
+  test_g_the_earlier_board_keeps_its_decisions_in_its_shape test_g_a_failed_read_at_the_change_records_nothing \
+  test_g_the_first_good_read_after_the_change_continues \
   test_b4_the_b3_boards_leave_a_write_in_flight_and_one_waiting \
   test_b4_the_write_in_flight_reaches_the_tracked_program_once \
   test_b4_the_waiting_write_goes_once_its_program_is_confirmed

@@ -31,6 +31,15 @@ EOF
 chmod +x "$TMP_ROOT/topic"
 export TB_TOPIC="$TMP_ROOT/topic"
 
+# A hands-on item with no topic, as an older board adopted it before it kept
+# items; the page walk closes it and finds it under 沒有議題.
+mkdir -p "$MAIN/data/myshape"
+cat > "$MAIN/data/myshape/todos.json" <<'JSON'
+{"v": 1, "items": {"loose-hand": {"title": "沒有議題的動手", "topic": null, "action": "插上網路線",
+  "guidance": "", "commands": [], "state": "open", "reason": null, "at": "2026-07-20T00:00:00Z",
+  "by": "first mate", "ref": "hold", "captain_closes": false, "adopted": true,
+  "created_at": "2026-07-20T00:00:00Z"}}}
+JSON
 "$TB_TOPIC" open >/dev/null || fail "the board did not start"
 "$TB_TOPIC" create "Billing" --goal "rework billing" --id billing >/dev/null
 "$TB_TOPIC" create "Login" --goal "new login" --id login --queue high >/dev/null

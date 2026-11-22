@@ -187,6 +187,25 @@ describe("reading the main home", () => {
     expect(s.reported).toEqual(["main:1"]);
   });
 
+  it("hands over no read of new code that failed, could not report or is not schema 1", async () => {
+    const s = setup();
+    await s.poller.readNow("main");
+    const failures: CommandResult[] = [
+      { code: 1, stdout: "", stderr: "boom" },
+      { code: 4, stdout: "", stderr: "cannot report" },
+      report({ code_commit: "c2", schema: 2 }),
+      { code: 0, stdout: '{"code_commit":"c2"', stderr: "" },
+    ];
+    for (const failure of failures) {
+      s.answers.set("main", () => failure);
+      await s.poller.readNow("main");
+    }
+    expect(s.reported).toEqual(["main:0"]);
+    s.answers.set("main", () => report({ code_commit: "c2" }));
+    await s.poller.readNow("main");
+    expect(s.reported).toEqual(["main:0", "main:0"]);
+  });
+
   it("forgets the cursor of a home that refuses it, and only then", async () => {
     const s = setup();
     s.answers.set("main", () => ({ code: 2, stdout: "", stderr: "usage" }));

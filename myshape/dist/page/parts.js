@@ -188,3 +188,26 @@ export function updateRow(update) {
         ? null
         : h("span", { class: "note" }, `${update.home ?? ""}/${update.task} `), [label, update.text].filter((part) => part !== "").join(" "), update.pr === null ? null : [" ", prLink(update.pr)]);
 }
+/** One closed thing: its closing line, opening to every record of its life on the board. */
+function closedRow(entry) {
+    return h("details", { class: "closed", "data-key": entry.key }, h("summary", {}, h("span", { class: "t" }, when(entry.ts)), entry.task === null
+        ? null
+        : h("span", { class: "note" }, `${entry.home ?? ""}/${entry.task} `), entry.text), entry.records.map(updateRow));
+}
+/** 已關 N: what closed, folded by default, newest first; nothing when nothing closed. */
+export function closedFold(key, entries) {
+    if (entries.length === 0)
+        return null;
+    return h("details", { "data-key": key }, h("summary", {}, `已關 ${entries.length}`), entries.map(closedRow));
+}
+/** The closed hands-on items as fold rows, each row's key starting with `prefix`. */
+export function closedTodoEntries(prefix, closed) {
+    return closed.map((entry) => ({
+        key: `${prefix}:${entry.item}:${entry.ts}`,
+        ts: entry.ts,
+        home: null,
+        task: null,
+        text: entry.text,
+        records: entry.records,
+    }));
+}

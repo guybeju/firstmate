@@ -1072,3 +1072,99 @@ describe("closed hands-on items", () => {
     expect(buildView(input()).closed_todos).toEqual([]);
   });
 });
+
+describe("closed decisions", () => {
+  const rec = (task: string, kind: string, ts: number, extra = {}): JournalEvent => ({
+    src: "board",
+    rid: `r-${task}-${kind}-${ts}`,
+    ts,
+    kind,
+    topic: "hi",
+    home: "main",
+    task,
+    by: "board",
+    label: "plain",
+    text: `${task} ${kind}`,
+    ...extra,
+  });
+  const closed = (events: JournalEvent[]) =>
+    buildView(input({ events })).closed_decisions.map((entry) => [
+      entry.task,
+      entry.topic,
+      entry.text,
+      entry.records.map((update) => update.event).join(" "),
+    ]);
+
+  it("lists each decision with a closing record, newest first, and leaves out an open one", () => {
+    expect(
+      closed([
+        rec("page", "hold.opened", T0 + 1),
+        rec("chat", "hold.opened", T0 + 2),
+        rec("open", "hold.opened", T0 + 3),
+        rec("page", "hold.answered", T0 + 4, { by: "captain", outcome: "要" }),
+        rec("chat", "hold.closed", T0 + 5, { topic: "old", outcome: "answered" }),
+      ]),
+    ).toEqual([
+      ["chat", "n1", "chat hold.closed", "hold.closed hold.opened"],
+      ["page", "hi", "page hold.answered", "hold.answered hold.opened"],
+    ]);
+  });
+
+  it("counts a decision with two closing records once, in either order", () => {
+    const elsewhere = rec("x", "hold.closed", T0 + 3, { outcome: "elsewhere" });
+    const real = rec("x", "hold.closed", T0 + 2, { outcome: "answered" });
+    const opened = rec("x", "hold.opened", T0 + 1);
+    expect(closed([opened, elsewhere, real])).toEqual([
+      ["x", "hi", "x hold.closed", "hold.closed hold.closed hold.opened"],
+    ]);
+    expect(closed([opened, real, elsewhere])).toHaveLength(1);
+  });
+
+  it("starts a new life at an opening after a close; a close with no opening is a life", () => {
+    const view = buildView(
+      input({
+        events: [
+          rec("x", "hold.closed", T0 + 1),
+          rec("x", "hold.opened", T0 + 2),
+          rec("x", "hold.closed", T0 + 3),
+          rec("x", "hold.opened", T0 + 4),
+        ],
+      }),
+    );
+    expect(view.closed_decisions.map((entry) => [entry.ts, entry.records.length])).toEqual([
+      [T0 + 3, 2],
+      [T0 + 1, 1],
+    ]);
+  });
+
+  it("keeps homes apart, and leaves out records of no home or task and other kinds", () => {
+    expect(
+      closed([
+        rec("x", "hold.opened", T0 + 1),
+        rec("x", "hold.closed", T0 + 2, { home: "sm1" }),
+        rec("x", "hold.closed", T0 + 3, { home: null }),
+        rec("x", "agent.tagged", T0 + 4),
+      ]).map((entry) => entry[3]),
+    ).toEqual(["hold.closed"]);
+    expect(buildView(input()).closed_decisions).toEqual([]);
+  });
+
+  it("keeps a task's other records and ledger lines out of its decision's life", () => {
+    const ledger: JournalEvent = {
+      src: "ledger",
+      home: "main",
+      ts: T0 + 4,
+      event: "task.status",
+      task: "x",
+      fields: {},
+    };
+    expect(
+      closed([
+        rec("x", "hold.opened", T0 + 1),
+        rec("x", "agent.tagged", T0 + 2),
+        rec("x", "hold.closed", T0 + 3),
+        ledger,
+      ]).map((entry) => entry[3]),
+    ).toEqual(["hold.closed hold.opened"]);
+  });
+});

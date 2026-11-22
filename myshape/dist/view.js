@@ -10,6 +10,7 @@ export const LEDGER_PER_TOPIC = 500;
 /** How long after a tag line its agent.tagged record may be saved and still be its record. */
 const TAG_RECORD_SKEW_S = 300;
 const CLOSING_KINDS = new Set(["todo.done", "todo.dropped", "todo.taken_down"]);
+const DECISION_CLOSING_KINDS = new Set(["hold.answered", "hold.closed"]);
 // Upstream keeps a hold reason on the backlog item's title line, so a reason
 // written as several lines may reach the board as one. The marker is therefore
 // accepted anywhere in the last line, not only at its start.
@@ -435,6 +436,59 @@ function closedTodos(input) {
     }
     return closed.toReversed();
 }
+function isDecisionRecord(event) {
+    if (event.src !== "board" || !event.kind.startsWith("hold."))
+        return false;
+    return event.home !== null && event.task !== null;
+}
+function closedDecisionOf(life, input) {
+    const { closing } = life;
+    if (closing === null)
+        return null;
+    return {
+        home: closing.home,
+        task: closing.task,
+        topic: boardUpdate(closing, input).topic,
+        ts: closing.ts,
+        text: closing.text,
+        outcome: closing.outcome ?? null,
+        records: life.records.toSorted((a, b) => b.ts - a.ts),
+    };
+}
+/** The life a decision's record belongs to: the last one, or a new one at an opening after a close. */
+function lifeOf(all, event) {
+    const last = all.at(-1);
+    if (last !== undefined && (event.kind !== "hold.opened" || last.closing === null))
+        return last;
+    const life = { records: [], closing: null };
+    all.push(life);
+    return life;
+}
+/**
+ * The decisions that closed, from their records: a life of one home's task
+ * holds every decision record of it, and is closed once a hold.answered or
+ * hold.closed record is in it. One decision may have two closing records (the
+ * page's answer that found it ended elsewhere, and the real close the home
+ * reports), so a later closing record joins the same life; only a new
+ * hold.opened after a close starts the next one. A decision with no closing
+ * record is not closed, whatever a home's read shows.
+ */
+function closedDecisions(input) {
+    const lives = new Map();
+    for (const event of input.events.filter(isDecisionRecord)) {
+        const key = `${event.home}\t${event.task}`;
+        const all = lives.get(key) ?? [];
+        const life = lifeOf(all, event);
+        life.records.push(boardUpdate(event, input));
+        if (DECISION_CLOSING_KINDS.has(event.kind))
+            life.closing = event;
+        lives.set(key, all);
+    }
+    return [...lives.values()]
+        .flat()
+        .flatMap((life) => closedDecisionOf(life, input) ?? [])
+        .toSorted((a, b) => b.ts - a.ts);
+}
 /** The PR a `ready` or `landed` summary refers to: the task's latest PR event at or before it. */
 function prForSummary(summary, events) {
     if (summary.kind !== "ready" && summary.kind !== "landed")
@@ -485,6 +539,7 @@ export function buildView(input) {
         holds: [],
         todos: [],
         closed_todos: closedTodos(input),
+        closed_decisions: closedDecisions(input),
         questions: [],
         updates: updatesOf(input, placer),
         summaries: input.summaries

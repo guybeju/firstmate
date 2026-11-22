@@ -115,6 +115,25 @@ export default async function run(page) {
   }
   if (!(await page.evaluate(todo(`card.closest("section").querySelector("h2").textContent === "要你動手"`))))
     throw new Error("a hands-on item belongs in its own section, not among the decisions");
+  // A closed hands-on item with no topic (one an older board adopted, stage-5-page.sh): 沒有議題,
+  // right after 要你動手, folded as 已關 N like a topic page's, each row opening to its records.
+  topic("todo", "done", "loose-hand");
+  const noTopic = `document.querySelector('details[data-key="closed-no-topic"]')`;
+  await page.waitFor("the closed items with no topic", `${noTopic} !== null`, 15000);
+  if ((await page.evaluate(`${noTopic}.closest("section").querySelector("h2").textContent`)) !== "沒有議題")
+    throw new Error("closed hands-on items with no topic belong under 沒有議題");
+  if ((await page.evaluate(`${noTopic}.closest("section").previousElementSibling?.querySelector("h2")?.textContent ?? ""`)) !== "要你動手")
+    throw new Error("沒有議題 comes right after 要你動手");
+  if ((await page.evaluate(`${noTopic}.querySelector("summary").textContent`)) !== "已關 1")
+    throw new Error("the fold counts the closed items with no topic");
+  if (await page.evaluate(`${noTopic}.open`)) throw new Error("the closed items start folded");
+  await page.click('details[data-key="closed-no-topic"] > summary', "已關 1");
+  const noTopicRow = `${noTopic}.querySelector("details.closed")`;
+  await page.waitFor("the closed item's line", `${noTopicRow}.querySelector("summary").innerText.includes("要你動手「沒有議題的動手」已關：做完了")`);
+  if (await page.evaluate(`${noTopicRow}.open`)) throw new Error("a closed item's records start folded");
+  await page.click('details[data-key="closed-no-topic"] details.closed > summary', "已關");
+  await page.waitFor("the closed item's records", `${noTopicRow}.querySelectorAll(".upd").length === 1 && ${noTopicRow}.querySelector(".upd").innerText.includes("要你動手「沒有議題的動手」已關：做完了")`);
+
   await page.waitFor("the count on the topic card", `${cardOf("Login")}.includes("要你動手 1")`);
   await page.click('[data-todo="todo-1"] button', "複製指令");
   await page.waitFor("the commands selected when the browser refuses to copy", `getSelection().toString() === ${JSON.stringify(COMMAND)}`);
@@ -235,6 +254,24 @@ export default async function run(page) {
   for (const text of ["Next step", "可以派", "停著：waiting for a vendor", "等你決定"]) {
     await page.waitFor(`queued row text ${text}`, `[...document.querySelectorAll("details[open]")].some((box) => box.innerText.includes(${JSON.stringify(text)}))`);
   }
+  // The decision answered on the page is closed: under 待決, after the open ones, folded as
+  // 已關 N like the hands-on items, its row opening to its records; its line stays in 更新.
+  const closedDecisions = `document.querySelector('details[data-key="closed-decisions:billing"]')`;
+  await page.waitFor("the closed decisions", `${closedDecisions} !== null`, 15000);
+  if ((await page.evaluate(`${closedDecisions}.closest("section").querySelector("h2").textContent`)) !== "待決")
+    throw new Error("closed decisions belong under 待決");
+  if (!(await page.evaluate(`${closedDecisions}.closest("section").lastElementChild === ${closedDecisions}`)))
+    throw new Error("closed decisions come after the open ones");
+  if ((await page.evaluate(`${closedDecisions}.querySelector("summary").textContent`)) !== "已關 1")
+    throw new Error("the fold counts the closed decisions");
+  if (await page.evaluate(`${closedDecisions}.open`)) throw new Error("the closed decisions start folded");
+  await page.click('details[data-key="closed-decisions:billing"] > summary', "已關 1");
+  const decisionRow = `${closedDecisions}.querySelector("details.closed")`;
+  await page.waitFor("the closed decision's line", `${decisionRow}.querySelector("summary").innerText.includes("main/call-1 在看板回答 main/call-1：合併")`);
+  await page.click('details[data-key="closed-decisions:billing"] details.closed > summary', "在看板回答");
+  await page.waitFor("the closed decision's records, newest first", `${decisionRow}.querySelectorAll(".upd").length === 2 && ${decisionRow}.querySelector(".upd").innerText.includes("在看板回答") && ${decisionRow}.querySelectorAll(".upd")[1].innerText.includes("待決事項「A call」已開")`);
+  if (!(await page.evaluate(`[...document.querySelectorAll("section")].find((box) => box.querySelector("h2")?.textContent === "更新").innerText.includes("在看板回答 main/call-1：合併")`)))
+    throw new Error("a closed decision's lines stay in 更新");
   await page.click("button", "編輯");
   await page.type('[data-key="name:billing"]', "Billing X");
   await page.click("button", "儲存");

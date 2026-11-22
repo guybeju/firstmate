@@ -10,6 +10,11 @@ import { shortTime } from "./todos.js";
 const READ_AT = 1_795_300_000;
 const SET = "2026-11-20T06:10:00Z";
 const SET_S = Date.parse(SET) / 1000;
+/** When each read in these tests started: after SET, before GAP. */
+const STARTED = READ_AT - 5;
+/** A set time after the reads started: a hold set in the gap of an update. */
+const GAP = "2026-11-22T00:00:00Z";
+const GAP_S = Date.parse(GAP) / 1000;
 
 function hold(id: string, extra: Partial<ReportHold> = {}): ReportHold {
   return {
@@ -75,6 +80,7 @@ function reads(reports: HomeReport[], start?: HomeDecisions, pageAnswers: PageAn
       previous,
       report: each,
       readAt: READ_AT,
+      readStartedAt: STARTED,
       saved: (key) => saved.has(key),
       topicOf: (task, origin) => (task === "tagged" || origin === "tagged" ? "nas" : null),
       pageAnswer: (task, answers) => {
@@ -106,6 +112,7 @@ describe("decisionStep", () => {
       cursor: { offset: 10, sha: "s" },
       openSeen: [`open-1\t${SET}`],
       closedSeen: ["done-1\td-done-1", "released-1\td-released-1"],
+      seenAt: STARTED,
     });
   });
 
@@ -156,6 +163,7 @@ describe("decisionStep", () => {
       previous: { ...first.last, openSeen: [] },
       report: report({ holds: [hold("x")] }),
       readAt: READ_AT,
+      readStartedAt: STARTED,
       saved: (key) => key === `hold.opened\tmain\tx\t${SET}`,
       topicOf: () => null,
       pageAnswer: () => "recorded",
@@ -163,12 +171,112 @@ describe("decisionStep", () => {
     expect(again.drafts).toEqual([]);
   });
 
-  it("starts the openings over when the home's reader runs other code, but keeps the closes", () => {
-    const { drafts } = reads([
-      report({ closed_cursor: START }),
-      report({ code_commit: "c2", holds: [hold("new-1")], closed_holds: [closed("chat-1")] }),
-    ]);
-    expect(drafts[1]?.map((draft) => draft.kind)).toEqual(["hold.closed"]);
+  describe("across a change of the reader's code", () => {
+    const kinds = (drafts: ReturnType<typeof reads>["drafts"]) =>
+      drafts.map((each) => each.map((draft) => `${draft.kind} ${draft.task ?? ""}`));
+    const gap = (id: string) => hold(id, { hold_set: GAP });
+
+    it("opens a decision opened in the gap once, and nothing open before it again", () => {
+      const { drafts } = reads([
+        report({ closed_cursor: START, holds: [hold("before")] }),
+        report({ code_commit: "c2", holds: [hold("before"), gap("gap")] }),
+        report({ code_commit: "c2", holds: [hold("before"), gap("gap")] }),
+      ]);
+      expect(kinds(drafts)).toEqual([[], ["hold.opened gap"], []]);
+      expect(drafts[1]?.[0]).toMatchObject({ at: GAP_S, key: `hold.opened\tmain\tgap\t${GAP}` });
+    });
+
+    it("closes a decision closed in the gap once, after its one opening", () => {
+      const { drafts } = reads([
+        report({ closed_cursor: START }),
+        report({ holds: [hold("x")] }),
+        report({ code_commit: "c2", closed_holds: [closed("x", { closed_at: SET_S + 60 })] }),
+        report({ code_commit: "c2", closed_holds: [closed("x", { closed_at: SET_S + 60 })] }),
+      ]);
+      expect(kinds(drafts)).toEqual([[], ["hold.opened x"], ["hold.closed x"], []]);
+    });
+
+    it("knows a hold an older reader reported without its set time", () => {
+      const { drafts } = reads([
+        report({ closed_cursor: START, holds: [hold("old", { hold_set: null })] }),
+        report({ code_commit: "c2", holds: [hold("old"), gap("gap")] }),
+        report({ code_commit: "c1", holds: [hold("old", { hold_set: null }), gap("gap")] }),
+      ]);
+      expect(kinds(drafts)).toEqual([[], ["hold.opened gap"], []]);
+    });
+
+    it("does not open a hold set before the last change that only the new reader shows", () => {
+      const { drafts } = reads([
+        report({ closed_cursor: START, holds: [hold("seen")] }),
+        report({ code_commit: "c2", holds: [hold("seen"), hold("hidden-before")] }),
+      ]);
+      expect(kinds(drafts)).toEqual([[], []]);
+    });
+
+    it("keeps the baseline for a hold with no exact set time", () => {
+      const { drafts } = reads([
+        report({ closed_cursor: START }),
+        report({ code_commit: "c2", holds: [hold("gap", { hold_set: null })] }),
+        report({ code_commit: "c3", holds: [hold("dated", { hold_set: "2026-11-22" })] }),
+      ]);
+      expect(kinds(drafts)).toEqual([[], [], []]);
+    });
+
+    it("keeps the baseline once for an entry an older board wrote, then continues", () => {
+      const older: HomeDecisions = {
+        code_commit: "c1",
+        cursor: { offset: 10, sha: "s" },
+        openSeen: [`before\t${SET}`],
+        closedSeen: [],
+        seenAt: null,
+      };
+      const { drafts, last } = reads(
+        [
+          report({ code_commit: "c2", holds: [hold("before"), gap("gap")] }),
+          report({ code_commit: "c3", holds: [hold("before"), gap("gap"), gap("gap-2")] }),
+        ],
+        older,
+      );
+      expect(kinds(drafts)).toEqual([[], ["hold.opened gap-2"]]);
+      expect(last.seenAt).toBe(STARTED);
+    });
+
+    it("keeps the baseline for a task closed and held again inside the gap", () => {
+      const { drafts } = reads([
+        report({ closed_cursor: START, holds: [hold("x")] }),
+        report({ code_commit: "c2", holds: [gap("x")], closed_holds: [closed("x")] }),
+      ]);
+      expect(kinds(drafts)).toEqual([[], ["hold.closed x"]]);
+    });
+
+    it("still writes nothing on the first read of a home whose reader is new", () => {
+      const { drafts } = reads([
+        report({
+          code_commit: "c2",
+          closed_cursor: START,
+          holds: [hold("open-1")],
+          closed_holds: [closed("done-1")],
+        }),
+      ]);
+      expect(drafts).toEqual([[]]);
+    });
+  });
+
+  it("keeps when the entry last changed while nothing changes, and moves it when something does", () => {
+    const step = (previous: HomeDecisions, holds: ReportHold[], readStartedAt: number) =>
+      decisionStep({
+        home: "main",
+        previous,
+        report: report({ holds }),
+        readAt: readStartedAt + 1,
+        readStartedAt,
+        saved: () => false,
+        topicOf: () => null,
+        pageAnswer: () => "recorded",
+      }).next;
+    const first = reads([report({ closed_cursor: START, holds: [hold("a")] })]).last;
+    expect(step(first, [hold("a")], STARTED + 100).seenAt).toBe(STARTED);
+    expect(step(first, [hold("a"), hold("b")], STARTED + 100).seenAt).toBe(STARTED + 100);
   });
 
   it("closes a decision answered in chat once, at the exact time when the home has it", () => {
@@ -362,6 +470,7 @@ describe("decisionStep's edges", () => {
       previous: first.last,
       report: report({ closed_holds: [closed("x", { opened_at: 5, closed_at: 9 })] }),
       readAt: READ_AT,
+      readStartedAt: STARTED,
       saved: (key) => key === "hold.opened\tmain\tx\t#d-x",
       topicOf: () => null,
       pageAnswer: () => "recorded",
@@ -392,6 +501,7 @@ describe("DecisionStore", () => {
     cursor: { offset: 3, sha: "s" },
     openSeen: ["a\tT"],
     closedSeen: ["b\td"],
+    seenAt: 7,
   };
 
   it("keeps each home across a restart, and forgets one on request", () => {
@@ -432,6 +542,9 @@ describe("DecisionStore", () => {
       cursor: null,
       openSeen: [],
       closedSeen: [],
+      seenAt: null,
     });
+    fs.writeFileSync(file, JSON.stringify({ v: 1, homes: { main: { seen_at: "soon" } } }));
+    expect(new DecisionStore(file).get("main")?.seenAt).toBeNull();
   });
 });
