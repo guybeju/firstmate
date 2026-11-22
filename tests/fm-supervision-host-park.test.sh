@@ -182,7 +182,7 @@ test_restarted_host_stops_what_a_killed_predecessor_left() {
   first_host=$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")
   arm=$(awk -F '\t' '$1 == "arm" { print $2 }' "$home/state/.supervision-host")
   watcher=$(cat "$home/state/.watch.lock/pid")
-  kill -KILL "$first_host"
+  fm_test_signal KILL --identity "$first_host"
   sleep 1
   kill -0 "$arm" 2>/dev/null || fail "crash: fixture error: the arm died with its host, so this case proves nothing"
   start_host "$home"
@@ -435,7 +435,7 @@ test_park_limit_lets_a_turn_outlive_the_boundary() {
       [ "$want" = boundary ] || fail "$name: a turn inside the owner's limit was refused at the boundary"
     else
       [ "$want" = handled ] || fail "$name: a turn past the boundary ran without a later limit"
-      kill -TERM "$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")"
+      fm_test_signal TERM --identity "$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")"
       wait_until_deadline 60 host_exited "$home" || fail "$name: the host did not stop on TERM"
     fi
   done
@@ -503,7 +503,7 @@ test_first_cycle_status_streams_and_owner_options_reach_it() {
     "the owner's predecessor must make the first cycle a handling successor of the pending generation"
   sleep 3
   host_exited "$home" && fail "a handling successor re-announced the pending episode: $(cat "$home/host.out")"
-  kill -TERM "$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")"
+  fm_test_signal TERM --identity "$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")"
   wait_until_deadline 60 host_exited "$home" || fail "stream: the successor host did not stop on TERM"
   pass "host: the first cycle's status streams once, --restart replaces a stale watcher, and an owner predecessor makes a handling successor"
 }
@@ -559,7 +559,7 @@ test_unchanged_held_outcome_reaches_the_captain_once_until_a_new_event() {
   # into this home while the suite's cleanup removes it.
   pid=$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")
   watcher=$(cat "$home/state/.watch.lock/pid")
-  kill -TERM "$pid"
+  fm_test_signal TERM --identity "$pid"
   wait_until_deadline 60 host_exited "$home" || fail "held: the host did not stop on TERM"
   wait_until 100 sh -c '! kill -0 "$1" 2>/dev/null' _ "$watcher" || fail "held: a stopped host left its watcher running"
   pass "host: an unchanged held outcome reaches the captain once across cadences, and a later decision on the task still does"
@@ -619,7 +619,7 @@ SH
   assert_re '^holder=win:7204$' "$first" "the engine's lease holder must be the tagged session-lock holder, whole"
   assert_re '^branch win:7204 [0-9]+ live$' "$home/engine-lease.log" \
     "the engine's lease must record the tagged holder whole and read live"
-  kill -TERM "$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")"
+  fm_test_signal TERM --identity "$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")"
   wait_until_deadline 60 host_exited "$home" || fail "tagged: the host did not stop on TERM"
   pass "host: a Windows-tagged session-lock holder reaches the engine's lease whole"
 }
@@ -657,7 +657,7 @@ test_superseded_host_leaves_the_owner_untouched() {
     fail "a superseded host stopped the owner's watcher"
   fi
   FM_HOME="$home" "$LEASE" check demo 2>/dev/null | grep -q '^branch ' || fail "a superseded host released the owner's branch leases"
-  kill -TERM "$owner"
+  fm_test_signal TERM --identity "$owner"
   wait_until 200 sh -c '! kill -0 "$1" 2>/dev/null && ! kill -0 "$2" 2>/dev/null' _ "$owner" "$watcher" \
     || fail "superseded: the owner host did not stop on TERM"
   pass "host: a host under a superseded auto-arm generation stands down without touching the owner"
