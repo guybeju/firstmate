@@ -375,14 +375,15 @@ test_a_refused_crash_point_never_leaves_its_child_behind() {
 # on the run root in its command line, on ancestry, or on the run mark in its
 # environment; an orphan with none of these is refused.
 test_identity_needs_evidence_of_this_run() {
-  local release path_child grandchild orphan manager verdict
+  local release path_child grandchild orphan manager verdict i=0
   release="$TMP_ROOT/identity.release"
   # shellcheck disable=SC2016 # $1 expands in the child's own shell.
-  sh -c 'while [ ! -e "$1" ]; do sleep 0.05; done' "$release" &
+  sh -c 'i=0; while [ ! -e "$1" ] && [ "$i" -lt 600 ]; do sleep 0.05; i=$((i + 1)); done' _ "$release" &
   path_child=$!
   # shellcheck disable=SC2016 # $1 expands in the child's own shell.
   bash -c 'sleep 20 & printf "%s\n" "$!" > "$1"; wait' _ "$TMP_ROOT/identity.grandchild" &
-  until [ -s "$TMP_ROOT/identity.grandchild" ]; do sleep 0.05; done
+  while [ ! -s "$TMP_ROOT/identity.grandchild" ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+  [ -s "$TMP_ROOT/identity.grandchild" ] || fail "the grandchild fixture did not record its pid"
   grandchild=$(cat "$TMP_ROOT/identity.grandchild")
   ( env -i /bin/sleep 3.217 </dev/null >/dev/null 2>&1 & )
   sleep 0.3
@@ -413,7 +414,8 @@ test_groups_and_members_are_judged_by_their_leader_and_members() {
   local release leader own_group verdict
   release="$TMP_ROOT/group.release"
   # shellcheck disable=SC2016 # $1 expands in the group leader's own shell.
-  perl -e 'setpgrp(0, 0) or exit 125; exec @ARGV' sh -c 'while [ ! -e "$1" ]; do sleep 0.05; done' "$release" &
+  perl -e 'setpgrp(0, 0) or exit 125; exec @ARGV' \
+    sh -c 'i=0; while [ ! -e "$1" ] && [ "$i" -lt 600 ]; do sleep 0.05; i=$((i + 1)); done' _ "$release" &
   leader=$!
   sleep 0.3
   own_group=$(ps -o pgid= -p "$$" | tr -d '[:space:]')
@@ -460,7 +462,7 @@ test_send_logs_only_in_log_only_mode() {
   local release child rc
   release="$TMP_ROOT/send.release"
   # shellcheck disable=SC2016 # $1 expands in the child's own shell.
-  sh -c 'while [ ! -e "$1" ]; do sleep 0.05; done' "$release" &
+  sh -c 'i=0; while [ ! -e "$1" ] && [ "$i" -lt 600 ]; do sleep 0.05; i=$((i + 1)); done' _ "$release" &
   child=$!
   rc=0
   FM_TEST_SIGNAL_DRY_RUN=1 FM_TEST_SIGNAL_LOG="$TMP_ROOT/send.log" "$GUARD" --send send-case TERM --identity "$child" >/dev/null || rc=$?
