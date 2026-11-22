@@ -47,9 +47,10 @@
 # paths are relative paths under the code root's bin/ that git tracks and
 # that equal HEAD, and hands that list to the service: only those run without
 # a confirmation on the page. The code root is this command's own directory's
-# parent, or FM_ROOT_OVERRIDE. A board running with another binding file than
-# the one there now is replaced by the next command, like one running other
-# code.
+# parent, or FM_ROOT_OVERRIDE; with an override whose physical path is not
+# that directory's, every program needs a confirmation. A board running with
+# another binding file than the one there now is replaced by the next
+# command, like one running other code.
 #
 # summary stores a one-to-three sentence milestone summary read from stdin (at
 # most 600 characters) and prints the line to start the chat reminder with:
@@ -114,7 +115,26 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+# The code root, decided once here: this command's directory's parent, or
+# FM_ROOT_OVERRIDE. ROOT_TRACKED_EXEMPT is 1 when a program git tracks
+# unchanged under the root's bin/ may run without a confirmation: always
+# without an override; with one, only when its physical path (pwd -P) is
+# this command's own location's, and the code root is then that compared
+# path. An override that differs, or that cannot be entered or resolved,
+# keeps no such case.
+OWN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+FM_ROOT=$OWN_ROOT
+ROOT_TRACKED_EXEMPT=1
+if [ -n "${FM_ROOT_OVERRIDE:-}" ]; then
+  FM_ROOT=$FM_ROOT_OVERRIDE
+  ROOT_TRACKED_EXEMPT=0
+  if OWN_PHYSICAL=$(CDPATH='' cd -- "$OWN_ROOT" 2>/dev/null && pwd -P) &&
+    OVERRIDE_PHYSICAL=$(CDPATH='' cd -- "$FM_ROOT_OVERRIDE" 2>/dev/null && pwd -P) &&
+    [ -n "$OWN_PHYSICAL" ] && [ "$OWN_PHYSICAL" = "$OVERRIDE_PHYSICAL" ]; then
+    FM_ROOT=$OWN_PHYSICAL
+    ROOT_TRACKED_EXEMPT=1
+  fi
+fi
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
@@ -318,8 +338,9 @@ status_without_node() {
 
 # binding_flags: the --binding and --exempt values for the service: the
 # binding file's SHA-256 (or -) and the paths it names that git tracks under
-# the code root's bin/ unchanged from HEAD (or -). The node helper reads the
-# file; git is asked here, so the service itself runs no git.
+# the code root's bin/ unchanged from HEAD (or -; always - when
+# ROOT_TRACKED_EXEMPT is not 1). The node helper reads the file; git is asked
+# here, so the service itself runs no git.
 binding_flags() {
   local lines sha rest="" path exempt=""
   lines=$(node "$BOARD_DIST/binding-cli.js" "$CONFIG/myshape-aggregator.json") || lines=-
@@ -327,6 +348,7 @@ binding_flags() {
   case "$sha" in
     - | *[!0-9a-f]* | '') printf '%s\n%s\n' - - && return 0 ;;
   esac
+  [ "$ROOT_TRACKED_EXEMPT" = 1 ] || { printf '%s\n%s\n' "$sha" - && return 0; }
   case "$lines" in *$'\n'*) rest=${lines#*$'\n'} ;; esac
   while IFS= read -r path; do
     [ -n "$path" ] || continue

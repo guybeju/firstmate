@@ -176,7 +176,7 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
 行為上的：
 
 - 主 home 的 checkout 裡改了 `bin/fm-board.sh` 而沒提交，下一次看板啟動時它就不是「不用確認」的程式；這台 PC 的 checkout 群組能寫，要確認的程式會被拒絕，看板就接不上（寫入等著、不讀 home），直到那個改動提交或還原，再跑一個看板指令。
-- `FM_ROOT_OVERRIDE` 指定 code root 時，「不用確認」照樣看那個 code root 的 `bin/`（contracts 第 7 節）；要不要在這時不給免確認，是之後的工作。
+- `FM_ROOT_OVERRIDE` 指向 `bin/myshape.sh` 自己的位置以外的目錄時，沒有程式不用確認（contracts 第 7 節）；它擋不住把指令本身放在別處啟動的人。
 
 - 頁面上只能用拖的改順序：沒有鍵盤可用的移法，原生拖放在 Chrome 上也還沒驗（第 3 節）；這兩種情況改用 `bin/myshape.sh move`（C55）。
 - 看板認一個 home 的依據是 `state/myshape/token`：全新的 home 要先 `open` 才能 `create`；`open` 在 secondmate 的 home 也不會被拒絕，那裡會開出另一個看板（沒有規則叫 second mate 跑它）。
