@@ -289,17 +289,14 @@ test_quiet_polling_is_not_a_change() {
   pass "the page is told about changes, including staleness, and nothing else"
 }
 
-# board_lines: how many system records the board has saved, besides todo.settled.
+# board_lines: how many system records the board has saved.
 board_lines() {
-  grep '"src":"board"' "$MAIN/data/myshape/events.jsonl" | grep -vc '"kind":"todo.settled"' || true
+  grep -c '"src":"board"' "$MAIN/data/myshape/events.jsonl" || true
 }
 
 # records_after <kinds> <what> <command...>: run the command and require that
 # exactly these record kinds ("-" for none) were saved, in order, each with a
 # record id and who made it. A write's record lands when it is delivered.
-# todo.settled is left out: the adoption pass of any read of the main home
-# (one follows every delivered write) writes it for an adopted item closed
-# earlier, at a moment no step controls; the test checks it once at the end.
 records_after() {
   local kinds=$1 what=$2 before want got expected waited=0
   shift 2
@@ -313,7 +310,7 @@ records_after() {
     waited=$((waited + 1))
   done
   sleep 0.5
-  got=$(grep '"src":"board"' "$MAIN/data/myshape/events.jsonl" | grep -v '"kind":"todo.settled"' | tail -n +$((before + 1)) |
+  got=$(grep '"src":"board"' "$MAIN/data/myshape/events.jsonl" | tail -n +$((before + 1)) |
     jq -r 'if .rid != null and .by != null then .kind else "no-rid-or-by" end' | tr '\n' ' ')
   expected=""
   # shellcheck disable=SC2086 # the kinds are a list of words.
@@ -335,7 +332,7 @@ test_every_change_leaves_a_record() {
   local covered_ops covered_routes ops routes id
   ops=$(node --input-type=module -e "import('$ROOT/myshape/dist/ops.js').then((m) => console.log(Object.entries(m.OPERATIONS).filter(([, op]) => op.channel !== 'page').map(([name]) => name).sort().join(' ')))")
   routes=$(node --input-type=module -e "import('$ROOT/myshape/dist/api.js').then((m) => console.log(Object.keys(m.ROUTES).sort().join('|')))")
-  covered_ops="archive close-propose create goal merge move rename reopen split todo-add todo-adopt-done todo-done todo-failed todo-obsolete"
+  covered_ops="archive close-propose create goal merge move rename reopen split todo-add todo-done todo-failed todo-obsolete"
   covered_routes="GET state|POST agents/tag|POST direct|POST holds/answer|POST messages|POST programs/confirm|POST refresh|POST todos/claim|POST todos/drop|POST todos/takedown|POST topics/archive|POST topics/goal|POST topics/keep|POST topics/merge|POST topics/move|POST topics/rename|POST topics/reopen|POST writes/ignore|POST writes/resend"
   assert_equals "$covered_ops" "$ops" "every socket operation needs a case here"
   assert_equals "$covered_routes" "$routes" "every page route needs a case here"
@@ -357,8 +354,6 @@ test_every_change_leaves_a_record() {
   records_after todo.done "todo done" t todo "done" it1
   records_after todo.opened "todo add" t todo add it2 "Item two" --topic rec --do "do it"
   records_after todo.taken_down "todo obsolete" t todo obsolete it2 --reason "not needed"
-  records_after todo.adopted "todo add --adopt" t todo add it3 "Item three" --do "do it" --adopt --captain-closes
-  records_after todo.taken_down "todo adopt-done" t todo adopt-done
 
   records_after topic.moved "topics/move" api topics/move '{"id":"rec","queue":"normal"}'
   records_after topic.renamed "topics/rename" api topics/rename '{"id":"rec","value":"Rec three"}'
@@ -371,7 +366,7 @@ test_every_change_leaves_a_record() {
   records_after todo.claimed "todos/claim" api todos/claim '{"task":"it4"}'
   t todo add it5 "Item five" --topic rec --do "do it" >/dev/null
   records_after todo.dropped "todos/drop" two_step todos/drop '{"task":"it5"}'
-  t todo add it6 "Item six" --topic rec --do "do it" --adopt --captain-closes >/dev/null
+  t todo add it6 "Item six" --topic rec --do "do it" --captain-closes >/dev/null
   t todo obsolete it6 --reason "not needed" >/dev/null
   records_after todo.taken_down "todos/takedown" two_step todos/takedown '{"task":"it6"}'
   records_after agent.tagged "agents/tag" api agents/tag '{"home":"main","task":"loose","topic":"rec"}'
@@ -397,12 +392,6 @@ test_every_change_leaves_a_record() {
   tb_bind_home "$MAIN"
   t open >/dev/null
   records_after - "GET state" state '.version'
-  # The adopted item closed on the board (it6) is settled once by the next reads;
-  # it3 left with its hold already gone, so nothing holds it back.
-  api refresh '{}' >/dev/null
-  assert_equals "it6" \
-    "$(grep '"kind":"todo.settled"' "$MAIN/data/myshape/events.jsonl" | jq -r '.item' | sort | tr '\n' ' ' | sed 's/ $//')" \
-    "each adopted item closed on the board must be settled once, when its hold is gone"
   assert_equals "todo.done todo.claimed todo.rejected todo.claimed todo.opened" \
     "$(state '.closed_todos[] | select(.item == "it1") | .records | map(.event) | join(" ")')" \
     "the closed item must list every step of its life, newest first"

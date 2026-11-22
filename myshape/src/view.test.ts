@@ -696,7 +696,6 @@ describe("hands-on items", () => {
     by: "plain",
     ref: "",
     captain_closes: false,
-    adopted: false,
     created_at: "2026-07-01T00:00:00Z",
     ...extra,
   });

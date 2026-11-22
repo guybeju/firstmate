@@ -45,7 +45,6 @@ const FIXTURES = {
   "todo-done": { args: { task: "claimed" }, fromPage: false },
   "todo-failed": { args: { task: "claimed", reason: "沒起來" }, fromPage: false },
   "todo-obsolete": { args: { task: "open", reason: "不用了" }, fromPage: false },
-  "todo-adopt-done": { args: { open: [] }, fromPage: false },
   "todo-claim": { args: { task: "open" }, fromPage: true },
   "todo-drop": { args: { task: "open" }, fromPage: true },
   "todo-takedown": { args: { task: "obsolete" }, fromPage: true },
@@ -91,7 +90,6 @@ function item(state: TodoItem["state"], extra: Partial<TodoItem> = {}): TodoItem
     by: "plain-agent",
     ref: "",
     captain_closes: false,
-    adopted: false,
     created_at: "T",
     ...extra,
   };
@@ -104,7 +102,6 @@ function todosFixture(): TodoStore {
       open: item("open"),
       claimed: item("claimed"),
       obsolete: item("obsolete", { captain_closes: true, reason: "不用了" }),
-      adopted: item("open", { adopted: true, ref: "hold" }),
     },
   };
 }
@@ -348,37 +345,32 @@ describe("each operation's arguments", () => {
     usage("todo-add", { id: "x", title: "T", commands: [], topic: "a" });
     usage("todo-add", { id: "x", title: "T", action: "a", commands: [1] });
     usage("todo-add", { id: "x", title: "T", action: "a", commands: [], topic: 3 });
+    usage("todo-add", { id: "x", title: "T", action: "a", commands: [], topic: null });
     const added = reply("todo-add", {
       id: "x",
       title: "T",
-      topic: null,
+      topic: "a",
       action: "a",
       guidance: "g",
       commands: ["c"],
       ref: "r",
       captain_closes: true,
-      adopt: true,
-      since: "2026-11-17T10:00:00Z",
     });
     expect(added.board.todos.items["x"]).toMatchObject({
-      topic: null,
+      topic: "a",
       guidance: "g",
       commands: ["c"],
       ref: "r",
       captain_closes: true,
-      adopted: true,
       by: "plain-agent",
-      created_at: "2026-11-17T10:00:00Z",
     });
-    expect(added.records[0]).toMatchObject({ kind: "todo.adopted", topic: null, item: "x" });
+    expect(added.records[0]).toMatchObject({ kind: "todo.opened", topic: "a", item: "x" });
   });
 
-  it("the verdicts, the presses and adopt-done name their item and reason", () => {
+  it("the verdicts and the presses name their item and reason", () => {
     usage("todo-done", {});
     usage("todo-failed", { reason: "r" });
     usage("todo-obsolete", { task: "open" });
-    usage("todo-adopt-done", { open: "x" });
-    usage("todo-adopt-done", { open: [1] });
     usage("todo-claim", {}, true);
     usage("todo-drop", {}, true);
     const refused = reply("todo-done", { task: "nope" });

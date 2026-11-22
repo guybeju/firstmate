@@ -118,8 +118,6 @@ function todoOptions(args) {
         guidance: typeof args["guidance"] === "string" ? args["guidance"] : "",
         ref: typeof args["ref"] === "string" ? args["ref"] : "",
         captainCloses: args["captain_closes"] === true,
-        adopt: args["adopt"] === true,
-        ...(typeof args["since"] === "string" ? { since: args["since"] } : {}),
     };
 }
 /** What a `todo-add` request asks for, or why it is malformed. */
@@ -164,7 +162,7 @@ function verdict(apply) {
     };
 }
 function closeByCaptain(words) {
-    return onItem((ctx, task) => todos.closeByCaptain(ctx.todos, task, words, ctx.label, ctx.now));
+    return onItem((ctx, task) => todos.closeByCaptain(ctx.todos, task, words, ctx.label));
 }
 /**
  * Every operation that changes the board. A hands-on operation commits
@@ -239,20 +237,10 @@ export const OPERATIONS = {
     "todo-done": {
         channel: "socket",
         commitFile: "todos",
-        run: onItem((ctx, task) => todos.doneItem(ctx.todos, task, ctx.label, ctx.now)),
+        run: onItem((ctx, task) => todos.doneItem(ctx.todos, task, ctx.label)),
     },
     "todo-failed": { channel: "socket", commitFile: "todos", run: verdict(todos.rejectItem) },
     "todo-obsolete": { channel: "socket", commitFile: "todos", run: verdict(todos.obsoleteItem) },
-    "todo-adopt-done": {
-        channel: "socket",
-        commitFile: "todos",
-        run: (ctx, args) => {
-            const open = args["open"];
-            if (!Array.isArray(open) || !open.every((id) => typeof id === "string"))
-                return todoUsage("adopt-done 需要還開著的項目 id。");
-            return todos.adoptDone(ctx.todos, open, ctx.label);
-        },
-    },
     "todo-claim": {
         channel: "page",
         commitFile: "todos",

@@ -159,7 +159,6 @@ SH
       'todo done') case_args='todo done item-1' ;;
       'todo failed') case_args='todo failed item-1 --reason r' ;;
       'todo obsolete') case_args='todo obsolete item-1 --reason r' ;;
-      'todo adopt-done') case_args='todo adopt-done item-1' ;;
       *) fail "myshape.sh $sub has no case here: add one, and an operation for it if it changes the board" ;;
     esac
     : > "$log"

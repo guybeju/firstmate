@@ -17,11 +17,9 @@
 #   myshape.sh which [--home <secondmate-id>] <task-id>
 #   myshape.sh find [--all] <keyword>
 #   myshape.sh todo add <task-id> <title> --topic <topic-id> --do <one line> [--note <text>] [--cmd <command>]... [--ref <text>] [--captain-closes]
-#   myshape.sh todo add <task-id> <title> [--topic <topic-id>] --do <one line> ... --adopt [--since <time>]
 #   myshape.sh todo done <task-id>
 #   myshape.sh todo failed <task-id> --reason <one line>
 #   myshape.sh todo obsolete <task-id> --reason <one line>
-#   myshape.sh todo adopt-done [<task-id>]...
 #   myshape.sh open | status | stop | restart | reset-token
 #
 # Every subcommand except open runs only in a home where the board has run:
@@ -92,16 +90,7 @@
 # page at once, with the reason in its topic's updates; an item added with
 # --captain-closes waits instead for the captain's 好，撤下.
 #
-# --adopt is for items an aggregator kept before the board kept them: it
-# accepts an archived topic, an unknown one or none, keeps the mark such an
-# item already had, and changes nothing for an item already on the board or
-# one closed on the board that the aggregator still reports open; --since is when the item
-# was first opened, an ISO 8601 time. adopt-done ends such a pass: given every
-# such item still open on the aggregator's side, it drops the marks of the
-# others and takes adopted items that are no longer open there off the
-# page, with a record and no notice.
-#
-# Every step of an item (put on, rewritten, adopted, claimed, failed, marked no
+# Every step of an item (put on, rewritten, claimed, failed, marked no
 # longer needed, closed) writes a record on its topic's updates saying who made
 # it: the captain on the page, or the aggregator by its label.
 #
@@ -226,14 +215,14 @@ todo_part() {
 TODO_ADD_USAGE='todo add 的用法是 <task-id> <標題> --topic <議題 id> --do <要做什麼> [--note <說明>] [--cmd <指令>]…：每個要使用者跑的指令一個 --cmd（多行的指令整段放進同一個 --cmd），不是指令的說明放 --note'
 
 # todo add <task-id> <title> --topic <topic-id> --do <action> [--note <text>]
-# [--cmd <command>]... [--ref <text>] [--captain-closes] [--adopt]: put a
+# [--cmd <command>]... [--ref <text>] [--captain-closes]: put a
 # hands-on item for the captain on the board. The board checks the topic.
 todo_add() {
-  local topic="" action="" note="" ref="" since="" captain_closes=false adopt=false item
+  local topic="" action="" note="" ref="" captain_closes=false item
   local -a words=() commands=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --topic | --do | --note | --cmd | --ref | --since)
+      --topic | --do | --note | --cmd | --ref)
         [ "$#" -ge 2 ] || usage_error "$1 後面要有值。$TODO_ADD_USAGE"
         case "$1" in
           --topic) topic=$2 ;;
@@ -247,12 +236,10 @@ todo_add() {
             ;;
           --cmd) commands+=("$(todo_part --cmd "$2")") ;;
           --ref) ref=$2 ;;
-          --since) since=$2 ;;
         esac
         shift 2
         ;;
       --captain-closes) captain_closes=true && shift ;;
-      --adopt) adopt=true && shift ;;
       -) usage_error "todo add 不再從 stdin 讀內容；要做什麼放 --do，說明放 --note，指令放 --cmd。$TODO_ADD_USAGE" ;;
       --*) usage_error "todo add 不認得 ${1}。$TODO_ADD_USAGE" ;;
       *)
@@ -261,37 +248,35 @@ todo_add() {
         ;;
     esac
   done
-  if [ "${#words[@]}" -ne 2 ] || { [ -z "$topic" ] && [ "$adopt" = false ]; } || [ -z "$action" ]; then
+  if [ "${#words[@]}" -ne 2 ] || [ -z "$topic" ] || [ -z "$action" ]; then
     usage_error "$TODO_ADD_USAGE"
   fi
   case "$action" in
     *$'\n'*) usage_error "--do 只寫一行；其餘的說明放 --note，指令放 --cmd。$TODO_ADD_USAGE" ;;
   esac
   tb_valid_id "${words[0]}" || usage_error "task id 格式不對：${words[0]}"
-  [ -z "$topic" ] || tb_valid_id "$topic" || usage_error "議題 id 格式不對：$topic"
-  [ -z "$since" ] || [ "$adopt" = true ] || usage_error "--since 只給 --adopt 用。$TODO_ADD_USAGE"
+  tb_valid_id "$topic" || usage_error "議題 id 格式不對：$topic"
   item=$(jq -cn --arg id "${words[0]}" --arg title "${words[1]}" --arg topic "$topic" \
-    --arg action "$action" --arg guidance "$note" --arg ref "$ref" --arg since "$since" \
-    --argjson captain_closes "$captain_closes" --argjson adopt "$adopt" \
-    '{id: $id, title: $title, topic: (if $topic == "" then null else $topic end), action: $action,
+    --arg action "$action" --arg guidance "$note" --arg ref "$ref" \
+    --argjson captain_closes "$captain_closes" \
+    '{id: $id, title: $title, topic: $topic, action: $action,
       guidance: $guidance, commands: $ARGS.positional, ref: $ref,
-      captain_closes: $captain_closes, adopt: $adopt}
-     + (if $since == "" then {} else {since: $since} end)' \
+      captain_closes: $captain_closes}' \
     --args ${commands[@]+"${commands[@]}"}) || tb_die 1 "組不出項目的內容，沒有放上任何東西。"
   printf '%s' "$item" | cmd_service todo-add -
 }
 
 cmd_todo() {
   local sub=${1:-}
-  [ "$#" -gt 0 ] || usage_error "todo 的用法是 add、done、failed、obsolete、adopt-done 其中之一"
+  [ "$#" -gt 0 ] || usage_error "todo 的用法是 add、done、failed、obsolete 其中之一"
   shift
   case "$sub" in
     add)
       require_jq "todo add"
       todo_add "$@"
       ;;
-    done | failed | obsolete | adopt-done) cmd_service "todo-$sub" "$@" ;;
-    *) usage_error "todo 不認得 ${sub}；可用的是 add、done、failed、obsolete、adopt-done" ;;
+    done | failed | obsolete) cmd_service "todo-$sub" "$@" ;;
+    *) usage_error "todo 不認得 ${sub}；可用的是 add、done、failed、obsolete" ;;
   esac
 }
 

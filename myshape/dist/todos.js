@@ -5,7 +5,7 @@ const ACTION_MAX = 1000;
 const TEXT_MAX = 20_000;
 const COMMANDS_MAX = 50;
 export function emptyTodos() {
-    return { v: 1, items: {}, marks: {}, closed: {} };
+    return { v: 1, items: {}, marks: {} };
 }
 /** The id grammar topic ids and task ids share, at most 128 characters. */
 export function isValidItemId(id) {
@@ -51,20 +51,14 @@ export function shortTime(iso) {
         return null;
     return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
-/**
- * The topic an item goes under. A new item needs a live topic. An adopted
- * one keeps where today's page shows it: a merged id is followed, an archived
- * topic is kept, and an id the board does not know, or none, is no topic.
- */
+/** The topic an item goes under: a live topic, a merged id followed. */
 function placeItem(topics, input) {
     if (input.topic === null)
-        return input.adopt ? { topic: null } : "需要 --topic <議題 id>。";
+        return "需要 --topic <議題 id>。";
     const id = resolveTopicId(topics.doc, input.topic);
     if (topics.doc.topics[id] !== undefined)
         return { topic: id };
-    if (!input.adopt)
-        return `${input.topic} 不是看板上還開著的議題，沒有放上任何東西。`;
-    return { topic: topics.archive.topics[id] === undefined ? null : id };
+    return `${input.topic} 不是看板上還開著的議題，沒有放上任何東西。`;
 }
 /** The input's problem as a usage line, or null when it is well formed. */
 function inputProblem(input) {
@@ -82,8 +76,6 @@ function inputProblem(input) {
         return "--cmd 後面要有內容。";
     if (input.ref.length > REF_MAX || /[\n\r]/.test(input.ref))
         return "--ref 要是一行，最多 128 個字。";
-    if (input.since !== undefined && shortTime(input.since) === null)
-        return "--since 要是一個時間。";
     return null;
 }
 function sameText(item, input, topic) {
@@ -96,13 +88,8 @@ function sameText(item, input, topic) {
 function addedLine(id, topic) {
     return `ok ${id} 已放上看板的「要你動手」（${topic === null ? "沒有議題" : `議題 ${topic}`}）`;
 }
-/** What the record of an add says: a new item, a rewrite, or an item adopted from before. */
-function addRecord(next, id, input, actor, rewrite) {
-    if (input.adopt) {
-        const since = input.since === undefined ? null : shortTime(input.since);
-        const when = since === null ? "" : `（原本 ${since} 開）`;
-        return record("todo.adopted", next, id, actor, `從 backlog 搬上看板${when}`);
-    }
+/** What the record of an add says: a new item or a rewrite. */
+function addRecord(next, id, actor, rewrite) {
     if (rewrite)
         return record("todo.rewritten", next, id, actor, "內容已改寫，回到還沒做");
     return record("todo.opened", next, id, actor, `已開：${next.action}`);
@@ -110,8 +97,7 @@ function addRecord(next, id, input, actor, rewrite) {
 /**
  * Puts an item on the board, or rewrites it. A rewrite of different text
  * starts over at "open": what was said about the old text no longer holds.
- * Repeating the same text changes nothing; so does adopting an item already
- * on the board.
+ * Repeating the same text changes nothing.
  */
 export function addItem(store, topics, input, now, agent) {
     const problem = inputProblem(input);
@@ -122,12 +108,9 @@ export function addItem(store, topics, input, now, agent) {
         return input.topic === null ? usage(placed) : refused(placed);
     const current = itemOf(store, input.id);
     const line = addedLine(input.id, placed.topic);
-    if (input.adopt && current === undefined && Object.hasOwn(store.closed, input.id))
-        return unchanged(store, `ok ${input.id} 已在看板上關掉，等它的 hold 關掉`);
-    if (current !== undefined && (input.adopt || sameText(current, input, placed.topic)))
+    if (current !== undefined && sameText(current, input, placed.topic))
         return unchanged(store, line);
     const next = structuredClone(store);
-    const mark = input.adopt && Object.hasOwn(store.marks, input.id) ? store.marks[input.id] : undefined;
     delete next.marks[input.id];
     const item = {
         title: input.title.trim(),
@@ -135,29 +118,26 @@ export function addItem(store, topics, input, now, agent) {
         action: input.action.trim(),
         guidance: input.guidance,
         commands: input.commands,
-        state: mark?.state ?? "open",
-        reason: mark?.reason ?? null,
-        at: mark?.at ?? now,
+        state: "open",
+        reason: null,
+        at: now,
         by: agent.name,
         ref: input.ref !== "" ? input.ref : (current?.ref ?? ""),
         captain_closes: input.captainCloses || (current?.captain_closes ?? false),
-        adopted: input.adopt || (current?.adopted ?? false),
-        created_at: current?.created_at ?? input.since ?? now,
+        created_at: current?.created_at ?? now,
     };
     next.items[input.id] = item;
     const actor = { by: "aggregator", label: agent.label };
-    return changed(next, line, [addRecord(item, input.id, input, actor, current !== undefined)]);
+    return changed(next, line, [addRecord(item, input.id, actor, current !== undefined)]);
 }
 function withState(store, id, state, now, reason) {
     const next = structuredClone(store);
     next.items[id] = { ...next.items[id], state, reason, at: now };
     return next;
 }
-/** The store without the item; an adopted one is remembered as closed until its hold is. */
-function without(store, id, now) {
+/** The store without the item. */
+function without(store, id) {
     const next = structuredClone(store);
-    if (next.items[id]?.adopted === true)
-        next.closed[id] = now;
     delete next.items[id];
     return next;
 }
@@ -237,10 +217,10 @@ export function obsoleteItem(store, id, reason, now, label) {
         reason: line,
     });
     const notice = closing(item, id, `「${item.title}」已撤下：不再需要，${line}（${id}）`, "aggregator", "撤下");
-    return changed(without(store, id, now), `ok ${id} 已撤下（不再需要）`, [event], [notice]);
+    return changed(without(store, id), `ok ${id} 已撤下（不再需要）`, [event], [notice]);
 }
 /** The aggregator checked that the captain did it: the item is closed. */
-export function doneItem(store, id, label, now) {
+export function doneItem(store, id, label) {
     const item = itemOf(store, id);
     if (item === undefined)
         return refused(`${id} 不是開著的「要你動手」項目，沒有關任何東西（已經關過的話不用再跑）。`);
@@ -249,13 +229,13 @@ export function doneItem(store, id, label, now) {
         outcome: "done",
     });
     const notice = closing(item, id, `「${item.title}」已關：做完了，${label} 已驗證（${id}）`, "aggregator", "做完了");
-    return changed(without(store, id, now), `ok ${id} 已關（做完了，${label} 已驗證）`, [event], [notice]);
+    return changed(without(store, id), `ok ${id} 已關（做完了，${label} 已驗證）`, [event], [notice]);
 }
 /**
  * The captain's 不做了, or 好，撤下 on an item the aggregator no longer needs:
  * the item leaves the page with the captain's words in its topic's updates.
  */
-export function closeByCaptain(store, id, words, label, now) {
+export function closeByCaptain(store, id, words, label) {
     const item = itemOf(store, id);
     if (item === undefined)
         return notOpen(id);
@@ -268,70 +248,8 @@ export function closeByCaptain(store, id, words, label, now) {
         ? record("todo.taken_down", item, id, actor, "已撤下", { outcome: "taken_down" })
         : record("todo.dropped", item, id, actor, "已關：你選了不做了", { outcome: "dropped" });
     const notice = closing(item, id, `使用者在看板上：「${item.title}」${words}（${id}）`, "captain", words);
-    return changed(without(store, id, now), `ok ${id} 已拿掉（${words}）`, [event], [notice]);
+    return changed(without(store, id), `ok ${id} 已拿掉（${words}）`, [event], [notice]);
 }
-/**
- * Ends an adoption pass. `open` is every item the aggregator still reports
- * open on its side. Each change leaves a record: an adopted item that is no
- * longer open there leaves the page (no notice: it was already closed
- * elsewhere), a waiting mark of an item never adopted is forgotten, and an
- * item closed on the board whose hold has now closed stops being held back.
- */
-export function adoptDone(store, open, label) {
-    const still = new Set(open);
-    const next = structuredClone(store);
-    const records = [
-        ...retireAdopted(store, next, still, label),
-        ...forgetMarks(store, next, still, label),
-        ...settleClosed(store, next, still, label),
-    ];
-    const [first, ...rest] = records;
-    if (first === undefined)
-        return unchanged(store, "ok adopt-done 沒有要清的");
-    const gone = records.filter((entry) => entry.kind === "todo.taken_down").length;
-    const marks = records.filter((entry) => entry.kind === "todo.forgotten").length;
-    return changed(next, `ok adopt-done 清掉 ${marks} 個等著的狀態，拿掉 ${gone} 個已在別處關掉的項目`, [first, ...rest]);
-}
-/** Takes the adopted items no longer open on the aggregator's side out of `next`. */
-function retireAdopted(store, next, still, label) {
-    const actor = { by: "aggregator", label };
-    return Object.entries(store.items).flatMap(([id, item]) => {
-        if (!item.adopted || still.has(id))
-            return [];
-        delete next.items[id];
-        return [
-            record("todo.taken_down", item, id, actor, "已關：hold 已在別處關掉", {
-                outcome: "elsewhere",
-            }),
-        ];
-    });
-}
-/** Forgets in `next` the waiting marks of items never adopted whose hold is gone. */
-function forgetMarks(store, next, still, label) {
-    return Object.entries(store.marks).flatMap(([id, mark]) => {
-        if (still.has(id))
-            return [];
-        delete next.marks[id];
-        const why = mark.reason === undefined ? {} : { reason: mark.reason };
-        const text = `要你動手 ${id} 沒搬上看板，hold 已在別處關掉，清掉它的舊狀態（${MARK_LABEL[mark.state]}）（${label} 用指令）`;
-        return [{ kind: "todo.forgotten", topic: null, item: id, ...why, text }];
-    });
-}
-/** Stops holding back in `next` the items closed on the board whose hold has now closed. */
-function settleClosed(store, next, still, label) {
-    return Object.keys(store.closed).flatMap((id) => {
-        if (still.has(id))
-            return [];
-        delete next.closed[id];
-        const text = `要你動手 ${id} 的 hold 已關掉，之後可以再放上看板（${label} 用指令）`;
-        return [{ kind: "todo.settled", topic: null, item: id, text }];
-    });
-}
-const MARK_LABEL = {
-    claimed: "說做完了",
-    rejected: "驗證沒過",
-    obsolete: "不再需要",
-};
 /**
  * The first start of a board that keeps items itself: topics.json's marks
  * become waiting marks in a new store, with a record that says so.

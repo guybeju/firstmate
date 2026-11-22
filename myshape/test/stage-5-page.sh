@@ -36,27 +36,21 @@ export TB_TOPIC="$TMP_ROOT/topic"
 "$TB_TOPIC" create "Login" --goal "new login" --id login --queue high >/dev/null
 "$TB_TOPIC" create "Parked" --goal "later" --id parked --queue later >/dev/null
 "$TB_TOPIC" create "Idea" --goal "queued at once" --id idea >/dev/null
-# A hands-on item as todo add writes it: guidance, then two commands, the first
-# spanning lines and carrying characters a shell would act on.
+# A hands-on item with guidance, then two commands, the first spanning lines
+# and carrying characters a shell would act on; only the captain takes it down.
 # shellcheck disable=SC2016  # the commands are literal text, never expanded here
-TODO_REASON="fm-hold-v1:$(printf '動手：重啟 x（路由卡住）\n說明：只在你人在電腦前時做。\n指令：sudo x --now "a b" && echo $HOME `date`\n續：\tps | grep x\n指令：echo two' | base64 | tr -d '\n')"
-# Items stored before the labels: an action and a line of guidance, and an action alone.
-OLD_NOTE="fm-hold-v1:$(printf '動手：開 NAS 的兩步驟驗證\n只在你人在電腦前時做。' | base64 | tr -d '\n')"
-OLD_ONLY="fm-hold-v1:$(printf '動手：查路由器的轉址' | base64 | tr -d '\n')"
-NEW_NOTE="fm-hold-v1:$(printf '動手：開 NAS 的兩步驟驗證\n說明：只在你人在電腦前時做。' | base64 | tr -d '\n')"
+"$TB_TOPIC" todo add todo-1 "Restart x" --topic login --do "重啟 x（路由卡住）" --note "只在你人在電腦前時做。" \
+  --cmd "$(printf 'sudo x --now "a b" && echo $HOME `date`\n\tps | grep x')" --cmd "echo two" --captain-closes >/dev/null
+# The three other shapes an item can have: a command and no guidance, an action
+# alone, and guidance and no command.
+"$TB_TOPIC" todo add old-note "Turn on 2FA" --topic idea --do "開 NAS 的兩步驟驗證" --cmd "只在你人在電腦前時做。" >/dev/null
+"$TB_TOPIC" todo add old-only "Check the router" --topic idea --do "查路由器的轉址" >/dev/null
+"$TB_TOPIC" todo add new-note "Turn on 2FA again" --topic idea --do "開 NAS 的兩步驟驗證" --note "只在你人在電腦前時做。" >/dev/null
 cat > "$MAIN/data/backlog.md" <<EOF
 ## In flight
 - [ ] ship-a - Ship A (repo: sample) (kind: ship)
 
 ## Queued
-- [ ] todo-1 - Restart x (repo: sample) (kind: captain) (hold: $TODO_REASON) (hold-kind: captain)
-  Captain hold set: 2026-07-24T00:00:00Z
-- [ ] old-note - Turn on 2FA (repo: sample) (kind: captain) (hold: $OLD_NOTE) (hold-kind: captain)
-  Captain hold set: 2026-07-24T00:00:00Z
-- [ ] old-only - Check the router (repo: sample) (kind: captain) (hold: $OLD_ONLY) (hold-kind: captain)
-  Captain hold set: 2026-07-24T00:00:00Z
-- [ ] new-note - Turn on 2FA again (repo: sample) (kind: captain) (hold: $NEW_NOTE) (hold-kind: captain)
-  Captain hold set: 2026-07-24T00:00:00Z
 - [ ] call-1 - A call (repo: sample) (kind: captain) (hold: 要合併嗎？ 選項：合併 | 先不要) (hold-kind: captain)
   Captain hold set: 2026-07-24T00:00:00Z
   Captain hold on answer: release
@@ -69,12 +63,6 @@ cat > "$MAIN/data/backlog.md" <<EOF
 ## Done
 EOF
 mkdir -p "$MAIN/projects/ship-a" "$MAIN/data/ship-a" "$MAIN/data/call-1"
-mkdir -p "$MAIN/data/todo-1"
-printf 'login 2026-07-01T00:00:00Z\n' > "$MAIN/data/todo-1/topic"
-for id in old-note old-only new-note; do
-  mkdir -p "$MAIN/data/$id"
-  printf 'idea 2026-07-01T00:00:00Z\n' > "$MAIN/data/$id/topic"
-done
 fm_write_meta "$MAIN/state/ship-a.meta" "window=firstmate:fm-ship-a" "worktree=$MAIN/projects/ship-a" \
   "project=sample" "harness=claude" "kind=ship" "mode=ship" "yolo=off"
 printf 'working: on it\n' > "$MAIN/state/ship-a.status"
