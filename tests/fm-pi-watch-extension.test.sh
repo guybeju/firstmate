@@ -4900,17 +4900,18 @@ EOF
     fm_test_signal_try KILL --identity "$poller" || true
     fail "the process-group reap left the failed case's poller pid $poller running"
   fi
-  out=$(ps -eo ppid=,args= 2>/dev/null | awk -v root="$repo/" '$1 == 1 && index($0, root)')
+  out=$(fm_test_root_orphans "$repo")
   [ -z "$out" ] || fail "orphans from the failed case survived the reap: $out"
   pass "Pi teardown reaps a failed case's orphaned poller as a process group"
 }
 
 # Run last: after the teardown reap, nothing this suite started may be left
-# running under init from its temporary root.
+# running as an orphan (under init or the session's subreaper) from its
+# temporary root.
 test_pi_suite_leaves_no_orphaned_processes() {
   local out
   pi_reap_process_groups
-  out=$(ps -eo ppid=,args= 2>/dev/null | awk -v root="$TMP_ROOT/" '$1 == 1 && index($0, root)')
+  out=$(fm_test_root_orphans "$TMP_ROOT")
   [ -z "$out" ] || fail "processes from this suite's temporary root outlived the teardown reap: $out"
   pass "Pi suite leaves no orphaned process from its temporary root"
 }

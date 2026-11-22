@@ -45,6 +45,8 @@ shellcheck -x bin/fm-board.sh bin/fm-board-lib.sh bin/fm-board-io-lib.sh bin/fm-
 - `run.sh` 用啟動它的那個 bash 跑每個腳本，但腳本裡呼叫的 `bin/myshape*.sh` 是照自己第一行的 `#!/usr/bin/env bash` 找 bash。要在 macOS 上驗 bash 3.2，兩邊都要是 3.2：`PATH="/bin:$PATH" /bin/bash myshape/test/run.sh`。正式環境裡遠端的 home 用哪個 bash，同樣取決於當時 `PATH` 上第一個是哪一個。
 - 測試用的環境變數由各腳本自己設：`MYSHAPE_TEST=1` 打開只給測試用的 socket 操作，`MYSHAPE_READ_MS` 等縮短輪詢與重試的間隔。不用事先設任何變數。
 - 會停掉或重啟看板的第七段腳本只經 `myshape/test/signal-lib.sh` 的 `kill_own_child` 送訊號，只送給腳本自己用 `&` 啟動、記下 `$!` 的子程序；`myshape/test/check-signals.sh` 檢查第七段、它的函式庫、替身 aggregator 與 `fm-board/test` 沒有別的送訊號的寫法。`FM_TEST_SIGNAL_DRY_RUN=1 FM_TEST_SIGNAL_LOG=<絕對路徑>` 讓這些腳本什麼都不送，只記下每一次會送給誰。
+- 第二段的 `stage-2-service.sh` 與 `stage-2-startup.sh` 對看板 pid 檔記的程序、或替身 harness 的子程序送訊號時，經 `tests/lib.sh` 的 `fm_test_signal`：守門 helper `tests/signal-guard.sh` 送出前先確認那個程序屬於這次的測試（命令列有這次的暫存根目錄、環境裡有這次的記號，或祖先鏈走得回測試腳本）。
+- `tests/check-signals.sh` 檢查整個測試目錄（含 `myshape/test`、`fm-board/test`、`dispatch-plan/test`）沒有繞過守門 helper、對算出來的目標送訊號的寫法；`bin/fm-lint.sh` 每一次都跑它。
 - 暫存目錄：macOS 預設的暫存目錄很深，會讓 socket 路徑超過 103 位元組的上限。`helpers.sh` 在預設暫存目錄的路徑超過 40 個字元時改用 `/tmp`。
 - 範圍：這台 Linux 要十四個腳本與 `fm-board/test`、`dispatch-plan/test` 全過。遠端的 home 只跑 `bin/fm-topic-board-read.sh` 與 `bin/fm-board.sh`（`tag`、`setup`，與一次性的 `migrate-myshape`），不跑服務也不開頁面，所以在 Mac 上要過的是第一段與 `fm-board/test/stage-1-tag.sh`。頁面程式在使用者開看板的那台機器的瀏覽器裡執行。
 - ShellCheck 會對 `tests/lib.sh` 的 source 報 SC1091，可以忽略；其他的要是零。

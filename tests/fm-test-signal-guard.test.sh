@@ -371,8 +371,116 @@ test_a_refused_crash_point_never_leaves_its_child_behind() {
   pass "a refused crash point releases its stand-in and ends its own child before it fails"
 }
 
+# A process the run started that is not this shell's recorded child: accepted
+# on the run root in its command line, on ancestry, or on the run mark in its
+# environment; an orphan with none of these is refused.
+test_identity_needs_evidence_of_this_run() {
+  local release path_child grandchild orphan manager verdict
+  release="$TMP_ROOT/identity.release"
+  # shellcheck disable=SC2016 # $1 expands in the child's own shell.
+  sh -c 'while [ ! -e "$1" ]; do sleep 0.05; done' "$release" &
+  path_child=$!
+  # shellcheck disable=SC2016 # $1 expands in the child's own shell.
+  bash -c 'sleep 20 & printf "%s\n" "$!" > "$1"; wait' _ "$TMP_ROOT/identity.grandchild" &
+  until [ -s "$TMP_ROOT/identity.grandchild" ]; do sleep 0.05; done
+  grandchild=$(cat "$TMP_ROOT/identity.grandchild")
+  ( env -i /bin/sleep 3.217 </dev/null >/dev/null 2>&1 & )
+  sleep 0.3
+  orphan=$(pgrep -n -u "$(id -u)" -f '^/bin/sleep 3[.]217$' || true)
+  verdict=$(guard "$THIS_SHELL" TERM --identity "$path_child")
+  case "$verdict" in "accepted $path_child (evidence: path $TMP_ROOT"*) ;; *) fail "the run root in its command line was not accepted: $verdict" ;; esac
+  verdict=$(guard "$THIS_SHELL" TERM --identity "$grandchild")
+  case "$verdict" in "accepted $grandchild (evidence: "*) ;; *) fail "a grandchild of the run was not accepted: $verdict" ;; esac
+  [ -n "$orphan" ] || fail "the stripped orphan fixture did not start"
+  expect_refused "$(guard "$THIS_SHELL" TERM --identity "$orphan")" "an orphan with no evidence of this run"
+  expect_refused "$(guard "$THIS_SHELL" TERM --identity "$$")" "the test script by --identity"
+  expect_refused "$(guard "$THIS_SHELL" TERM --identity "$PPID")" "the test script's parent by --identity"
+  expect_refused "$(guard "$THIS_SHELL" TERM --identity "$THIS_SHELL")" "the signalling shell by --identity"
+  expect_refused "$(guard "$THIS_SHELL" TERM --identity 1)" "pid 1 by --identity"
+  expect_refused "$(guard "$THIS_SHELL" TERM --identity "")" "an empty pid by --identity"
+  expect_refused "$(guard "$THIS_SHELL" TERM --identity -"$path_child")" "a negative pid by --identity"
+  manager=$(user_manager_pid)
+  [ -z "$manager" ] || expect_refused "$(guard "$THIS_SHELL" KILL --identity "$manager")" "the user manager by --identity"
+  : > "$release"
+  wait "$path_child" 2>/dev/null || true
+  pass "--identity accepts only a process with evidence of this run and keeps every standing refusal"
+}
+
+# A group is accepted only by a live leader with path or ancestry evidence that
+# leads its own group, never this test's own group; --members lists a group's
+# live members itself and refuses this test's group outright.
+test_groups_and_members_are_judged_by_their_leader_and_members() {
+  local release leader own_group verdict
+  release="$TMP_ROOT/group.release"
+  # shellcheck disable=SC2016 # $1 expands in the group leader's own shell.
+  perl -e 'setpgrp(0, 0) or exit 125; exec @ARGV' sh -c 'while [ ! -e "$1" ]; do sleep 0.05; done' "$release" &
+  leader=$!
+  sleep 0.3
+  own_group=$(ps -o pgid= -p "$$" | tr -d '[:space:]')
+  [ "$(ps -o pgid= -p "$leader" | tr -d '[:space:]')" = "$leader" ] || fail "the group fixture did not lead its own group"
+  verdict=$(guard "$THIS_SHELL" TERM --group "$leader")
+  case "$verdict" in "accepted group $leader (evidence: "*) ;; *) fail "a run-owned group leader was not accepted: $verdict" ;; esac
+  verdict=$(guard "$THIS_SHELL" TERM --members "$leader")
+  case "$verdict" in *"member: accepted $leader "*) ;; *) fail "--members did not judge the group's live member: $verdict" ;; esac
+  expect_refused "$(guard "$THIS_SHELL" TERM --group "$own_group")" "this test's own group"
+  expect_refused "$(guard "$THIS_SHELL" TERM --members "$own_group")" "the members of this test's own group"
+  expect_refused "$(guard "$THIS_SHELL" TERM --members 1)" "group 1"
+  expect_refused "$(guard "$THIS_SHELL" TERM --members -"$leader")" "a negative group id"
+  : > "$release"
+  wait "$leader" 2>/dev/null || true
+  pass "--group and --members accept only a run-owned group that is not the test's own"
+}
+
+# --env-path (supplement 4) accepts an orphan whose listed variable holds a
+# path under a run root, compared at a directory boundary, and nothing else.
+test_env_path_reads_only_a_listed_variable_under_a_run_root() {
+  local inside outside lookalike verdict
+  ( env -i FM_HOME="$TMP_ROOT/env-home" /bin/sleep 3.418 </dev/null >/dev/null 2>&1 & )
+  ( env -i FM_HOME="/tmp/not-this-run" /bin/sleep 3.419 </dev/null >/dev/null 2>&1 & )
+  ( env -i FM_HOME="${TMP_ROOT}-lookalike/home" /bin/sleep 3.421 </dev/null >/dev/null 2>&1 & )
+  sleep 0.3
+  inside=$(pgrep -n -u "$(id -u)" -f '^/bin/sleep 3[.]418$' || true)
+  outside=$(pgrep -n -u "$(id -u)" -f '^/bin/sleep 3[.]419$' || true)
+  lookalike=$(pgrep -n -u "$(id -u)" -f '^/bin/sleep 3[.]421$' || true)
+  [ -n "$inside" ] && [ -n "$outside" ] && [ -n "$lookalike" ] || fail "the environment fixtures did not start"
+  expect_refused "$(guard "$THIS_SHELL" TERM --identity "$inside")" "an orphan whose only evidence is a product variable, by --identity"
+  verdict=$(guard "$THIS_SHELL" TERM --env-path FM_HOME "$inside")
+  case "$verdict" in "accepted $inside (evidence: env FM_HOME=$TMP_ROOT/env-home under run root $TMP_ROOT)") ;; *) fail "a listed variable under the run root was not accepted: $verdict" ;; esac
+  expect_refused "$(guard "$THIS_SHELL" TERM --env-path FM_HOME "$outside")" "a listed variable outside the run roots"
+  expect_refused "$(guard "$THIS_SHELL" TERM --env-path FM_HOME "$lookalike")" "a path that only starts with the run root's name"
+  expect_refused "$(guard "$THIS_SHELL" TERM --env-path PATH "$inside")" "a variable that is not on the list"
+  expect_refused "$(guard "$THIS_SHELL" TERM --env-path FM_HOME "$$")" "the test script by --env-path"
+  expect_refused "$(guard "$THIS_SHELL" TERM --env-path FM_HOME 1)" "pid 1 by --env-path"
+  pass "--env-path accepts only a listed variable holding a path under this run's roots"
+}
+
+# --send takes its caller from its own parent; in log-only mode it records an
+# accepted target and sends nothing, and a refused target exits 1 unsent.
+test_send_logs_only_in_log_only_mode() {
+  local release child rc
+  release="$TMP_ROOT/send.release"
+  # shellcheck disable=SC2016 # $1 expands in the child's own shell.
+  sh -c 'while [ ! -e "$1" ]; do sleep 0.05; done' "$release" &
+  child=$!
+  rc=0
+  FM_TEST_SIGNAL_DRY_RUN=1 FM_TEST_SIGNAL_LOG="$TMP_ROOT/send.log" "$GUARD" --send send-case TERM --identity "$child" >/dev/null || rc=$?
+  expect_code 0 "$rc" "a log-only send of an accepted target"
+  kill -0 "$child" 2>/dev/null || fail "a log-only send signalled its target"
+  assert_grep "source=send-case | raw: argc=3 [TERM] [--identity] [$child]" "$TMP_ROOT/send.log" "the log-only send did not record its raw arguments"
+  rc=0
+  FM_TEST_SIGNAL_DRY_RUN=1 FM_TEST_SIGNAL_LOG="$TMP_ROOT/send.log" "$GUARD" --send send-case TERM --identity 1 >/dev/null || rc=$?
+  expect_code 1 "$rc" "a refused target"
+  : > "$release"
+  wait "$child" 2>/dev/null || true
+  pass "--send records and sends nothing in log-only mode, and exits 1 on a refusal"
+}
+
 fm_test_run \
   test_forms_without_one_explicit_pid_are_refused \
+  test_identity_needs_evidence_of_this_run \
+  test_groups_and_members_are_judged_by_their_leader_and_members \
+  test_env_path_reads_only_a_listed_variable_under_a_run_root \
+  test_send_logs_only_in_log_only_mode \
   test_the_suite_its_parent_and_the_user_manager_are_refused \
   test_only_a_recorded_child_of_the_signalling_shell_is_accepted \
   test_the_log_shows_raw_arguments_target_and_ancestry \

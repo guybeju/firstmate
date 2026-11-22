@@ -76,8 +76,8 @@ extension_test_cleanup() {
   [ -z "$registry_race_pid" ] || kill -TERM "$registry_race_pid" 2>/dev/null || true
   [ -z "$leaf_race_pid" ] || kill -TERM "$leaf_race_pid" 2>/dev/null || true
   [ -z "$owner_retire_pid" ] || kill -TERM "$owner_retire_pid" 2>/dev/null || true
-  [ -z "$owner_worker_pid" ] || kill -CONT "$owner_worker_pid" 2>/dev/null || true
-  [ -z "$owner_worker_pid" ] || kill -KILL "$owner_worker_pid" 2>/dev/null || true
+  [ -z "$owner_worker_pid" ] || fm_test_signal_try CONT --env-path FM_HOME "$owner_worker_pid" || true
+  [ -z "$owner_worker_pid" ] || fm_test_signal_try KILL --env-path FM_HOME "$owner_worker_pid" || true
   [ -z "$owner_register_pid" ] || kill -TERM "$owner_register_pid" 2>/dev/null || true
   [ -z "$signal_worker_pid" ] || fm_test_signal_try CONT --identity "$signal_worker_pid" || true
   [ -z "$signal_worker_pid" ] || fm_test_signal_try KILL --identity "$signal_worker_pid" || true
@@ -1654,7 +1654,7 @@ FM_HOME="$H_LOCK_OWNER" "$PROCEVENT" register-extension ext-lock-owner owner-sou
 owner_register_pid=$!
 sleep 0.2
 kill -0 "$owner_register_pid" 2>/dev/null || fail "wrapper death released a live retirement worker's lifecycle lock"
-kill -KILL "$owner_worker_pid" 2>/dev/null || true
+fm_test_signal_try KILL --env-path FM_HOME "$owner_worker_pid" || true
 wait "$owner_worker_pid" 2>/dev/null || true
 owner_worker_pid=
 owner_register_rc=0

@@ -10,6 +10,7 @@
 #   <pid>                                         a recorded child of the caller
 #   --below <recorded-pid> <command-glob> <stand-in-pid>
 #   --identity <pid>                              a process with evidence of this run
+#   --env-path <NAME> <pid>                       a process whose listed variable holds a run path
 #   --group <leader-pid>                          a group whose live leader has evidence
 #   --members <group-id>                          each live member of a group, one by one
 #
@@ -64,6 +65,16 @@
 #             platform binary's environment, so that evidence is absent there);
 #   ancestry  walking up its parents reaches FM_TEST_SUITE_PID.
 # Depth and parentage alone are never evidence.
+#
+# --env-path is the fourth supplement of P-010: a process whose ancestry is
+# gone and whose command line carries no run path, but whose environment
+# variable <NAME> holds a path inside a run root (the root itself or below it,
+# compared at a directory boundary). <NAME> must be one of the names written
+# here, FM_HOME or FM_EXTENSION_LIFECYCLE_LOCK; a new name needs security's
+# review. The guard reads the target's environment itself before the send
+# (Linux /proc/<pid>/environ; elsewhere ps -E) and refuses when it cannot. The
+# record names only that variable and its value. The standing refusals of
+# --identity come first.
 #
 # --group names a process group by its leader. The leader must be alive, pass
 # the --identity refusals, carry path or ancestry evidence (the environment
@@ -261,27 +272,63 @@ ancestry_evidence() {  # <pid>: 0 when walking up from it reaches the test scrip
   return 1
 }
 
-judge_identity() {  # <pid> [group]: prints the verdict on the --identity form.
+standing_refusal() {  # <pid>: prints why a target is refused whatever its evidence, or nothing.
   identity_command=$(ps_field args "$1")
   if [ -z "$identity_command" ]; then
     echo "refused: pid $1 is not running"
-    return
-  fi
-  if [ "$1" -le 1 ]; then
+  elif [ "$1" -le 1 ]; then
     echo "refused: pid $1 is 1 or less"
+  elif [ "$1" = "${FM_TEST_SUITE_PID:-}" ]; then
+    echo "refused: pid $1 is the test script itself"
+  elif [ "$1" = "${FM_TEST_SUITE_PARENT:-}" ]; then
+    echo "refused: pid $1 is the test script's parent"
+  elif [ "$1" = "$self" ]; then
+    echo "refused: pid $1 is the signalling shell itself"
+  else
+    case "$(protected_chain)" in
+      *" $1 "*) echo "refused: pid $1 is an ancestor of the signalling shell $self at or above the test script"; return ;;
+    esac
+    case "$identity_command" in
+      *systemd*) echo "refused: pid $1 is the service manager '$identity_command'" ;;
+    esac
+  fi
+}
+
+run_root_holding() {  # <path>: prints the run root that <path> is, or lies under.
+  [ -n "${FM_TEST_RUN_ROOTS:-}" ] && [ -f "$FM_TEST_RUN_ROOTS" ] || return 0
+  while IFS= read -r root; do
+    case "$root" in /?*) ;; *) continue ;; esac
+    [ "$(sed -n '1p' "$root/.fm-test-fixture" 2>/dev/null)" = "${FM_TEST_SUITE_PID:-}" ] || continue
+    case "$1" in
+      "$root" | "$root"/*) printf '%s\n' "$root"; return 0 ;;
+    esac
+  done < "$FM_TEST_RUN_ROOTS"
+}
+
+judge_env_path() {  # <name> <pid>: prints the verdict on the --env-path form.
+  case "$1" in
+    FM_HOME | FM_EXTENSION_LIFECYCLE_LOCK) ;;
+    *) echo "refused: '$1' is not a variable --env-path may read (FM_HOME, FM_EXTENSION_LIFECYCLE_LOCK)"; return ;;
+  esac
+  refusal=$(standing_refusal "$2")
+  [ -z "$refusal" ] || { echo "$refusal"; return; }
+  environment=$(environment_of "$2")
+  if [ -z "$environment" ]; then
+    echo "refused: pid $2's environment cannot be read"
     return
   fi
-  case "$1" in
-    "${FM_TEST_SUITE_PID:-}") echo "refused: pid $1 is the test script itself"; return ;;
-    "${FM_TEST_SUITE_PARENT:-}") echo "refused: pid $1 is the test script's parent"; return ;;
-    "$self") echo "refused: pid $1 is the signalling shell itself"; return ;;
-  esac
-  case "$(protected_chain)" in
-    *" $1 "*) echo "refused: pid $1 is an ancestor of the signalling shell $self at or above the test script"; return ;;
-  esac
-  case "$identity_command" in
-    *systemd*) echo "refused: pid $1 is the service manager '$identity_command'"; return ;;
-  esac
+  value=$(printf '%s\n' "$environment" | sed -n "s/^$1=//p" | sed -n '1p')
+  root=$(run_root_holding "$value")
+  if [ -n "$value" ] && [ -n "$root" ]; then
+    echo "accepted $2 (evidence: env $1=$value under run root $root)"
+  else
+    echo "refused: pid $2's $1 is not a path under this run's temp roots"
+  fi
+}
+
+judge_identity() {  # <pid> [group]: prints the verdict on the --identity form.
+  refusal=$(standing_refusal "$1")
+  [ -z "$refusal" ] || { echo "$refusal"; return; }
   root=$(path_evidence "$1")
   if [ -n "$root" ]; then
     echo "accepted $1 (evidence: path $root in its command line)"
@@ -378,6 +425,18 @@ elif [ "${1-}" = --members ]; then
         exit "$sent_rc"
         ;;
     esac
+  fi
+elif [ "${1-}" = --env-path ]; then
+  shift
+  parse_pid "${2-}"
+  if [ "$#" -ne 2 ]; then
+    verdict="refused: --env-path takes one variable name and exactly one pid, got $# arguments"
+  elif [ -n "$pid_error" ]; then
+    verdict=$pid_error
+  else
+    target=$2
+    command=$(ps_field args "$target")
+    verdict=$(judge_env_path "$1" "$target")
   fi
 elif [ "${1-}" = --identity ] || [ "${1-}" = --group ]; then
   form=$1

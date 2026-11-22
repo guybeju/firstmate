@@ -466,6 +466,31 @@ fm_test_reap_root_processes() {  # <root>
   done
 }
 
+# fm_test_is_orphan <pid>: 0 when <pid> is alive and walking up its parents
+# never reaches this test script, so it was left behind by the run. That
+# holds wherever orphans go: pid 1, or a subreaper such as `systemd --user` on
+# a desktop session. It only reads the process table; nothing is signalled.
+fm_test_is_orphan() {
+  local pid=$1 levels=0
+  [ -n "$(ps -o pid= -p "$pid" 2>/dev/null)" ] || return 1
+  while [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && [ "$levels" -lt 64 ]; do
+    [ "$pid" != "$FM_TEST_SUITE_PID" ] || return 1
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')
+    levels=$((levels + 1))
+  done
+  return 0
+}
+
+# fm_test_root_orphans <root>: each orphan (fm_test_is_orphan) whose command
+# line names <root>/, as "<pid> <command>" lines.
+fm_test_root_orphans() {
+  local pid
+  for pid in $(fm_test_root_pids "${1%/}"); do
+    fm_test_is_orphan "$pid" || continue
+    printf '%s %s\n' "$pid" "$(ps -ww -o args= -p "$pid" 2>/dev/null)"
+  done
+}
+
 # fm_test_under_run_root <path>: 0 when <path> is inside a root this run made.
 fm_test_under_run_root() {
   local path root
