@@ -1322,6 +1322,34 @@ test_doctor_change_without_its_pin_fails_lint() {
   pass "fm-lint.sh fails a remote doctor change that leaves the entrypoint pin stale"
 }
 
+# The test tree's signal check (tests/check-signals.sh) runs in every lint
+# mode: a test file that signals a pid read from a file fails lint, and the
+# same tree without that file passes.
+test_signal_check_findings_fail_lint() {
+  local tmp fakebin repo mode out rc sig='kill'
+  tmp=$(fm_test_tmproot fm-lint-signal-check)
+  fakebin=$(fm_fakebin "$tmp")
+  repo="$tmp/repo"
+  fm_lint_doctor_pin_repo "$repo" "$fakebin"
+  cp "$ROOT/tests/check-signals.sh" "$repo/tests/check-signals.sh"
+
+  for mode in ci changed explicit; do
+    rc=0
+    out=$(fm_lint_doctor_pin_run "$repo" "$fakebin" "$mode") || rc=$?
+    [ "$rc" -eq 0 ] || fail "lint failed a clean test tree under the signal check ($mode mode)"$'\n'"$out"
+  done
+
+  printf '%s -TERM "$(cat "$home/state/x.pid")" || true\n' "$sig" > "$repo/tests/pidfile.test.sh"
+  for mode in ci changed explicit; do
+    rc=0
+    out=$(fm_lint_doctor_pin_run "$repo" "$fakebin" "$mode") || rc=$?
+    [ "$rc" -ne 0 ] || fail "lint passed a test that signals a pid read from a file ($mode mode)"$'\n'"$out"
+    assert_contains "$out" "tests/pidfile.test.sh:1: a signal to a pid read from a file outside the guarded helper" \
+      "lint did not name the signal check's finding ($mode mode)"
+  done
+  pass "fm-lint.sh fails a test that signals a computed target outside the guarded helper"
+}
+
 test_doctor_pin_check_refuses_an_unreadable_pin() {
   local tmp fakebin repo case_name expected out rc
   for case_name in missing-pin duplicate-pin missing-doctor; do
@@ -2178,6 +2206,7 @@ test_rejects_direct_beads_cli_invocations
 test_rejects_direct_beads_cli_in_explicit_core_path
 test_doctor_change_without_its_pin_fails_lint
 test_doctor_pin_check_refuses_an_unreadable_pin
+test_signal_check_findings_fail_lint
 test_ignores_ambient_shellcheck_opts
 test_clean_fixture_passes
 test_jobs_are_deterministic_and_complete
