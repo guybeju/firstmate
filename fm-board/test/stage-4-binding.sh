@@ -5,8 +5,8 @@
 # the board runs it without a confirmation even though its group may write
 # it. fm-board.sh setup writes the binding; in a home set up before the board
 # read one, the session-start hook writes it and replaces the running board,
-# which then reads the home through fm-board.sh feed. fm-board.sh tag, adopt
-# and split write a missing binding too, feed and deliver never do, and an
+# which then reads the home through fm-board.sh feed. fm-board.sh tag and
+# split write a missing binding too, feed and deliver never do, and an
 # empty file at that path stays and runs nothing. Everything runs on a scratch
 # home with its own port, in a clean environment.
 # shellcheck disable=SC2016 # jq filters are literal text.
@@ -129,11 +129,10 @@ test_board_commands_write_a_missing_binding() {
   local out sub
   run "$CODE/bin/myshape.sh" open >/dev/null || fail "the board did not start"
   run "$CODE/bin/myshape.sh" create "綁定" --goal "g" --id bound-topic >/dev/null || fail "create failed"
-  for sub in tag adopt split; do
+  for sub in tag split; do
     rm "$MAIN/config/myshape-aggregator.json"
     case "$sub" in
       tag) out=$(run "$CODE/bin/fm-board.sh" tag job-1 bound-topic 2>&1) ;;
-      adopt) out=$(run "$CODE/bin/fm-board.sh" adopt 2>&1) ;;
       split) out=$(run "$CODE/bin/fm-board.sh" split bound-topic "綁定二" --goal "g" --id bound-two job-1 2>&1) ;;
     esac
     assert_contains "$out" "看板的 aggregator 設定原本不在，已寫好：firstmate（config/myshape-aggregator.json）" \
@@ -142,7 +141,7 @@ test_board_commands_write_a_missing_binding() {
   done
   out=$(run "$CODE/bin/fm-board.sh" tag job-2 bound-topic 2>&1)
   assert_not_contains "$out" "原本不在" "a binding that is there must not be written again"
-  pass "a deleted binding comes back at the next fm-board.sh tag, adopt or split, with one line saying so"
+  pass "a deleted binding comes back at the next fm-board.sh tag or split, with one line saying so"
 }
 
 test_feed_and_deliver_never_write_the_binding() {

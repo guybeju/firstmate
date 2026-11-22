@@ -33,18 +33,10 @@
 # open). A board that is not running, including one stopped on purpose with
 # myshape.sh stop, is started.
 #
-# After printing its line, once the board runs, it also runs
-# bin/fm-board.sh adopt, so hands-on holds from before the board kept hands-on
-# items reach the board even when no page is open. adopt calls the board only
-# when there is something to adopt; when it does, that board command replaces
-# a board running older code like any other.
-#
 # Costs: one myshape.sh status when the board is running, after one
 # fm-board.sh bind when the binding is missing. Otherwise also one
 # myshape.sh open, whose stdout carries the board's access token and is
-# discarded unread. Then one fm-board.sh adopt, bounded at ADOPT_BOUND
-# seconds, its output discarded; a pass cut short is finished by the board's
-# next read of the main home. status is bounded at STATUS_BOUND seconds and open at
+# discarded unread. status is bounded at STATUS_BOUND seconds and open at
 # START_BOUND seconds, which covers replacing a hung board (a 3-second health
 # check twice, a 5-second kill grace, 10 seconds for readiness). A longer wait,
 # such as another command holding the board's start lock for up to 30 seconds,
@@ -61,7 +53,6 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 STATUS_BOUND=10
 START_BOUND=30
-ADOPT_BOUND=15
 RUNNING_LINE='看板服務：在跑'
 HUNG_LINE='看板服務：沒有回應'
 
@@ -85,10 +76,6 @@ start_failure_reason() {  # <rc> <text>
   printf '%s\n' "$reason"
 }
 
-adopt() {
-  fm_run_timed "$ADOPT_BOUND" "$SCRIPT_DIR/fm-board.sh" adopt >/dev/null 2>&1 || true
-}
-
 main() {
   local status_out first err rc=0 bound=0
   fm_root_is_secondmate_home "$FM_HOME" && return 0
@@ -104,7 +91,6 @@ main() {
   IFS= read -r first <<< "$status_out" || true
   if [ "$first" = "$RUNNING_LINE" ] && [ "$bound" -eq 0 ]; then
     printf '%s\n' "$RUNNING_LINE"
-    adopt
     return 0
   fi
   err=$(fm_run_timed "$START_BOUND" "$SCRIPT_DIR/myshape.sh" open 2>&1 >/dev/null) || rc=$?
@@ -118,7 +104,6 @@ main() {
   else
     printf '%s\n' '看板服務：原本沒在跑，已啟動'
   fi
-  adopt
 }
 
 main

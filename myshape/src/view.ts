@@ -85,7 +85,7 @@ export interface QueuedView {
 export interface TodoView {
   task: string;
   title: string;
-  /** Its topic now (merges followed), or null for an adopted item that had none. */
+  /** Its topic now (merges followed), or null for an item an older board adopted without one. */
   topic: string | null;
   what: string;
   guidance: string;

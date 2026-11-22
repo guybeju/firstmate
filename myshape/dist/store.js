@@ -433,7 +433,6 @@ function parseItem(raw) {
         by: textField(raw, "by"),
         ref: textField(raw, "ref"),
         captain_closes: raw["captain_closes"] === true,
-        adopted: raw["adopted"] === true,
         created_at: textField(raw, "created_at"),
     };
 }
@@ -448,7 +447,6 @@ function parseTodoStore(raw) {
             store.items[id] = item;
     }
     store.marks = parseTodos(raw["marks"]);
-    store.closed = isRecord(raw["closed"]) ? stringRecord(raw["closed"]) : {};
     return store;
 }
 const SHA256 = /^[0-9a-f]{64}$/;

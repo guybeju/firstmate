@@ -876,7 +876,7 @@ describe("a change and its record survive a crash between them", () => {
     ]);
   });
 
-  function itemChange(board: StoredBoard, adopt = false) {
+  function itemChange(board: StoredBoard, topics = board.topics) {
     const input = {
       id: "vpn",
       title: "登入 VPN",
@@ -886,9 +886,8 @@ describe("a change and its record survive a crash between them", () => {
       commands: [],
       ref: "",
       captainCloses: false,
-      adopt,
     };
-    const added = addItem(board.todos, board.topics, input, "T", { name: "fm", label: "plain" });
+    const added = addItem(board.todos, topics, input, "T", { name: "fm", label: "plain" });
     if (!added.ok || !added.changed) throw new Error("expected a change");
     const claimed = claimItem(added.store, "vpn", "T", "plain");
     if (!claimed.ok || !claimed.changed) throw new Error("expected a change");
@@ -970,8 +969,12 @@ describe("a change and its record survive a crash between them", () => {
     expect(refused).toEqual({ ok: false, line: "看板寫不進紀錄（disk full），這次的修改沒有做" });
     expect(fs.readFileSync(paths.topics, "utf8")).toBe(before);
     failing = false;
-    // A hands-on change next: topics.json's waiting record still reaches the journal first.
-    const { added } = itemChange(board, true);
+    // A hands-on change next, under a topic still live: topics.json's waiting record still
+    // reaches the journal first.
+    const { added } = itemChange(
+      board,
+      done(create(emptyState(), { name: "A", goal: "g", id: "a" }, "T")),
+    );
     const next = commitChange(
       target,
       board,
@@ -982,7 +985,7 @@ describe("a change and its record survive a crash between them", () => {
     expect(boardLines().map((line) => line.kind)).toEqual([
       "topic.created",
       "topic.archived",
-      "todo.adopted",
+      "todo.opened",
     ]);
   });
 

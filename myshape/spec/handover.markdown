@@ -29,7 +29,7 @@
 (cd myshape && pnpm install --frozen-lockfile)   # 只有第一次；check-dist.sh、單元測試與型別都要它
 myshape/test/run.sh            # 第一到五段與第七段，十四個腳本
 myshape/test/run.sh 1          # 只跑第一段；可以列多個數字（第六段搬到 fm-board/test）
-fm-board/test/run.sh               # first mate 這一側：feed、deliver、adopt、tag、setup、--in-home、帶 task 的 split、規則、安裝說明
+fm-board/test/run.sh               # first mate 這一側：feed、deliver、tag、setup、--in-home、帶 task 的 split、舊的要你動手、規則、安裝說明
 dispatch-plan/test/run.sh          # first mate 這一側：order
 bash myshape/test/stage-4-writes.sh   # 單跑一個腳本
 bash myshape/test/check-dist.sh       # dist/ 是不是 src/ 編出來的
@@ -191,7 +191,7 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
   - 誰寫了一行議題標記、為什麼：用指令做的歸併在議題頁顯示成「歸到「X」（first mate 用指令）」，時間取自標記檔，寫的是當時讀到的 aggregator 名稱，secondmate 自己做的也這樣寫；
   - `fm-tasks-axi.sh` 對排隊項目的 hold 與 unhold；
   - 遠端 secondmate 的 home 在兩次讀取之間（約 60 秒）發生的事。
-- 沒有議題的「要你動手」項目（看板存項目之前搬上來、原本就沒有議題的）關掉之後，紀錄存在 `events.jsonl`，但頁面上沒有地方列它們；`todo.forgotten`、`todo.settled`、`todo.marks_carried` 也沒有議題，同樣只在檔裡。
+- 沒有議題的「要你動手」項目（看板存項目之前搬上來、原本就沒有議題的）關掉之後，紀錄存在 `events.jsonl`，但頁面上沒有地方列它們；`todo.marks_carried` 與較早的看板寫的 `todo.forgotten`、`todo.settled` 也沒有議題，同樣只在檔裡。
 - `find` 平常每個議題只印最近八筆來歷（`--all` 印全部）；移動與改目標記在來歷裡，但只有 `--all` 才印，所以不會把合併、拆分擠掉；來歷不記建立議題；`split` 不帶 task 會建一個空議題，新名稱可以和來源相同。
 - `install-rules` 會換掉結束標記之後同一行的文字（有備份）；別處有一行以標記開頭時拒絕安裝（C37）。
 - 程式退回沒有 `history` 或 `todos` 欄位的舊版時，下一次存檔會丟掉這兩個欄位（見 [rollout](rollout.markdown)）；退回看板自己存項目之前的版本時，看板上的項目不會顯示（`data/myshape/todos.json` 留著，回到新版又會出現）。

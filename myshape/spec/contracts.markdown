@@ -18,7 +18,7 @@
 - **未分類區**：還需要一個議題的東西：沒有有效標記、還在跑的 agent，沒有歸屬的待決事項、worker 提問與這些 agent 的摘要，沒標議題的排隊項目。
   已經結束、沒有有效標記的 agent 與它們的摘要摺在最後的「已結束、沒標議題 N」，仍可歸併（C53）。
 - **要你動手的項目**：要使用者親手做的事（sudo 指令、登入）。看板自己存在 `data/myshape/todos.json`（第 3.6 節）：要做什麼（一行）、可以沒有的說明（不是指令，沒有複製鈕），與零到多個指令，每個原樣保存（C54）。aggregator 用 `myshape.sh todo add` 放上看板，每個項目在一個議題底下。
-  看板存項目之前，first mate 的項目是主 home 原因以 `動手：` 開頭的 captain hold；first mate 那一側把它們搬上看板（[adapter](../../fm-board/spec/adapter.markdown) 第 3.3 節），看板自己不再讀 hold 的文字。
+  看板存項目之前，first mate 的項目是主 home 原因以 `動手：` 開頭的 captain hold；舊版的 first mate 那一側把它們搬上看板，現在這種 hold 和其他 captain hold 一樣是待決事項（[adapter](../../fm-board/spec/adapter.markdown) 第 3.3 節）。看板自己不讀 hold 的文字。
 - **待決事項**：等使用者回答的 captain hold。**worker 提問**是狀態行裡的 `needs-decision`，對象是 first mate，看板只列出、不能作答。
 - **燈號**：待你決定、卡住、進行中、完成、未知，共五種。
 - **直送**：從看板把訊息送給某一個 agent，不經主 first mate。
@@ -138,9 +138,10 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
   `rid` 是這筆紀錄的 id，補寫時用它去重；`by` 是看板能證明的做的人：`captain` 是頁面上拿著 token 的人做的，`aggregator` 是經 socket 的指令做的，`board` 是看板啟動時自己做的。這兩個欄位之前寫下的紀錄沒有。
   議題的 `kind`：`topic.created`、`topic.confirmed`、`topic.merged`、`topic.split`、`topic.close_proposed`、`topic.kept`（使用者按了先不關）、`topic.archived`、`topic.reopened`、`topic.moved`、`topic.renamed`、`topic.goal_changed`。頁面上做的 `text` 結尾是「（你在頁面上）」，指令做的是「（<aggregator 的名稱> 用指令）」。
   頁面上的寫入送到之後：`agent.tagged`（歸併）、`hold.answered`（在看板作答，`outcome` 是答案的選項）；作答時那個待決事項已經在別處結束（結果是 `handled_elsewhere`）寫 `hold.closed`，`outcome` 是 `elsewhere`。
-- 要你動手的項目每一步都寫一筆系統紀錄，在項目的議題底下（沒有議題的項目 `topic` 是 `null`），`home` 與 `task` 都是 `null`，標題寫在 `text` 裡。另帶 `item`（項目 id），關掉的另帶 `outcome`（`done`、`dropped`、`taken_down`、`elsewhere`），帶原因的另帶 `reason`。
-  `kind`：`todo.opened`（放上看板）、`todo.rewritten`（內容改寫，回到還沒做）、`todo.adopted`（從看板存項目之前的紀錄搬上來）、`todo.claimed`（使用者按了做完了）、`todo.rejected`（驗證沒過）、`todo.obsolete`（不再需要，等使用者撤下）、`todo.done`（做完了，驗證過）、`todo.dropped`（使用者按了不做了）、`todo.taken_down`（撤下：aggregator 撤下不再需要的、使用者按了好，撤下，或搬上來的項目的 hold 已在別處關掉，`outcome` 是 `elsewhere`）。
-  另有三種沒有議題的紀錄：`todo.forgotten`（`todo adopt-done` 清掉一個沒搬上看板、hold 已在別處關掉的舊狀態，帶它的 `reason`）、`todo.settled`（看板上關掉的搬上來的項目，它的 hold 也關了，之後可以再放上看板）、`todo.marks_carried`（看板第一次自己存項目時，從 `topics.json` 帶過來舊狀態）。
+- 要你動手的項目每一步都寫一筆系統紀錄，在項目的議題底下（沒有議題的項目 `topic` 是 `null`），`home` 與 `task` 都是 `null`，標題寫在 `text` 裡。另帶 `item`（項目 id），關掉的另帶 `outcome`（`done`、`dropped`、`taken_down`），帶原因的另帶 `reason`。
+  `kind`：`todo.opened`（放上看板）、`todo.rewritten`（內容改寫，回到還沒做）、`todo.claimed`（使用者按了做完了）、`todo.rejected`（驗證沒過）、`todo.obsolete`（不再需要，等使用者撤下）、`todo.done`（做完了，驗證過）、`todo.dropped`（使用者按了不做了）、`todo.taken_down`（撤下：aggregator 撤下不再需要的，或使用者按了好，撤下）。
+  另有一種沒有議題的紀錄：`todo.marks_carried`（看板第一次自己存項目時，從 `topics.json` 帶過來舊狀態）。
+  較早的看板還寫過 `todo.adopted`（從看板存項目之前的紀錄搬上來）、`outcome` 是 `elsewhere` 的 `todo.taken_down`（搬上來的項目的 hold 已在別處關掉），與沒有議題的 `todo.forgotten`、`todo.settled`；存下的這些紀錄照樣讀、照樣顯示它們的 `text`。
   `text` 例：「要你動手「登入 VPN」已關：做完了，first mate 已驗證（first mate 用指令）」、「要你動手「登入 VPN」：你按了做完了（你在頁面上）」。
   `topic.confirmed` 只在看板啟動時確認舊版留下的提議時寫，封存檔裡的也寫（第 3.1 節）；更早寫下的照樣顯示。
 - 看板接上 aggregator 的兩種紀錄，都沒有議題，`home` 與 `task` 是 `null`（第 7 節）：`program.confirmed`（使用者在頁面上確認看板可以執行一支程式，`by` 是 `captain`，`text` 寫出完整路徑、角色與 SHA-256，例如「確認看板可以執行 /opt/agg/plain（feed、deliver；SHA-256 …）（你在頁面上）」），與 `writes.released`（等著的寫入交給 deliver 的程式之前，`by` 是 `board`，`text` 寫出依序放行的 id，例如「接上 plain，依序送出等著的 2 筆：w-…、w-…」）。
@@ -184,20 +185,18 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
       "title": "登入 VPN", "topic": "solo", "action": "用公司帳號登入 VPN",
       "guidance": "只在公司網路外", "commands": ["sudo openconnect vpn.example.com"],
       "state": "open", "reason": null, "at": "2026-11-20T02:00:00Z",
-      "by": "firstmate", "ref": "", "captain_closes": false, "adopted": false,
+      "by": "firstmate", "ref": "", "captain_closes": false,
       "created_at": "2026-11-20T02:00:00Z"
     }
   },
-  "marks": { "old-id": { "state": "claimed", "at": "2026-11-17T03:00:00Z" } },
-  "closed": { "nas-2fa": "2026-11-20T03:00:00Z" }
+  "marks": { "old-id": { "state": "claimed", "at": "2026-11-17T03:00:00Z" } }
 }
 ```
 
-- `items` 是還在看板上的項目，鍵是項目 id（議題 id 的文法，最長 128 字元，由放上看板的一方選）。`title`（一行，最多 200 字）、`action`（一行，最多 1000 字）、`commands`（最多 50 個）一定有，一行的欄位不能有控制字元或改變文字方向的字元；`guidance` 可以是空字串，`commands` 可以是空陣列，每個指令原樣保存。`topic` 是放上看板時的議題 id（合併後顯示時跟到新的 id），只有搬上來、原本沒有議題的項目是 `null`。`state` 是 `open`、`claimed`、`rejected`、`obsolete`；`reason` 是 `rejected` 與 `obsolete` 的一行原因。`by` 是放上看板時 aggregator 的名字。`ref` 是 aggregator 自己選的不透明文字，最長 128 字元，看板只在通知裡原樣交回。`captain_closes` 是 `true` 的項目不再需要時要等使用者按「好，撤下」，不會直接撤下。`adopted` 是 `true` 的項目是用 `--adopt` 放上來的，也就是 aggregator 在看板存項目之前就有的。
+- `items` 是還在看板上的項目，鍵是項目 id（議題 id 的文法，最長 128 字元，由放上看板的一方選）。`title`（一行，最多 200 字）、`action`（一行，最多 1000 字）、`commands`（最多 50 個）一定有，一行的欄位不能有控制字元或改變文字方向的字元；`guidance` 可以是空字串，`commands` 可以是空陣列，每個指令原樣保存。`topic` 是放上看板時的議題 id（合併後顯示時跟到新的 id），只有較早的看板搬上來、原本沒有議題的項目是 `null`。`state` 是 `open`、`claimed`、`rejected`、`obsolete`；`reason` 是 `rejected` 與 `obsolete` 的一行原因。`by` 是放上看板時 aggregator 的名字。`ref` 是 aggregator 自己選的不透明文字，最長 128 字元，看板只在通知裡原樣交回。`captain_closes` 是 `true` 的項目不再需要時要等使用者按「好，撤下」，不會直接撤下。
 - 項目關掉就從 `items` 拿掉；它的每一步都在 `events.jsonl` 有紀錄（第 3.3 節）。
-- `marks` 是看板第一次以這個格式啟動時，從 `topics.json` 的 `todos` 帶過來、還沒有項目的狀態；同一個 id 的項目用 `--adopt` 搬上看板時接手那個狀態。
-- `todo adopt-done <id>…` 結束一輪搬移，給的是 aggregator 那邊還開著的舊項目：不在其中的等著的狀態清掉（`todo.forgotten`），不在其中的搬上來的項目離開看板，留一筆 `outcome` 是 `elsewhere` 的紀錄、不發通知。
-- `closed` 是搬上來的項目（`adopted`）在看板上關掉、而 aggregator 那邊還報它開著的時間；在那之前同一個 id 的 `--adopt` 不會把它放回看板，`todo adopt-done` 不再列它時就忘掉（`todo.settled`）。
+- `marks` 是看板第一次以這個格式啟動時，從 `topics.json` 的 `todos` 帶過來、還沒有項目的狀態；`topics.json` 的 `todos` 照樣發布它們，同一個 id 放上看板時拿掉。
+- 較早的看板寫的檔另有項目的 `adopted` 與最上層的 `closed`：讀的一方略過，下一次寫這個檔時就沒有了；那樣的項目照一般的項目顯示、關掉。
 - `outbox` 是最後一次要你動手的改動寫的系統紀錄，和 `topics.json` 的 `outbox` 一樣（第 3.1、3.3 節）。
 - `v` 是 1 的期間，上面列的欄位意思不變；讀的一方略過不認得的欄位。沒有這個檔的看板第一次啟動時，`topics.json` 有狀態就立刻建立它，寫一筆 `todo.marks_carried`；沒有的話第一次改項目時才建立，和看板其他的檔一樣，只是啟動不會在 home 裡多出檔。
 
@@ -297,7 +296,7 @@ first mate 這一側怎麼產生這份回報（`fm-topic-board-read.sh` 讀 back
 
 `state/myshape/board.sock`，0600，不帶 token。一條連線一個要求：client 送一行 JSON `{"v":1,"op":"<名稱>","args":{…}}`，服務回一行 JSON `{"ok":true,"line":"<要印的那一行>",…}` 或 `{"ok":false,"code":"refused|usage|…","line":"<原因與修法>"}`，然後關閉連線。
 
-`op` 的清單：`health`、`status`、`stop`、`create`、`merge`、`close-propose`、`move`、`rename`、`split`、`goal`、`archive`、`reopen`、`summary`、`which`、`find`、`todo-add`、`todo-done`、`todo-failed`、`todo-obsolete`、`todo-adopt-done`、`reset-token`。
+`op` 的清單：`health`、`status`、`stop`、`create`、`merge`、`close-propose`、`move`、`rename`、`split`、`goal`、`archive`、`reopen`、`summary`、`which`、`find`、`todo-add`、`todo-done`、`todo-failed`、`todo-obsolete`、`reset-token`。
 改動看板的操作全部列在一張表裡（`myshape/src/ops.ts` 的 `OPERATIONS`）：哪條通道可以用、經哪個檔存（第 3.3 節）。socket 與頁面都只經這張表改看板，每一個改動都至少寫一筆系統紀錄，沒有紀錄的改動編譯不過。
 `keep`（頁面的「先不關」）、`todo-claim`（「做完了」）、`todo-drop`（「不做了」）與 `todo-takedown`（「好，撤下」）是使用者自己按的，socket 收到就拒絕，什麼都不改；它們只在頁面的 API 上。
 `todo-*` 的操作不等讀取：aggregator 可能正是在看板讀它的時候送來的。
@@ -417,7 +416,7 @@ deliver 的程式能執行之後，`waiting` 的寫入照稽核紀錄的順序�
 - `answer` 的 `mode` 照 hold 記下的處理方式（第 8 節），不是使用者選的；`question_sha256` 是問題全文的 SHA-256。
 - `tag` 的 `last_tag_line` 是看板送出時看到的那個 task 最後一行議題標記，沒有就是空字串。重試之前看板先重讀那個 home：標記已經是這個議題就算送達，已經被別人改成別的就算別處已處理。
 - `notice` 的 `event`：`topic.dispatchable`（議題離開「待辦」或重開，之後 30 秒沒再動）、`topic.merged`、`topic.archived`、`topic.kept`（先不關）、`topic.confirmed`（舊版留下的提議在啟動時確認）、`todo.claimed`（使用者按了做完了）、`todo.closed`（一個要你動手的項目離開看板）。`text` 寫的是發生了什麼，例如「議題「帳務」重開，排在「高」最後，現在可派」，不寫要跑什麼。
-- 要你動手的通知帶 `item`：項目的 `id`、`title`，與放上看板時給的 `ref`（沒給是空字串）。`todo.closed` 另帶 `by`（`captain` 是使用者在頁面上按的，`aggregator` 是 aggregator 自己的 `todo done` 或 `todo obsolete`）與 `words`（`做完了`、`不做了`、`撤下`）。項目在 hold 已在別處關掉時離開看板，不發通知。
+- 要你動手的通知帶 `item`：項目的 `id`、`title`，與放上看板時給的 `ref`（沒給是空字串）。`todo.closed` 另帶 `by`（`captain` 是使用者在頁面上按的，`aggregator` 是 aggregator 自己的 `todo done` 或 `todo obsolete`）與 `words`（`做完了`、`不做了`、`撤下`）。
 - 看板在有動作紀錄之前寫下的寫入（稽核紀錄裡帶 `plan` 而不是 `action` 的那些）不再讀：讀稽核紀錄時略過，不接著送，頁面上也不列，所以不會顯示成沒送完。
 
 `deliver` 在 stdout 印一行結果：

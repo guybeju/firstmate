@@ -2,7 +2,7 @@
 # fm-topic-board-read.sh - read-only summary of one home for the topic board.
 #
 # Usage:
-#   fm-topic-board-read.sh [--legacy-todos] [--closed-since <offset> <sha>] <ledger-offset> <prefix-sha256>
+#   fm-topic-board-read.sh [--closed-since <offset> <sha>] <ledger-offset> <prefix-sha256>
 #   fm-topic-board-read.sh --in-home <secondmate-id> [--closed-since <offset> <sha>] <ledger-offset> <prefix-sha256>
 #
 # Prints one JSON object describing this home: its tasks and their current
@@ -19,16 +19,6 @@
 # answering it does ("Captain hold on answer: close|release", from
 # fm-captain-hold.sh hold --on-answer), reported as on_answer, null when the
 # hold records neither value.
-#
-# The board keeps hands-on items itself, so the main home's captain holds
-# whose reason starts with 動手： (the items from before it did) are left out of
-# holds and queued; fm-board.sh adopts them onto the board. --legacy-todos
-# lists them instead under legacy_todos, as {id, title, question, origin,
-# since} (since: the hold's "Captain hold set:" time, or ""), for
-# that adoption, and leaves the key out when the snapshot found no backlog
-# file, so an adoption never reads a missing backlog as "no hold is open";
-# the board never sees that key. A secondmate home's holds of
-# that shape are ordinary decisions and stay.
 #
 # ledger.status is "delta" (lines follow), "absent" (no ledger file), or
 # "continuity-broken" (the ledger is shorter than <ledger-offset> or its first
@@ -51,8 +41,10 @@
 # is the row's count of resolution records; opened_at and closed_at are epoch
 # seconds from state/captain-hold-events.jsonl (fm-captain-hold.sh writes one
 # line per hold and resolution; the earliest line of that task, occurrence and
-# event), or null when the home has no such line. The main home's 動手： holds
-# are left out, as from holds.
+# event), or null when the home has no such line. The main home's closed
+# holds whose reason starts with 動手： are left out: those are hands-on items
+# from before the board kept them, whose close the board already recorded as
+# the item's own.
 # closed_cursor is the archive cursor to pass back as --closed-since:
 # {status, to_offset, to_prefix_sha256, more}. Without --closed-since the status
 # is "start" and the cursor is the archive's end, so the first read reports no
@@ -92,7 +84,7 @@ ARCHIVE_MAX_BYTES=262144
 
 usage_error() {
   printf '%s\n' "fm-topic-board-read.sh: $*" >&2
-  printf '%s\n' "usage: fm-topic-board-read.sh [--legacy-todos | --in-home <secondmate-id>] [--closed-since <offset> <sha>] <ledger-offset> <prefix-sha256>" >&2
+  printf '%s\n' "usage: fm-topic-board-read.sh [--in-home <secondmate-id>] [--closed-since <offset> <sha>] <ledger-offset> <prefix-sha256>" >&2
   exit 2
 }
 
@@ -370,14 +362,9 @@ check_cursor() {  # <offset> <prefix-sha256>
 }
 
 main() {
-  local offset prefix home is_secondmate=false ledger_enabled=false code_commit legacy=false
+  local offset prefix home is_secondmate=false ledger_enabled=false code_commit
   local closed_offset='' closed_prefix=-
-  if [ "${1:-}" = --legacy-todos ]; then
-    legacy=true
-    shift
-  fi
   if [ "${1:-}" = --in-home ]; then
-    [ "$legacy" = false ] || usage_error "--legacy-todos reads the main home only"
     [ "$#" -eq 4 ] || [ "$#" -eq 7 ] ||
       usage_error "--in-home needs a secondmate id, an offset, and a prefix hash"
     home=$(tb_local_secondmate_home "$DATA/secondmates.md" "$2") || exit 1
@@ -422,14 +409,10 @@ main() {
 
   jq -n --argjson schema "$SCHEMA" --arg code_commit "$code_commit" \
     --argjson ledger_enabled "$ledger_enabled" --argjson is_secondmate "$is_secondmate" \
-    --argjson legacy "$legacy" --arg marker "$TODO_MARKER" \
     --slurpfile snapshot "$WORK/snapshot" --slurpfile ledger "$WORK/ledger" \
     --slurpfile topics "$WORK/topics" --slurpfile secondmates "$WORK/secondmates" \
     --slurpfile closed "$WORK/closed" '
     $snapshot[0] as $snap
-    | def handson: ($is_secondmate | not) and .hold_kind == "captain" and ((.hold_reason // "") | startswith($marker));
-      ([ $snap.backlog.records[]
-         | select(.structured == true and .hold_kind == "captain" and .state != "done" and handson) ]) as $legacy_holds
     | {
         schema: $schema,
         code_commit: $code_commit,
@@ -442,7 +425,7 @@ main() {
                                 and .current_state.detail == "harness busy (fm-spawn)")} ],
         holds: [ $snap.backlog.records[]
                  | select(.structured == true and .hold_kind == "captain"
-                          and .hold_reason != null and .state != "done" and (handson | not))
+                          and .hold_reason != null and .state != "done")
                  | {id, title, question: .hold_reason, hold_bucket, hold_until,
                     unresolved_blocker_ids: (.unresolved_blocker_ids // []),
                     hold_age_days, hold_set: (.hold_set // null),
@@ -453,7 +436,7 @@ main() {
                                   | capture("^Captain hold on answer: (?<v>close|release)$")
                                   | .v ][0] // null)} ],
         queued: [ $snap.backlog.records[]
-                  | select(.structured == true and .state == "queued" and (handson | not))
+                  | select(.structured == true and .state == "queued")
                   | {id, kind: (.kind // ""), title: (.title // ""), hold: .hold_reason,
                      captain: (.hold_kind == "captain"),
                      blockers: (.unresolved_blocker_ids // []),
@@ -467,12 +450,6 @@ main() {
         ledger: $ledger[0]
       } + ($closed[0] // {})
     | if $is_secondmate then . else . + {secondmates: $secondmates[0]} end
-    | if $legacy and $snap.backlog.present == true then
-        . + {legacy_todos: [ $legacy_holds[]
-               | {id, title: (.title // ""), question: .hold_reason,
-                  origin: ([ (.body_lines // [])[] | capture("^Captain hold origin: (?<origin>.*)$") | .origin ][0] // ""),
-                  since: ([ (.body_lines // [])[] | capture("^Captain hold set: (?<at>.*)$") | .at ][0] // "")} ]}
-      else . end
   ' > "$WORK/output" || tb_die 1 "fm-topic-board-read.sh: could not assemble the output"
   cat "$WORK/output"
 }

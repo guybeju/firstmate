@@ -26,7 +26,7 @@
 # topics.json and is left with a message waiting for a retry; then this
 # working tree's board files are committed on top. The next command replaces
 # the service; its first start writes data/myshape/todos.json with that mark
-# waiting for adoption, topics.json still carries the mark for an older
+# kept as a waiting mark, topics.json still carries the mark for an older
 # reader, and the message reaches the stub once more and is delivered.
 #
 # Every change saves its record, B3 to the record guarantee: the B3 board

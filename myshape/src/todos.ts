@@ -11,7 +11,10 @@ export type ItemState = "open" | TodoState;
 /** One hands-on item, as `data/myshape/todos.json` stores it. */
 export interface TodoItem {
   title: string;
-  /** The topic it was put under (merges followed when shown); null only for an adopted item that had none. */
+  /**
+   * The topic it was put under (merges followed when shown); null only for an
+   * item an older board adopted from before it kept items, which had none.
+   */
   topic: string | null;
   action: string;
   guidance: string;
@@ -27,28 +30,20 @@ export interface TodoItem {
   ref: string;
   /** Only the captain's own press takes it down when it is no longer needed. */
   captain_closes: boolean;
-  /** Put on the board with --adopt: an item the aggregator kept before the board did. */
-  adopted: boolean;
   created_at: string;
 }
 
 export interface TodoStore {
   v: 1;
   items: Record<string, TodoItem>;
-  /** Marks carried over from topics.json's `todos`, waiting for their item to be adopted. */
+  /** Marks carried over from topics.json's `todos` at the board's first start of this file. */
   marks: Record<string, TodoMark>;
-  /**
-   * Adopted items closed on the board that the aggregator still reports open,
-   * with when: an adoption pass in that gap must not put them back. The next
-   * pass that no longer finds them open drops them.
-   */
-  closed: Record<string, string>;
 }
 
 export type CloseWords = "不做了" | "撤下";
 
 /** How an item left the page, on a closing record. */
-export type Outcome = "done" | "dropped" | "taken_down" | "elsewhere";
+export type Outcome = "done" | "dropped" | "taken_down";
 
 /**
  * One record about an item: every step writes one, under the item's topic
@@ -85,17 +80,13 @@ export type TodoResult =
 export interface TodoInput {
   id: string;
   title: string;
-  /** Required unless `adopt`; an adopted item may have none. */
+  /** Required: null is refused. */
   topic: string | null;
   action: string;
   guidance: string;
   commands: string[];
   ref: string;
   captainCloses: boolean;
-  /** An item that existed before the board kept items: a waiting mark becomes its state. */
-  adopt: boolean;
-  /** For an adopted item: when it was first opened, as the aggregator recorded it. */
-  since?: string;
 }
 
 /** Who made a change: the captain on the page, or the aggregator, by its label, through a command. */
@@ -111,7 +102,7 @@ const TEXT_MAX = 20_000;
 const COMMANDS_MAX = 50;
 
 export function emptyTodos(): TodoStore {
-  return { v: 1, items: {}, marks: {}, closed: {} };
+  return { v: 1, items: {}, marks: {} };
 }
 
 /** The id grammar topic ids and task ids share, at most 128 characters. */
@@ -179,20 +170,12 @@ export function shortTime(iso: string): string | null {
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-/**
- * The topic an item goes under. A new item needs a live topic. An adopted
- * one keeps where today's page shows it: a merged id is followed, an archived
- * topic is kept, and an id the board does not know, or none, is no topic.
- */
-function placeItem(
-  topics: Frozen<TopicState>,
-  input: TodoInput,
-): { topic: string | null } | string {
-  if (input.topic === null) return input.adopt ? { topic: null } : "需要 --topic <議題 id>。";
+/** The topic an item goes under: a live topic, a merged id followed. */
+function placeItem(topics: Frozen<TopicState>, input: TodoInput): { topic: string } | string {
+  if (input.topic === null) return "需要 --topic <議題 id>。";
   const id = resolveTopicId(topics.doc, input.topic);
   if (topics.doc.topics[id] !== undefined) return { topic: id };
-  if (!input.adopt) return `${input.topic} 不是看板上還開著的議題，沒有放上任何東西。`;
-  return { topic: topics.archive.topics[id] === undefined ? null : id };
+  return `${input.topic} 不是看板上還開著的議題，沒有放上任何東西。`;
 }
 
 /** The input's problem as a usage line, or null when it is well formed. */
@@ -206,7 +189,6 @@ function inputProblem(input: TodoInput): string | null {
     return "--cmd 後面要有內容。";
   if (input.ref.length > REF_MAX || /[\n\r]/.test(input.ref))
     return "--ref 要是一行，最多 128 個字。";
-  if (input.since !== undefined && shortTime(input.since) === null) return "--since 要是一個時間。";
   return null;
 }
 
@@ -224,19 +206,8 @@ function addedLine(id: string, topic: string | null): string {
   return `ok ${id} 已放上看板的「要你動手」（${topic === null ? "沒有議題" : `議題 ${topic}`}）`;
 }
 
-/** What the record of an add says: a new item, a rewrite, or an item adopted from before. */
-function addRecord(
-  next: TodoItem,
-  id: string,
-  input: TodoInput,
-  actor: Actor,
-  rewrite: boolean,
-): TodoRecord {
-  if (input.adopt) {
-    const since = input.since === undefined ? null : shortTime(input.since);
-    const when = since === null ? "" : `（原本 ${since} 開）`;
-    return record("todo.adopted", next, id, actor, `從 backlog 搬上看板${when}`);
-  }
+/** What the record of an add says: a new item or a rewrite. */
+function addRecord(next: TodoItem, id: string, actor: Actor, rewrite: boolean): TodoRecord {
   if (rewrite) return record("todo.rewritten", next, id, actor, "內容已改寫，回到還沒做");
   return record("todo.opened", next, id, actor, `已開：${next.action}`);
 }
@@ -244,8 +215,7 @@ function addRecord(
 /**
  * Puts an item on the board, or rewrites it. A rewrite of different text
  * starts over at "open": what was said about the old text no longer holds.
- * Repeating the same text changes nothing; so does adopting an item already
- * on the board.
+ * Repeating the same text changes nothing.
  */
 export function addItem(
   store: Frozen<TodoStore>,
@@ -260,13 +230,9 @@ export function addItem(
   if (typeof placed === "string") return input.topic === null ? usage(placed) : refused(placed);
   const current = itemOf(store, input.id);
   const line = addedLine(input.id, placed.topic);
-  if (input.adopt && current === undefined && Object.hasOwn(store.closed, input.id))
-    return unchanged(store, `ok ${input.id} 已在看板上關掉，等它的 hold 關掉`);
-  if (current !== undefined && (input.adopt || sameText(current, input, placed.topic)))
+  if (current !== undefined && sameText(current, input, placed.topic))
     return unchanged(store, line);
   const next = structuredClone(store) as TodoStore;
-  const mark =
-    input.adopt && Object.hasOwn(store.marks, input.id) ? store.marks[input.id] : undefined;
   delete next.marks[input.id];
   const item: TodoItem = {
     title: input.title.trim(),
@@ -274,18 +240,17 @@ export function addItem(
     action: input.action.trim(),
     guidance: input.guidance,
     commands: input.commands,
-    state: mark?.state ?? "open",
-    reason: mark?.reason ?? null,
-    at: mark?.at ?? now,
+    state: "open",
+    reason: null,
+    at: now,
     by: agent.name,
     ref: input.ref !== "" ? input.ref : (current?.ref ?? ""),
     captain_closes: input.captainCloses || (current?.captain_closes ?? false),
-    adopted: input.adopt || (current?.adopted ?? false),
-    created_at: current?.created_at ?? input.since ?? now,
+    created_at: current?.created_at ?? now,
   };
   next.items[input.id] = item;
   const actor: Actor = { by: "aggregator", label: agent.label };
-  return changed(next, line, [addRecord(item, input.id, input, actor, current !== undefined)]);
+  return changed(next, line, [addRecord(item, input.id, actor, current !== undefined)]);
 }
 
 function withState(
@@ -300,10 +265,9 @@ function withState(
   return next;
 }
 
-/** The store without the item; an adopted one is remembered as closed until its hold is. */
-function without(store: Frozen<TodoStore>, id: string, now: string): TodoStore {
+/** The store without the item. */
+function without(store: Frozen<TodoStore>, id: string): TodoStore {
   const next = structuredClone(store) as TodoStore;
-  if (next.items[id]?.adopted === true) next.closed[id] = now;
   delete next.items[id];
   return next;
 }
@@ -422,16 +386,11 @@ export function obsoleteItem(
     "aggregator",
     "撤下",
   );
-  return changed(without(store, id, now), `ok ${id} 已撤下（不再需要）`, [event], [notice]);
+  return changed(without(store, id), `ok ${id} 已撤下（不再需要）`, [event], [notice]);
 }
 
 /** The aggregator checked that the captain did it: the item is closed. */
-export function doneItem(
-  store: Frozen<TodoStore>,
-  id: string,
-  label: string,
-  now: string,
-): TodoResult {
+export function doneItem(store: Frozen<TodoStore>, id: string, label: string): TodoResult {
   const item = itemOf(store, id);
   if (item === undefined)
     return refused(`${id} 不是開著的「要你動手」項目，沒有關任何東西（已經關過的話不用再跑）。`);
@@ -446,12 +405,7 @@ export function doneItem(
     "aggregator",
     "做完了",
   );
-  return changed(
-    without(store, id, now),
-    `ok ${id} 已關（做完了，${label} 已驗證）`,
-    [event],
-    [notice],
-  );
+  return changed(without(store, id), `ok ${id} 已關（做完了，${label} 已驗證）`, [event], [notice]);
 }
 
 /**
@@ -463,7 +417,6 @@ export function closeByCaptain(
   id: string,
   words: CloseWords,
   label: string,
-  now: string,
 ): TodoResult {
   const item = itemOf(store, id);
   if (item === undefined) return notOpen(id);
@@ -483,90 +436,8 @@ export function closeByCaptain(
     "captain",
     words,
   );
-  return changed(without(store, id, now), `ok ${id} 已拿掉（${words}）`, [event], [notice]);
+  return changed(without(store, id), `ok ${id} 已拿掉（${words}）`, [event], [notice]);
 }
-
-/**
- * Ends an adoption pass. `open` is every item the aggregator still reports
- * open on its side. Each change leaves a record: an adopted item that is no
- * longer open there leaves the page (no notice: it was already closed
- * elsewhere), a waiting mark of an item never adopted is forgotten, and an
- * item closed on the board whose hold has now closed stops being held back.
- */
-export function adoptDone(store: Frozen<TodoStore>, open: string[], label: string): TodoResult {
-  const still = new Set(open);
-  const next = structuredClone(store) as TodoStore;
-  const records = [
-    ...retireAdopted(store, next, still, label),
-    ...forgetMarks(store, next, still, label),
-    ...settleClosed(store, next, still, label),
-  ];
-  const [first, ...rest] = records;
-  if (first === undefined) return unchanged(store, "ok adopt-done 沒有要清的");
-  const gone = records.filter((entry) => entry.kind === "todo.taken_down").length;
-  const marks = records.filter((entry) => entry.kind === "todo.forgotten").length;
-  return changed(
-    next,
-    `ok adopt-done 清掉 ${marks} 個等著的狀態，拿掉 ${gone} 個已在別處關掉的項目`,
-    [first, ...rest],
-  );
-}
-
-/** Takes the adopted items no longer open on the aggregator's side out of `next`. */
-function retireAdopted(
-  store: Frozen<TodoStore>,
-  next: TodoStore,
-  still: Set<string>,
-  label: string,
-): TodoRecord[] {
-  const actor: Actor = { by: "aggregator", label };
-  return Object.entries(store.items).flatMap(([id, item]) => {
-    if (!item.adopted || still.has(id)) return [];
-    delete next.items[id];
-    return [
-      record("todo.taken_down", item, id, actor, "已關：hold 已在別處關掉", {
-        outcome: "elsewhere",
-      }),
-    ];
-  });
-}
-
-/** Forgets in `next` the waiting marks of items never adopted whose hold is gone. */
-function forgetMarks(
-  store: Frozen<TodoStore>,
-  next: TodoStore,
-  still: Set<string>,
-  label: string,
-): TodoRecord[] {
-  return Object.entries(store.marks).flatMap(([id, mark]) => {
-    if (still.has(id)) return [];
-    delete next.marks[id];
-    const why = mark.reason === undefined ? {} : { reason: mark.reason };
-    const text = `要你動手 ${id} 沒搬上看板，hold 已在別處關掉，清掉它的舊狀態（${MARK_LABEL[mark.state]}）（${label} 用指令）`;
-    return [{ kind: "todo.forgotten" as const, topic: null, item: id, ...why, text }];
-  });
-}
-
-/** Stops holding back in `next` the items closed on the board whose hold has now closed. */
-function settleClosed(
-  store: Frozen<TodoStore>,
-  next: TodoStore,
-  still: Set<string>,
-  label: string,
-): TodoRecord[] {
-  return Object.keys(store.closed).flatMap((id) => {
-    if (still.has(id)) return [];
-    delete next.closed[id];
-    const text = `要你動手 ${id} 的 hold 已關掉，之後可以再放上看板（${label} 用指令）`;
-    return [{ kind: "todo.settled" as const, topic: null, item: id, text }];
-  });
-}
-
-const MARK_LABEL: Record<TodoState, string> = {
-  claimed: "說做完了",
-  rejected: "驗證沒過",
-  obsolete: "不再需要",
-};
 
 /**
  * The first start of a board that keeps items itself: topics.json's marks

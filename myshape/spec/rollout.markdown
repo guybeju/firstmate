@@ -59,12 +59,18 @@
 ## 之後怎麼更新
 
 - **看板有新版**：合併進 `carry` 並推上 fork，然後在主 home 跑 `/updatefirstmate`。下一個議題指令會發現服務的程式版本不同，自動換掉舊服務。
-- **看板改由設定檔接上 aggregator 的那一次**（C60）：主 home 沒有 `config/myshape-aggregator.json` 時，更新之後第一次 session start 替它寫好 first mate 的設定檔並換掉在跑的看板，`bin/fm-board.sh` 的 `tag`、`split`、`adopt` 在那之前跑到時也會先寫好，不用手動做什麼；一開始就用 `bin/fm-board.sh setup` 設定的新 home 也有。更新之後到第一個這種指令或 session start 之前，先跑的 `bin/myshape.sh` 指令會換上還沒有設定檔的看板：頁面寫「沒有接上 aggregator（沒有 config/myshape-aggregator.json）」，要送出的等著，之後自己接上、依序送出。關掉：在設定檔的路徑放一個空檔再 `bin/myshape.sh restart`，看板什麼程式都不執行、寫入等著（只刪掉會被寫回來）；退回那個 commit，看板又只執行寫死的 `bin/fm-board.sh`。
+- **看板改由設定檔接上 aggregator 的那一次**（C60）：主 home 沒有 `config/myshape-aggregator.json` 時，更新之後第一次 session start 替它寫好 first mate 的設定檔並換掉在跑的看板，`bin/fm-board.sh` 的 `tag`、`split` 在那之前跑到時也會先寫好，不用手動做什麼；一開始就用 `bin/fm-board.sh setup` 設定的新 home 也有。更新之後到第一個這種指令或 session start 之前，先跑的 `bin/myshape.sh` 指令會換上還沒有設定檔的看板：頁面寫「沒有接上 aggregator（沒有 config/myshape-aggregator.json）」，要送出的等著，之後自己接上、依序送出。關掉：在設定檔的路徑放一個空檔再 `bin/myshape.sh restart`，看板什麼程式都不執行、寫入等著（只刪掉會被寫回來）；退回那個 commit，看板又只執行寫死的 `bin/fm-board.sh`。
 - **上游有新版**：由 fleet 把上游的 `main` 合併進 `carry`（2026-11-17 起；原本寫的是看板開發用的 clone）。
   合併做在一個分支上：從 fork 的 `carry` 開分支，開發用的 clone 沒有上游的 remote，用網址直接 fetch 再合併（`git fetch https://github.com/kunchenguid/firstmate.git main && git merge FETCH_HEAD`），推這個分支，開一個 base 是 `carry` 的 PR，用「Create a merge commit」合併。
   不 squash、不 rebase，也不直接推到 `carry`：`carry` 的規則集 `carry-required-lint` 要求 `Lint 1` 與 `Lint 2` 兩個檢查通過、不能強推、不能刪除，略過名單是空的，所以沒通過這兩個檢查的 commit 推不上 `carry`。
   原因：fork 平常的 PR 是 squash 合併的；上游的那個 PR 要是也 squash，`carry` 就不再帶著上游的歷史，下一次合併上游又會在同樣的地方衝突，各 home 也沒辦法快轉。
   合併前跑一次看板與 first mate 這一側的全部驗收（`myshape/test/run.sh`、`fm-board/test/run.sh`、`dispatch-plan/test/run.sh`；特別是 `bin/fm-doc-audience-check.sh` 與 `bin/fm-test-run.sh --check-coverage`，上游可能改了它們的範圍），合併後跑 `/updatefirstmate`。
+- **拿掉看板存項目之前的過渡的那一次**：舊版的 first mate 把主 home 原因以 `動手：` 開頭的 captain hold 搬上看板（`bin/fm-board.sh adopt`，`feed main` 與開 session 時也跑），項目關掉時也關掉它的 hold；這一版兩件都拿掉，連同檢查還有沒有這種 hold 的那個指令。
+  更新之前，在每一台還沒更新、用看板的主 home 跑 `bin/fm-board.sh adopt`，最後一行要是「ok adopt 放上 0 個舊項目，還開著的舊 hold 0 個」。
+  回「不認得的子命令：adopt」的 home 還在看板自己存項目之前的版本，從來沒搬過；它的這種 hold 更新之後照下面處理。
+  更新之後還開著的這種 hold 不會消失：看板把它顯示成一個待決事項，問題是 `動手：` 開頭的原文；舊版搬上看板的項目照舊在「要你動手」，關掉它不再關它的 hold，那個 hold 就留著是待決事項。
+  手動處理：做完那件事之後在看板上回答那個待決事項，答了就關掉；或請 first mate 用 `bin/myshape.sh todo add` 放成要你動手的項目，再回答那個待決事項。
+  退回這一版之前的程式時，舊版的 `adopt` 又把還開著的這種 hold 搬上看板，hold 又只顯示成項目；這一版寫過的 `data/myshape/todos.json` 沒有 `adopted` 與 `closed`，舊版讀得懂，那些項目照一般項目留著。
 - **看板改名成 myshape 的那一次**（C57）：更新到改名的那一版之後，在同一次接著跑 `bin/fm-board.sh migrate-myshape`；退回改名前的程式之前先跑 `bin/fm-board.sh migrate-myshape --undo`。步驟與確認在 [FORK-SETUP](../../FORK-SETUP.markdown) 第 7 節。
 - **退回較舊的版本**：`data/topics.json` 的 `history`、`todos`，以及 `history` 每一筆裡的 `reason` 與 `by`，都是後來才加的欄位，舊版存檔時不會寫回。退回看板自己存要你動手的項目之前的版本時，看板上的項目不會顯示，只剩 backlog 裡還開著的舊 hold；`data/myshape/todos.json` 不受影響，回到新版時項目又會出現。退回從讀取資料記下待決事項（C59）之前的版本時不用另外做什麼：舊版把 `hold.opened`、`hold.closed` 當一般文字顯示，不讀也不改 `data/myshape/decisions.json`，不給 home 已關的待決事項的游標；回到新版時從那個檔接著讀：這段期間關掉的照樣記下；開啟只有在 home 回到同一個 `code_commit` 時才照樣記下，換了程式就從那一次重新開始看（開了又關、而那個 home 沒有記時間的，只記關閉）。`bin/fm-captain-hold.sh` 多寫的那一行與舊版無關。退回每個改動都和紀錄一起存（C58）之前的版本時不用另外做什麼：舊版把新的紀錄當一般文字顯示，存檔時丟掉 `topics.json` 與 `todos.json` 的 `outbox`；只有最後一次改動剛好也沒把紀錄寫進 `events.jsonl` 時，那幾筆才會少掉。以 `history` 為例：沒有這個欄位的舊版程式讀得懂這個檔，但它下一次存檔時不會寫回 `history`，來歷紀錄就沒了（議題本身與 `merged` 表不受影響）。要退版又想留著紀錄，先備份這個檔。
   退回 C52 之前的版本時，檔案照樣讀得懂（`status` 一律是 `confirmed`），議題都還在佇列裡；那一版又會有 `propose` 與提議中的狀態，規則也要跟著退回 v6。

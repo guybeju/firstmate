@@ -525,41 +525,6 @@ test_hands_on_items() {
   pass "hands-on items: the page claims, firstmate is told once, its verdicts show, and every way out works"
 }
 
-# old_todo_backlog: the main home's backlog with the two shapes of hands-on
-# hold written before the labels: an action and one line of guidance, and an
-# action alone.
-old_todo_backlog() {
-  local note only
-  note="fm-hold-v1:$(printf '動手：開 NAS 的兩步驟驗證\n只在你人在電腦前時做。' | base64 | tr -d '\n')"
-  only="fm-hold-v1:$(printf '動手：查路由器的轉址' | base64 | tr -d '\n')"
-  {
-    printf '## In flight\n\n## Queued\n'
-    printf -- '- [ ] old-note - Turn on 2FA (repo: sample) (kind: captain) (hold: %s) (hold-kind: captain)\n' "$note"
-    printf '  Captain hold set: 2026-07-24T00:00:00Z\n'
-    printf -- '- [ ] old-only - Check the router (repo: sample) (kind: captain) (hold: %s) (hold-kind: captain)\n' "$only"
-    printf '  Captain hold set: 2026-07-24T00:00:00Z\n'
-    printf '\n## Done\n'
-  } > "$MAIN/data/backlog.md"
-}
-
-test_hands_on_old_records() {
-  old_todo_backlog
-  view >/dev/null
-  assert_equals '{"what":"開 NAS 的兩步驟驗證","guidance":"","commands":["只在你人在電腦前時做。"],"state":"open","reason":null}' \
-    "$(todo_of old-note)" "an old hold with a following line must be adopted showing it as it always did, one block"
-  assert_equals '{"what":"查路由器的轉址","guidance":"","commands":[],"state":"open","reason":null}' \
-    "$(todo_of old-only)" "an old hold with only an action must show no command"
-  assert_equals '[]' "$(view '[.holds[] | select(.home == "main") | .task] | tojson')" "an adopted hold must not show a second time as a decision"
-  t todo failed old-note --reason "還是沒開" >/dev/null || fail "a verdict on an adopted item was refused"
-  t todo obsolete old-only --reason "不用查了" >/dev/null || fail "marking an adopted item no longer needed was refused"
-  assert_contains "$(todo_of old-note)" '"state":"rejected","reason":"還是沒開"' "an adopted item must keep its verdict"
-  assert_contains "$(todo_of old-only)" '"state":"obsolete","reason":"不用查了"' "an adopted item must wait for the captain's 好，撤下"
-  hold_backlog "$MAIN" call-main
-  view >/dev/null
-  assert_equals '[]' "$(view '[.todos[].task] | tojson')" "adopted items whose holds were closed elsewhere must leave the page"
-  pass "hands-on holds stored before the labels are adopted, read as before, and keep their verdicts"
-}
-
 test_todo_add_moves_a_running_board_to_new_code() {
   local pid
   view >/dev/null
@@ -605,9 +570,6 @@ test_hands_on_commands() {
   out=$(t todo add todo-x "T" --topic nope --do x 2>&1) || rc=$?
   assert_equals 1 "$rc" "an unknown topic must be refused"
   assert_contains "$out" "nope 不是看板上還開著的議題" "the refusal must name the topic"
-  rc=0
-  out=$(t todo add todo-x "T" --topic parked --do x --since 2026-07-01T00:00:00Z 2>&1) || rc=$?
-  assert_equals 2 "$rc" "--since without --adopt must be a usage error"
   todo_add_refused "the old stdin form" "不再從 stdin 讀內容" --do x -
   printf 'x\nsudo y\n' > "$TMP_ROOT/old-stdin"
   rc=0
@@ -642,7 +604,7 @@ test_hands_on_commands() {
   pass "todo add stores the item on the board after checking; todo done closes only items on it"
 }
 
-test_hands_on_item_with_the_real_hold_tool() {
+test_hands_on_hold_with_the_real_hold_tool() {
   local home HOLD_TOOL="$ROOT/bin/fm-captain-hold.sh"
   command -v tasks-axi >/dev/null 2>&1 || { pass "skip: tasks-axi not found"; return 0; }
   home=$(tb_make_service_home real-todo)
@@ -655,17 +617,8 @@ test_hands_on_item_with_the_real_hold_tool() {
     --on-answer close >/dev/null || fail "the real hold tool refused a hands-on hold"
   tb_run "$home" "$BOARD" tag real-1 t >/dev/null
   tb_op "$home" dump '{"refresh":true}' >/dev/null
-  tb_op "$home" dump '{"refresh":true}' >/dev/null
-  assert_equals '{"action":"重啟 x（卡住）","commands":["sudo x --now"],"topic":"t","ref":"hold"}' \
-    "$(jq -c '.items["real-1"] | {action, commands, topic, ref}' "$home/data/myshape/todos.json")" \
-    "a hold the real tool made must be adopted with its labelled command"
-  tb_run "$home" "$TOPIC" todo 'done' real-1 >/dev/null || fail "todo done failed"
-  local tries=0
-  until [ "$(tb_run "$home" "$ROOT/bin/fm-topic-board-read.sh" --legacy-todos 0 - | jq '.legacy_todos | length')" = 0 ]; do
-    tries=$((tries + 1))
-    [ "$tries" -lt 100 ] || fail "todo done must close the hold through the real hold tool"
-    sleep 0.15
-  done
+  assert_equals '["real-1"]|[]' "$(tb_op "$home" dump '{"refresh":true}' | jq -r '"\([.holds[].task] | tojson)|\([.todos[].task] | tojson)"')" \
+    "a hands-on hold the real tool made must show as a decision, not as an item"
   tb_run "$home" "$HOLD_TOOL" hold real-merge --title "Merge x" --reason "可以合併嗎？" --on-answer release >/dev/null ||
     fail "the real hold tool refused --on-answer"
   printf 'real-merge\t合併\t合併\trelease\n' | tb_run "$home" "$HOLD_TOOL" answers --source myshape >/dev/null ||
@@ -674,7 +627,7 @@ test_hands_on_item_with_the_real_hold_tool() {
     "$(tb_run "$home" "$ROOT/bin/fm-topic-board-read.sh" 0 - | jq -r '.queued[] | select(.id == "real-merge") | "queued \(.captain)"')" \
     "a released item must go back to the queue, no longer held for the captain"
   tb_run "$home" "$TOPIC" stop >/dev/null
-  pass "an adopted hold is closed through the real hold tool when its item is done"
+  pass "a hands-on hold the real tool made is a decision, and the board's release line is accepted"
 }
 
 test_dispatchable_notice() {
@@ -729,5 +682,5 @@ setup_fleet
 fm_test_run test_message_to_firstmate test_direct_message test_retries_run_out test_answers test_tagging \
   test_same_home_writes_do_not_overlap test_restart_resumes_or_settles test_answer_notice_survives_a_restart \
   test_dispatchable_notice test_decisions_made_on_the_page_reach_firstmate test_hands_on_items \
-  test_hands_on_commands test_hands_on_old_records test_todo_add_moves_a_running_board_to_new_code \
-  test_hands_on_item_with_the_real_hold_tool test_audit_log
+  test_hands_on_commands test_todo_add_moves_a_running_board_to_new_code \
+  test_hands_on_hold_with_the_real_hold_tool test_audit_log
