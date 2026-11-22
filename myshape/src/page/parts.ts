@@ -1,6 +1,7 @@
 // Building blocks shared by the home page and the topic page.
 import type {
   AgentView,
+  ClosedTodoView,
   HoldView,
   QueuedView,
   QuestionView,
@@ -423,4 +424,55 @@ export function updateRow(update: UpdateView): Child {
     [label, update.text].filter((part) => part !== "").join(" "),
     update.pr === null ? null : [" ", prLink(update.pr)],
   );
+}
+
+/** Something that closed: when, its closing line, whose (a decision's home and task), its records. */
+export interface ClosedEntry {
+  key: string;
+  ts: number;
+  home: string | null;
+  task: string | null;
+  text: string;
+  records: UpdateView[];
+}
+
+/** One closed thing: its closing line, opening to every record of its life on the board. */
+function closedRow(entry: ClosedEntry): Child {
+  return h(
+    "details",
+    { class: "closed", "data-key": entry.key },
+    h(
+      "summary",
+      {},
+      h("span", { class: "t" }, when(entry.ts)),
+      entry.task === null
+        ? null
+        : h("span", { class: "note" }, `${entry.home ?? ""}/${entry.task} `),
+      entry.text,
+    ),
+    entry.records.map(updateRow),
+  );
+}
+
+/** 已關 N: what closed, folded by default, newest first; nothing when nothing closed. */
+export function closedFold(key: string, entries: ClosedEntry[]): Child {
+  if (entries.length === 0) return null;
+  return h(
+    "details",
+    { "data-key": key },
+    h("summary", {}, `已關 ${entries.length}`),
+    entries.map(closedRow),
+  );
+}
+
+/** The closed hands-on items as fold rows, each row's key starting with `prefix`. */
+export function closedTodoEntries(prefix: string, closed: ClosedTodoView[]): ClosedEntry[] {
+  return closed.map((entry) => ({
+    key: `${prefix}:${entry.item}:${entry.ts}`,
+    ts: entry.ts,
+    home: null,
+    task: null,
+    text: entry.text,
+    records: entry.records,
+  }));
 }

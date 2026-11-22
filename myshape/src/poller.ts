@@ -61,8 +61,8 @@ export interface PollHost {
   onChange: () => void;
   /** The cursor of a home's closed decisions to pass to its feed, when its last report carried one. */
   closedCursor: (home: string) => { offset: number; sha: string } | null;
-  /** Called with each good report, after its ledger is stored, to record its decisions. */
-  onReport: (home: string, report: HomeReport) => void;
+  /** Called with each good report, after its ledger is stored, to record its decisions; `startedAt` is when that read began, in epoch seconds. */
+  onReport: (home: string, report: HomeReport, startedAt: number) => void;
   /** Called when a feed given a closed decisions' cursor refused its arguments (exit 2). */
   onCursorRefused: (home: string) => void;
   /** Called with the root report's aggregator block after each read of the root home. */
@@ -164,6 +164,7 @@ export class Poller {
     for (let reads = 0; reads < MAX_CATCH_UP_READS; reads += 1) {
       const { offset, sha } = this.offsets.get(home.id);
       const closed = this.host.closedCursor(home.id);
+      const startedAt = Math.floor(Date.now() / 1000);
       const result = await this.run(
         { kind: "feed", home: home.id, offset, sha, ...(closed === null ? {} : { closed }) },
         home.timeoutMs ?? this.timings.timeoutMs,
@@ -172,7 +173,7 @@ export class Poller {
       if (result.blocked !== undefined) return false;
       const more =
         result.code === 0
-          ? this.accept(home, result.stdout)
+          ? this.accept(home, result.stdout, startedAt)
           : this.reject(home, result.code, result.stderr, closed !== null);
       if (!more) break;
     }
@@ -209,7 +210,7 @@ export class Poller {
   }
 
   /** Applies one successful read; returns whether the home has more ledger to read right away. */
-  private accept(home: HomeState, stdout: string): boolean {
+  private accept(home: HomeState, stdout: string, startedAt: number): boolean {
     const parsed = parseReport(stdout);
     if (parsed.kind === "incompatible") {
       home.version = "incompatible";
@@ -231,7 +232,7 @@ export class Poller {
       this.host.onAggregator(report.aggregator);
     }
     this.refreshVersions();
-    this.host.onReport(home.id, report);
+    this.host.onReport(home.id, report, startedAt);
     return rewind || report.ledger.more || report.closed_cursor?.more === true;
   }
 

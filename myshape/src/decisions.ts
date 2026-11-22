@@ -25,7 +25,7 @@ export type PageAnswer = "recorded" | "pending" | "none";
 
 /** What the board saw at its last good read of one home. */
 export interface HomeDecisions {
-  /** The code the home's reader ran; a change starts the openings over from what is there. */
+  /** The code the home's reader ran; across a change a hold is matched by its task alone. */
   code_commit: string;
   /** Where the closed decisions' archive was read up to; null until the home reported one. */
   cursor: { offset: number; sha: string } | null;
@@ -33,6 +33,12 @@ export interface HomeDecisions {
   openSeen: string[];
   /** "<task>\t<digest>" of every closed decision that read showed. */
   closedSeen: string[];
+  /**
+   * When the read that last changed this entry started, in epoch seconds: every
+   * hold open then and seen since was set before it. Null in an entry an older
+   * board wrote.
+   */
+  seenAt: number | null;
 }
 
 export interface DecisionRead {
@@ -42,6 +48,8 @@ export interface DecisionRead {
   report: HomeReport;
   /** When this read finished, in epoch seconds. */
   readAt: number;
+  /** When this read started, in epoch seconds. */
+  readStartedAt: number;
   /** True when a record with this key is already saved. */
   saved: (key: string) => boolean;
   /** The topic a decision of `task` (raised by `origin`) belongs to. */
@@ -165,13 +173,39 @@ function gapOpeningOf(read: DecisionRead, closed: ClosedHold, at: number): Draft
   };
 }
 
+/**
+ * Whether a hold was open at the last good read. On the same reader code a
+ * hold is its task and its set time; a reader on other code may describe the
+ * same hold differently (an older one reports no set time), so across a code
+ * change a hold whose task was open then counts as seen, whatever its set time.
+ */
+function seenBefore(previous: HomeDecisions, sameCode: boolean): (hold: ReportHold) => boolean {
+  const seen = new Set(
+    sameCode ? previous.openSeen : previous.openSeen.map((key) => key.split("\t")[0] ?? key),
+  );
+  return (hold) => seen.has(sameCode ? `${hold.id}\t${hold.hold_set ?? ""}` : hold.id);
+}
+
+/**
+ * Whether a hold unseen across a code change was set since the entry last
+ * changed: one set earlier was there all along and only the new reader shows
+ * it. Without an exact set time, or in an entry an older board wrote, nothing
+ * tells, so that read keeps the baseline.
+ */
+function setSince(hold: ReportHold, since: number | null): boolean {
+  const set = holdSetSeconds(hold.hold_set);
+  return since !== null && set !== null && set >= since;
+}
+
 function openingsOf(read: DecisionRead): Draft[] {
   const { previous, report } = read;
-  // A first read, or a reader on other code, is where watching starts: what it shows was there before.
-  if (previous === undefined || previous.code_commit !== report.code_commit) return [];
-  const seen = new Set(previous.openSeen);
+  // A first read is where watching starts: what it shows was there before.
+  if (previous === undefined) return [];
+  const sameCode = previous.code_commit === report.code_commit;
+  const seen = seenBefore(previous, sameCode);
   return report.holds
-    .filter((hold) => !seen.has(`${hold.id}\t${hold.hold_set ?? ""}`))
+    .filter((hold) => !seen(hold))
+    .filter((hold) => sameCode || setSince(hold, previous.seenAt))
     .filter((hold) => !read.saved(openKey(read.home, hold.id, hold.hold_set ?? "")))
     .map((hold) => openingOf(read, hold));
 }
@@ -235,19 +269,30 @@ export function decisionStep(read: DecisionRead): DecisionStep {
   const closes = closesOf(read);
   const waiting = new Set(closes.waiting);
   const kept = waiting.size > 0 && previous !== undefined ? previous.cursor : undefined;
+  const seen = {
+    code_commit: report.code_commit,
+    cursor:
+      kept ?? (cursor === null ? null : { offset: cursor.to_offset, sha: cursor.to_prefix_sha256 }),
+    openSeen: report.holds.map((hold) => `${hold.id}\t${hold.hold_set ?? ""}`),
+    closedSeen: report.closed_holds
+      .map((closed) => `${closed.id}\t${closed.digest}`)
+      .filter((key) => !waiting.has(key)),
+  };
   return {
     drafts: [...openingsOf(read), ...closes.drafts],
-    next: {
-      code_commit: report.code_commit,
-      cursor:
-        kept ??
-        (cursor === null ? null : { offset: cursor.to_offset, sha: cursor.to_prefix_sha256 }),
-      openSeen: report.holds.map((hold) => `${hold.id}\t${hold.hold_set ?? ""}`),
-      closedSeen: report.closed_holds
-        .map((closed) => `${closed.id}\t${closed.digest}`)
-        .filter((key) => !waiting.has(key)),
-    },
+    next: { ...seen, seenAt: seenAtOf(previous, seen, read.readStartedAt) },
   };
+}
+
+/** The entry's seenAt: kept while nothing it holds changed, else this read's start. */
+function seenAtOf(
+  previous: HomeDecisions | undefined,
+  seen: Omit<HomeDecisions, "seenAt">,
+  startedAt: number,
+): number {
+  if (previous === undefined || previous.seenAt === null) return startedAt;
+  const { seenAt, ...before } = previous;
+  return JSON.stringify(before) === JSON.stringify(seen) ? seenAt : startedAt;
 }
 
 function parseCursor(raw: unknown): HomeDecisions["cursor"] {
@@ -264,6 +309,7 @@ function parseHome(raw: unknown): HomeDecisions | null {
     cursor: parseCursor(raw["cursor"]),
     openSeen: strings(raw["open_seen"]),
     closedSeen: strings(raw["closed_seen"]),
+    seenAt: typeof raw["seen_at"] === "number" ? raw["seen_at"] : null,
   };
 }
 
@@ -316,6 +362,7 @@ export class DecisionStore {
           cursor: value.cursor,
           open_seen: value.openSeen,
           closed_seen: value.closedSeen,
+          seen_at: value.seenAt,
         },
       ]),
     );

@@ -146,10 +146,10 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
   `topic.confirmed` 只在看板啟動時確認舊版留下的提議時寫，封存檔裡的也寫（第 3.1 節）；更早寫下的照樣顯示。
 - 看板接上 aggregator 的兩種紀錄，都沒有議題，`home` 與 `task` 是 `null`（第 7 節）：`program.confirmed`（使用者在頁面上確認看板可以執行一支程式，`by` 是 `captain`，`text` 寫出完整路徑、角色與 SHA-256，例如「確認看板可以執行 /opt/agg/plain（feed、deliver；SHA-256 …）（你在頁面上）」），與 `writes.released`（等著的寫入交給 deliver 的程式之前，`by` 是 `board`，`text` 寫出依序放行的 id，例如「接上 plain，依序送出等著的 2 筆：w-…、w-…」）。
 - 待決事項從讀取資料記下的開與關（C59），`by` 是 `board`，在待決事項的議題底下（它自己的標記，沒有就是來源 task 的），帶 `home` 與 `task`：
-  - `hold.opened`：一次讀取的 `holds[]` 裡有、上一次讀取沒有的 hold。`ts` 是它的 `hold_set`；`hold_set` 只有日期或沒有時是這次讀取的時間，`text` 結尾加「（最晚 MM-DD HH:mm）」。`closed_holds[]` 裡一個上一次讀取時還沒開的、帶 `opened_at` 的待決事項，也先寫一筆，`ts` 是 `opened_at`。
+  - `hold.opened`：一次讀取的 `holds[]` 裡有、上一次讀取沒有的 hold。同一個 `code_commit` 之間以 task 與 `hold_set` 認一個 hold；`code_commit` 換了的那一次只以 task 認，因為不同的讀取程式可能把同一個 hold 寫成不同的樣子（較舊的沒有 `hold_set`），而且只有 `hold_set` 是確切時間、不早於那個 home 的 `seen_at`（第 3.7 節）的才寫開啟：比那更早的 hold 本來就開著，只是新的讀取程式才報出來（例如不再略過主 home 的 `動手：` hold）。`ts` 是它的 `hold_set`；`hold_set` 只有日期或沒有時是這次讀取的時間，`text` 結尾加「（最晚 MM-DD HH:mm）」。`closed_holds[]` 裡一個上一次讀取時還沒開的、帶 `opened_at` 的待決事項，也先寫一筆，`ts` 是 `opened_at`。
   - `hold.closed`：`closed_holds[]` 裡上一次讀取沒有的一筆。`ts` 是它的 `closed_at`，沒有時是這次讀取的時間，加「（最晚 …）」。`outcome` 是 Resolution mode（`answered`、`released`、`repaired`、`reconciled`、`forge-closed`、`forge-released`，空的記成 `answered`），`answer` 是答案，`source` 是經哪裡（`chat` 是 first mate 直接記下的話）。在看板作答的（`source` 是 `myshape`）有看板自己的 `hold.answered`（`outcome` 是那個答案或它顯示的字）時不另寫，那一筆就是它的關閉；看板的那個作答還在送出中、等待或重試時先不寫，也不記成看過，游標留在原處，下一次讀再看；兩者都不是（送出的結果不是已送達，或有人用同一個入口手動作答）時照一般的關閉寫，「經看板」。
   - 兩種都帶 `key`：`hold.opened\t<home>\t<task>\t<hold_set>`（從 `closed_holds[]` 先寫的是 `…\t#<digest>`）與 `hold.closed\t<home>\t<task>\t<digest>`。看板啟動時從這個檔重建 key 的集合，同一個 key 只寫一次。
-  - 從什麼時候開始看：看板第一次讀到一個 home、或那個 home 的 `code_commit` 換了的那一次（每一次更新程式都是），不寫開啟；那個 home 的回報還沒給過 `closed_cursor`，或看板還沒交給它游標的那一次，不寫關閉。那時已經開著、已經關掉的都不補記。
+  - 從什麼時候開始看：看板第一次讀到一個 home 的那一次不寫開啟；那個 home 的回報還沒給過 `closed_cursor`，或看板還沒交給它游標的那一次，不寫關閉。那時已經開著、已經關掉的都不補記。`code_commit` 換了（每一次更新程式都是）不是重新開始：看板接著上一次成功讀取時記下的比，所以更新前最後一次讀取之後、更新後第一次讀取之前開的待決事項有它的開啟，之前就開著的不再寫一次。照舊不寫開啟的情形：同一個 task 在那段空檔裡關掉又重新 hold（新的那一輪只以 task 認，當成已經看過）；`hold_set` 不是確切時間的 hold；看板記下的那一筆是較舊的看板寫的、沒有 `seen_at` 的那一次（換上這一版的那次更新就是）。讀取失敗、回 4、版本不對或不是合法的回報時什麼都不寫，也不當成每個待決事項都關了。
   `text` 例：「待決事項「NAS 兩步驗證」已開：NAS 要不要開兩步驗證？」、「待決事項「NAS 兩步驗證」已回答：要（經聊天）」、「待決事項「X」已回答並放行，工作繼續：好（經聊天）」、「待決事項「X」已對帳結束，不必再答：…」、「待決事項「X」隨 PR 結束而關閉」。
 - 每一個改動都有一個存它的檔：議題的改動是 `topics.json`，要你動手的改動是 `data/myshape/todos.json`，確認程式是 `data/myshape/confirmations.json`；只存紀錄的改動（例如 `writes.released`）經 `topics.json`。看板先把三個檔 `outbox` 裡 `events.jsonl` 還沒有的紀錄補寫進去（寫不進去就拒絕這次改動，回「看板寫不進紀錄（原因），這次的修改沒有做」），再把改動和它的紀錄一起寫進那個檔的 `outbox`、用同一次改名存下，然後把紀錄追加到這裡並 fsync。追加失敗時改動已經生效，紀錄留在 `outbox`，下一次改動或下一次啟動補寫；啟動時補寫不進去，看板就不啟動。
   封存時封存檔先寫、`topics.json` 後寫，重開時反過來，所以中途當掉時議題留在 `topics.json`、沒有紀錄，或兩邊都有、`topics.json` 為準、紀錄由 `outbox` 補寫。要你動手的改動先寫 `topics.json` 的 `todos`，再寫 `todos.json`；看板啟動時從 `todos.json` 重算 `todos`。
@@ -204,10 +204,11 @@ first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、�
 
 ```json
 {"v": 1, "homes": {"main": {"code_commit": "…", "cursor": {"offset": 4096, "sha": "<64 位十六進位>"},
-  "open_seen": ["nas-2fa\t2026-11-20T06:10:00Z"], "closed_seen": ["call-1\t<digest>"]}}}
+  "open_seen": ["nas-2fa\t2026-11-20T06:10:00Z"], "closed_seen": ["call-1\t<digest>"],
+  "seen_at": 1795300000}}}
 ```
 
-- 每個 home 上一次讀取成功時看到的：回報的 `code_commit`、`closed_cursor` 的 `to_offset` 與 `to_prefix_sha256`（回報沒有時是 `null`）、每個開著的 hold（`<task>\t<hold_set>`）、每個已關的待決事項（`<task>\t<digest>`）。
+- 每個 home 上一次讀取成功時看到的：回報的 `code_commit`（下一次回報的不同時，開著的 hold 只以 task 比對，第 3.3 節）、`seen_at`（最後一次改了這一筆的那次讀取開始的時間，epoch 秒；這一筆沒變時不動，所以檔不會每讀一次就重寫；較舊的看板寫的沒有）、`closed_cursor` 的 `to_offset` 與 `to_prefix_sha256`（回報沒有時是 `null`）、每個開著的 hold（`<task>\t<hold_set>`）、每個已關的待決事項（`<task>\t<digest>`）。
 - 看板寫完一次讀取的紀錄之後才寫這個檔，中途當掉時下一次讀同一段，紀錄的 `key` 讓它只記一次（第 3.3 節）。讀取失敗、回報不合法時不動它。
 - 沒有這個檔、讀不懂，就當成每個 home 都還沒看過；一個 home 用帶游標的讀取回 2（不認得這些參數）時，看板忘掉那個 home 的這一筆，下一次不帶游標讀。
 

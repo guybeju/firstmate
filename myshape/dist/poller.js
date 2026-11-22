@@ -117,12 +117,13 @@ export class Poller {
         for (let reads = 0; reads < MAX_CATCH_UP_READS; reads += 1) {
             const { offset, sha } = this.offsets.get(home.id);
             const closed = this.host.closedCursor(home.id);
+            const startedAt = Math.floor(Date.now() / 1000);
             const result = await this.run({ kind: "feed", home: home.id, offset, sha, ...(closed === null ? {} : { closed }) }, home.timeoutMs ?? this.timings.timeoutMs);
             // The feed may not run now: nothing was read, and the page says why.
             if (result.blocked !== undefined)
                 return false;
             const more = result.code === 0
-                ? this.accept(home, result.stdout)
+                ? this.accept(home, result.stdout, startedAt)
                 : this.reject(home, result.code, result.stderr, closed !== null);
             if (!more)
                 break;
@@ -154,7 +155,7 @@ export class Poller {
         return false;
     }
     /** Applies one successful read; returns whether the home has more ledger to read right away. */
-    accept(home, stdout) {
+    accept(home, stdout, startedAt) {
         const parsed = parseReport(stdout);
         if (parsed.kind === "incompatible") {
             home.version = "incompatible";
@@ -176,7 +177,7 @@ export class Poller {
             this.host.onAggregator(report.aggregator);
         }
         this.refreshVersions();
-        this.host.onReport(home.id, report);
+        this.host.onReport(home.id, report, startedAt);
         return rewind || report.ledger.more || report.closed_cursor?.more === true;
     }
     /** Stores a read's ledger lines and cursor; returns true when the ledger must be re-read from the start. */

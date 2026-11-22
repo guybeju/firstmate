@@ -1,9 +1,11 @@
 // One topic's page: pending decisions, updates, its agents, and the message box.
-import type { AgentView, ClosedTodoView, SummaryView, UpdateView } from "#board/view.js";
+import type { AgentView, SummaryView, UpdateView } from "#board/view.js";
 import { h } from "./dom.js";
 import type { Child } from "./dom.js";
 import { mergeConfirm, mergeMenu } from "./home.js";
 import {
+  closedFold,
+  closedTodoEntries,
   draftInput,
   holdCard,
   light,
@@ -16,6 +18,7 @@ import {
   when,
   writeRows,
 } from "./parts.js";
+import type { ClosedEntry } from "./parts.js";
 import { QUEUE_LABEL, agentName } from "./state.js";
 import type { Actions, Page, View } from "./state.js";
 
@@ -139,16 +142,6 @@ function header(page: Page, view: View, actions: Actions, id: string): Child {
   ];
 }
 
-/** One closed item: its closing line, opening to every record of its life on the board. */
-function closedRow(id: string, closed: ClosedTodoView): Child {
-  return h(
-    "details",
-    { class: "closed", "data-key": `closed:${id}:${closed.item}:${closed.ts}` },
-    h("summary", {}, h("span", { class: "t" }, when(closed.ts)), closed.text),
-    closed.records.map(updateRow),
-  );
-}
-
 function handsOn(page: Page, view: View, actions: Actions, id: string): Child {
   const todos = liveTodos(view, id);
   const closed = view.closed_todos.filter((entry) => entry.topic === id);
@@ -158,15 +151,22 @@ function handsOn(page: Page, view: View, actions: Actions, id: string): Child {
     {},
     h("h2", {}, "要你動手"),
     todos.map((todo) => todoCard(page, view, actions, todo, false)),
-    closed.length === 0
-      ? null
-      : h(
-          "details",
-          { "data-key": `closed:${id}` },
-          h("summary", {}, `已關 ${closed.length}`),
-          closed.map((entry) => closedRow(id, entry)),
-        ),
+    closedFold(`closed:${id}`, closedTodoEntries(`closed:${id}`, closed)),
   );
+}
+
+/** The topic's closed decisions as fold rows. */
+function closedDecisionEntries(view: View, id: string): ClosedEntry[] {
+  return view.closed_decisions
+    .filter((entry) => entry.topic === id)
+    .map((entry) => ({
+      key: `closed-decision:${id}:${entry.home}/${entry.task}:${entry.ts}`,
+      ts: entry.ts,
+      home: entry.home,
+      task: entry.task,
+      text: entry.text,
+      records: entry.records,
+    }));
 }
 
 function decisions(page: Page, view: View, actions: Actions, id: string): Child {
@@ -203,6 +203,7 @@ function decisions(page: Page, view: View, actions: Actions, id: string): Child 
     view.questions
       .filter((question) => question.topic === id)
       .map((question) => questionRow(view, actions, question, false)),
+    closedFold(`closed-decisions:${id}`, closedDecisionEntries(view, id)),
   );
 }
 

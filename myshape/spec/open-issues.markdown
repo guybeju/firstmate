@@ -506,6 +506,16 @@ C58 之後看板只記得在頁面上答的；在聊天裡答、first mate 自�
 - session start 每次替 home 寫了設定檔都印 `看板服務：已接上 firstmate，換上新的看板`，看板原本沒在跑、沒有回應或啟動失敗時也印（B4 之後補上，D 的第三個條件）；防呆是 `fm-board/test/stage-4-binding.sh`。
 - 不在這一條：拆 repository。
 
+### C61　已關的待決事項、沒有議題的已關項目、更新空檔的開啟
+
+C58、C59 合併時留下的三個後續（#63、#64 的 PR 說明），使用者 2026-11-22 各選了 A：
+
+- 議題頁：已關的待決事項摺進「待決」最後的「已關 N」，和「要你動手」的一樣；紀錄不變，照樣也在「更新」裡（[stage-5-browser](stage-5-browser.markdown)）。關了的是有 `hold.answered` 或 `hold.closed` 紀錄的；同一個待決事項的兩筆關閉（頁面的「已在別處結束」與讀取資料的真正關閉）算一個，關閉之後的新 `hold.opened` 是下一輪。
+- 首頁：沒有議題、已關的要你動手項目放在「要你動手」下面的「沒有議題」，摺成「已關 N」，沒有時整段不顯示。放的位置使用者選了 C（一段叫「沒有議題」的），沒有選放進「要你動手」或「未分類」。
+- 讀取程式的 `code_commit` 換了不再重新開始：看板接著上一次成功讀取時記下的比，開著的 hold 這一次只以 task 認，而且只有 `hold_set` 不早於 `decisions.json` 記下的 `seen_at` 的才寫開啟，所以更新前後的空檔裡開的待決事項有開啟，之前就開著的、只是新的讀取程式才報出來的（#68 之後主 home 的 `動手：` hold）都不寫（[contracts](contracts.markdown) 第 3.3、3.7 節）。照舊不寫開啟的：同一個 task 在空檔裡關掉又重新 hold 的新的一輪；`hold_set` 不是確切時間的；換上這一版的那一次（較舊的看板沒記下 `seen_at`）。
+- 都只改顯示與讀取的比對：沒有新的操作、不改存的資料與 `commitChange`。
+- 防呆：`view.test.ts` 的 closed decisions、`decisions.test.ts` 的 across a change of the reader's code、`poller.test.ts`（換程式時失敗的讀取不交出去）、`stage-5-page.mjs`（兩個摺疊）、`stage-7-upgrade.sh` 從 `cbe6e42a` 升上來的那一步。
+
 ### C28　使用者的 ub-mode 與全域規範裡沒有做到的
 
 - 測試不是每一步都先寫：第一段與之後的修正是測試先行；第二段起多半是程式與測試一起寫，再用測試把問題找出來（找到的都記在上面）。單元測試是全部寫完之後才補的。

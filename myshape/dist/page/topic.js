@@ -1,6 +1,6 @@
 import { h } from "./dom.js";
 import { mergeConfirm, mergeMenu } from "./home.js";
-import { draftInput, holdCard, light, liveTodos, todoCard, queuedRow, questionRow, summaryRow, updateRow, when, writeRows, } from "./parts.js";
+import { closedFold, closedTodoEntries, draftInput, holdCard, light, liveTodos, todoCard, queuedRow, questionRow, summaryRow, updateRow, when, writeRows, } from "./parts.js";
 import { QUEUE_LABEL, agentName } from "./state.js";
 /** Ledger lines and summaries shown before the rest fold into 更早的更新; board records always show. */
 const MAX_UPDATES = 200;
@@ -68,18 +68,25 @@ function header(page, view, actions, id) {
         panels(page, view, actions, id),
     ];
 }
-/** One closed item: its closing line, opening to every record of its life on the board. */
-function closedRow(id, closed) {
-    return h("details", { class: "closed", "data-key": `closed:${id}:${closed.item}:${closed.ts}` }, h("summary", {}, h("span", { class: "t" }, when(closed.ts)), closed.text), closed.records.map(updateRow));
-}
 function handsOn(page, view, actions, id) {
     const todos = liveTodos(view, id);
     const closed = view.closed_todos.filter((entry) => entry.topic === id);
     if (todos.length === 0 && closed.length === 0)
         return null;
-    return h("section", {}, h("h2", {}, "要你動手"), todos.map((todo) => todoCard(page, view, actions, todo, false)), closed.length === 0
-        ? null
-        : h("details", { "data-key": `closed:${id}` }, h("summary", {}, `已關 ${closed.length}`), closed.map((entry) => closedRow(id, entry))));
+    return h("section", {}, h("h2", {}, "要你動手"), todos.map((todo) => todoCard(page, view, actions, todo, false)), closedFold(`closed:${id}`, closedTodoEntries(`closed:${id}`, closed)));
+}
+/** The topic's closed decisions as fold rows. */
+function closedDecisionEntries(view, id) {
+    return view.closed_decisions
+        .filter((entry) => entry.topic === id)
+        .map((entry) => ({
+        key: `closed-decision:${id}:${entry.home}/${entry.task}:${entry.ts}`,
+        ts: entry.ts,
+        home: entry.home,
+        task: entry.task,
+        text: entry.text,
+        records: entry.records,
+    }));
 }
 function decisions(page, view, actions, id) {
     const topic = view.topics[id];
@@ -91,7 +98,7 @@ function decisions(page, view, actions, id) {
         ? null
         : h("details", { "data-key": `deferred:${id}` }, h("summary", {}, `暫緩 ${deferred.length}`), deferred.map((hold) => holdCard(page, view, actions, hold, false))), view.questions
         .filter((question) => question.topic === id)
-        .map((question) => questionRow(view, actions, question, false)));
+        .map((question) => questionRow(view, actions, question, false)), closedFold(`closed-decisions:${id}`, closedDecisionEntries(view, id)));
 }
 /**
  * The topic's updates, newest first. Every board record shows; ledger lines
