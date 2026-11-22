@@ -62,15 +62,64 @@ test_tag_without_topic_file_is_rejected() {
   pass "main-home tag refuses when there is no topic yet"
 }
 
+# give_tag <home> <task> <topic>: write <task>'s tag file by hand, as a tag
+# from before the check existed would have left it.
+give_tag() {
+  mkdir -p "$1/data/$2"
+  printf '%s 2026-11-18T00:00:00Z\n' "$3" > "$1/data/$2/topic"
+}
+
+# from_tag <home> <new> <old>: run tag <new> --from <old>; sets TAG_OUT, TAG_ERR, TAG_RC.
+from_tag() {
+  TAG_RC=0
+  TAG_OUT=$(tb_run "$1" "$BOARD" tag "$2" --from "$3" 2> "$TMP_ROOT/tag.err") || TAG_RC=$?
+  TAG_ERR=$(cat "$TMP_ROOT/tag.err")
+}
+
+# assert_from_checked <home> <what>: --from against a topic list holding
+# tb_write_topics' topics copies an open topic (a merged one as the id it
+# points to) and refuses, writing nothing, an unknown or archived one, an
+# untagged task and a task that does not exist.
+assert_from_checked() {
+  local home=$1 what=$2 id
+  for id in billing parked idea old-billing; do
+    give_tag "$home" "old-$id" "$id"
+    from_tag "$home" "new-$id" "old-$id"
+    assert_equals 0 "$TAG_RC" "$what: --from a task tagged $id must succeed: $TAG_ERR"
+    assert_equals "" "$TAG_ERR" "$what: --from a task tagged $id must print nothing on stderr"
+  done
+  from_tag "$home" new-billing old-billing
+  assert_equals "0 ok new-billing 已標記為 billing" "$TAG_RC $TAG_OUT" "$what: a repeated --from must report the same tag"
+  assert_equals 1 "$(wc -l < "$home/data/new-billing/topic" | tr -d ' ')" "$what: a repeated --from must not append"
+  assert_equals billing "$(cut -d' ' -f1 "$home/data/new-old-billing/topic")" "$what: --from a merged id must record the id it points to"
+  assert_equals parked "$(cut -d' ' -f1 "$home/data/new-parked/topic")" "$what: --from a topic in the later queue must copy it"
+  for id in nope gone; do
+    give_tag "$home" "old-$id" "$id"
+    from_tag "$home" "new-$id" "old-$id"
+    assert_equals 1 "$TAG_RC" "$what: --from a task tagged $id must be refused"
+    assert_contains "$TAG_ERR" "$id 不是看板上還開著的議題" "$what: the refusal must name $id the way a plain tag does"
+    assert_contains "$TAG_ERR" "$(printf '  billing\t帳務重構')" "$what: the refusal must list the topics that can be used"
+    assert_contains "$TAG_ERR" "new-$id 沒有沿用 old-$id 的議題 ${id}，還沒有標記；用 tag new-$id <議題 id> 標一個還開著的議題。" \
+      "$what: the refusal must say the new task was left untagged"
+    assert_absent "$home/data/new-$id" "$what: a refused --from must write nothing"
+  done
+  mkdir -p "$home/data/old-untagged"
+  for id in untagged missing; do
+    from_tag "$home" "new-$id" "old-$id"
+    assert_equals "1 old-$id 沒有議題標記，沒有東西可以沿用。" "$TAG_RC $TAG_ERR" "$what: --from a task with no tag ($id)"
+    assert_absent "$home/data/new-$id" "$what: --from a task with no tag must write nothing ($id)"
+  done
+}
+
 test_tag_from_copies_the_topic() {
   local home
-  home=$(tb_make_home tag-from)
+  home=$(with_port "$(tb_make_home tag-from)")
   tb_write_topics "$home"
   tb_run "$home" "$BOARD" tag old-task billing >/dev/null
   tb_run "$home" "$BOARD" tag new-task --from old-task >/dev/null
   assert_equals billing "$(cut -d' ' -f1 "$home/data/new-task/topic")" "--from did not copy the topic"
-  expect_code 1 "$(tb_code "$home" "$BOARD" tag other --from untagged)" "--from an untagged source"
-  pass "tag --from carries the topic to a successor task"
+  assert_from_checked "$home" "main home"
+  pass "main-home tag --from carries an open topic to a successor task and refuses one that is not on the board"
 }
 
 # with_port <home>: give a scratch home its own free board port, so nothing
@@ -191,15 +240,26 @@ test_mate_tag_without_jq_tags_and_says_why() {
   pass "a secondmate's tag without jq is written as given, saying so"
 }
 
-test_mate_tag_from_copies_unchecked() {
-  local mate
-  mate=$(with_port "$(dp_make_remote_mate from-mate far1)")
+test_mate_tag_from_is_checked() {
+  local main mate
+  main=$(with_port "$(tb_make_home from-main)")
+  tb_write_topics "$main"
+  mate=$(with_port "$(dp_make_local_mate from-local sm1 "$main")")
+  assert_from_checked "$mate" "local mate"
+  from_tag "$mate" new-nope old-nope
+  assert_contains "$TAG_ERR" "照主 home 的議題檔（$main/data/topics.json）" "local mate: the refusal must name the file it checked"
+  mate=$(with_port "$(dp_make_remote_mate from-remote far1)")
   dp_write_copy "$mate" "$(dp_minutes_ago 1)"
-  mkdir -p "$mate/data/old-task"
-  printf 'nope 2026-11-18T00:00:00Z\n' > "$mate/data/old-task/topic"
-  tb_run "$mate" "$BOARD" tag new-task --from old-task >/dev/null 2>&1 || fail "--from failed in a secondmate home"
-  assert_equals nope "$(cut -d' ' -f1 "$mate/data/new-task/topic")" "--from must copy the old task's topic as it is"
-  pass "tag --from still copies the old task's topic in a secondmate home"
+  assert_from_checked "$mate" "remote mate"
+  from_tag "$mate" new-nope old-nope
+  assert_contains "$TAG_ERR" "議題如果是在這份副本之後才建的，等主 home 送來下一份副本再跑一次同一個指令。" \
+    "remote mate: the refusal must say to rerun after the next copy"
+  dp_write_copy "$mate" "$(dp_minutes_ago 60)"
+  from_tag "$mate" new-stale old-nope
+  assert_equals "0 ok new-stale 已標記為 nope" "$TAG_RC $TAG_OUT" "remote mate: --from against a stale copy must still be written"
+  assert_contains "$TAG_ERR" "沒有檢查 nope 是不是看板上的議題：主 home 推來的佇列副本是 60 分鐘前的" \
+    "remote mate: --from against a stale copy must say it was not checked and why"
+  pass "a secondmate's tag --from checks the copied topic against the same list a plain tag reads"
 }
 
 # tag and order must agree on which topic list a secondmate home has: tag
@@ -373,7 +433,7 @@ fm_test_run test_tag_writes_and_is_idempotent test_tag_validates_in_main_home \
   test_tag_without_topic_file_is_rejected test_tag_from_copies_the_topic \
   test_local_mate_tag_checks_the_main_homes_file test_remote_mate_tag_checks_a_fresh_copy \
   test_local_child_of_a_remote_mate_checks_its_copy test_mate_tag_without_a_source_tags_and_says_why \
-  test_mate_tag_without_jq_tags_and_says_why test_mate_tag_from_copies_unchecked \
+  test_mate_tag_without_jq_tags_and_says_why test_mate_tag_from_is_checked \
   test_tag_and_order_agree_on_the_source test_tag_without_jq_warns_and_writes \
   test_setup_is_idempotent test_bind_writes_only_firstmates_program test_in_home_routes_to_a_local_secondmate \
   test_in_home_answers_passes_through test_variables_are_braced_before_wide_characters test_usage

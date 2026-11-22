@@ -35,11 +35,11 @@
 ### `tag`
 
 - `tag <task-id> <議題 id>`：在這個 home 的 `data/<task-id>/topic` 追加一行。目錄不存在就建。
-- `tag <新 id> --from <舊 id>`：讀舊 id 標記的最後一行，寫給新 id。舊 id 沒有標記就 exit 1。
+- `tag <新 id> --from <舊 id>`：讀舊 id 標記的最後一行，照下面同一套檢查之後寫給新 id。舊 id 沒有標記就 exit 1；那個議題被拒時新 id 不寫，並多一行說新 id 還沒有標記。
 - 檢查：
   - 兩個 id 的格式（[contracts](contracts.markdown) 第 3.1 節）。
   - 在主 home：議題 id 先過 `merged` 表，結果必須在 `topics.json` 的 `topics` 裡（也就是不在封存檔）；否則 exit 1，並列出可用的議題。
-  - 在 secondmate home：讀不到主 home 的議題檔，只檢查格式。
+  - 在 secondmate home：照 `fm-dispatch-plan.sh order` 讀的那一份主 home 議題清單檢查，同上；讀不到那一份時照寫，stderr 一行說沒有檢查與原因（[fm-board adapter](../../fm-board/spec/adapter.markdown) 第 3.4 節）。
   - 沒有 `jq`：跳過「議題在不在」的檢查，照寫，並在 stderr 印警告。
 - 最後一行已經是同一個議題 id 就不再追加，回 0。
 - 印 `ok <task-id> 已標記為 <議題 id>`。
@@ -103,7 +103,7 @@
 在開發用的 clone 外面開 session，對 clone 跑（`<clone>` 是它的路徑）：
 
 1. `<clone>/myshape/test/run.sh 1` 回 0。至少涵蓋：
-   - `tag`：新增、重複不追加、`--from`、格式錯、未確認的議題被拒、`merged` 的舊 id 轉到新 id、沒有 `jq` 時照寫並警告、在 secondmate home 只檢查格式。
+   - `tag`：新增、重複不追加、`--from`、格式錯、未確認的議題被拒、`merged` 的舊 id 轉到新 id、沒有 `jq` 時照寫並警告、在 secondmate home 照主 home 的議題清單檢查、`--from` 一樣檢查。
    - `order`：四段各至少一例；議題檔壞掉時放行；snapshot 失敗時放行；議題不在任何佇列的項目排在一般之後。
    - `list`：`--all`、`--json`、在 secondmate home 被拒。
    - `setup`：重複執行結果相同。

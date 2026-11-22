@@ -34,8 +34,11 @@
 #        copy's time and says to rerun after the next copy. When that list
 #        cannot be read - no file or copy, an unreadable one, a copy 60 minutes
 #        old or more, or no jq - the tag is written as given with one line on
-#        stderr saying why it was not checked. --from is not checked anywhere.
-#        Without jq the main home's check is skipped with a warning too.
+#        stderr saying why it was not checked. Without jq the main home's
+#        check is skipped with a warning too.
+#        --from takes the old task's current topic and checks it the same way,
+#        in the home it runs in; a refusal adds one line saying the new task
+#        was left untagged and to tag it with an open topic instead.
 # setup  Creates this home's config/fleet-ledger flag, then binds the board
 #        to firstmate as bind does. Safe to repeat.
 # bind   Writes this home's config/myshape-aggregator.json, which tells the
@@ -203,19 +206,25 @@ mate_topic_for_tag() {
   )
 }
 
+# topic_for_tag_here <topic-id>: the topic id a tag in this home should
+# record, checked against this home's topic list; fails after saying why.
+topic_for_tag_here() {
+  if in_secondmate_home; then
+    mate_topic_for_tag "$1"
+  else
+    tb_topic_for_tag "$TOPICS_FILE" "$1"
+  fi
+}
+
 cmd_tag() {
-  local task topic source
+  local task topic source copied
   case "$#" in
     2)
       task=$1
       topic=$2
       tb_valid_id "$task" || usage_error "task id 格式不對：$task"
       tb_valid_id "$topic" || usage_error "議題 id 格式不對：$topic"
-      if in_secondmate_home; then
-        topic=$(mate_topic_for_tag "$topic") || exit 1
-      else
-        topic=$(tb_topic_for_tag "$TOPICS_FILE" "$topic")
-      fi
+      topic=$(topic_for_tag_here "$topic") || exit 1
       ;;
     3)
       [ "$2" = --from ] || usage_error "tag 的用法是 <task-id> <議題 id> 或 <新 id> --from <舊 id>"
@@ -223,8 +232,10 @@ cmd_tag() {
       source=$3
       tb_valid_id "$task" || usage_error "task id 格式不對：$task"
       tb_valid_id "$source" || usage_error "task id 格式不對：$source"
-      topic=$(current_topic_of "$source") ||
+      copied=$(current_topic_of "$source") ||
         tb_die 1 "$source 沒有議題標記，沒有東西可以沿用。"
+      topic=$(topic_for_tag_here "$copied") ||
+        tb_die 1 "${task} 沒有沿用 ${source} 的議題 ${copied}，還沒有標記；用 tag ${task} <議題 id> 標一個還開著的議題。"
       ;;
     *) usage_error "tag 的用法是 <task-id> <議題 id> 或 <新 id> --from <舊 id>" ;;
   esac

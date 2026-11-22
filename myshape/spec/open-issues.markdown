@@ -343,7 +343,7 @@ first mate 用 `propose` 開的議題停在提議中，要等使用者在頁面�
 ### C53　未分類區列出不是工作的紀錄與已經結束的工作
 
 使用者 2026-11-18 看到未分類區有六項，問這些是什麼、為什麼還在等歸併。
-四項是已經結束的工作，標記寫的是自己的 task id，看板上沒有那個議題：是 secondmate 在自己的 home 裡 `tag` 的，那裡只檢查 id 的格式。
+四項是已經結束的工作，標記寫的是自己的 task id，看板上沒有那個議題：是 secondmate 在自己的 home 裡 `tag` 的，那裡當時只檢查 id 的格式（後來也檢查了，見這一條做法的最後一點）。
 另外兩項根本不是工作：一個退役的 secondmate（主 home 帳本裡 task 是 mate 自己的 id、派工的 `kind` 是 secondmate），和遠端 secondmate 的回報通道 `parent-replies`（上游把遠端 home 的 `state/parent-replies.status` 當成回報通道，帳本照樣把它記成狀態行）。
 看板原本把 home 已經沒有、帳本裡有事件的每一個 (home, task) 都列成已結束的 agent，所以兩種都進了未分類區。
 還在跑的 secondmate 自己的 `needs-decision` 行也會被當成 worker 提問。
@@ -365,6 +365,7 @@ first mate 用 `propose` 開的議題停在提議中，要等使用者在頁面�
 - 標記寫了不存在的議題：主 home 的 `tag` 本來就擋；`--in-home <id> tag` 改成先在主 home 檢查，再寫進 secondmate 的 home。
   secondmate 自己跑的 `tag` 與經 `fm-on.sh` 跑的 `tag` 讀不到主 home 的議題檔，仍只檢查格式；這種項目在頁面上寫「標記的議題不存在」，與「沒有標記」分開。
   要在那裡也擋下，需要讓 secondmate 讀得到主 home 的議題清單，另案處理。
+  後來已修：secondmate 的 `tag` 照 `fm-dispatch-plan.sh order` 讀的那一份主 home 議題清單檢查，讀不到時照寫並說沒有檢查；`tag <新 id> --from <舊 id>` 沿用的議題也照同一套檢查（[fm-board adapter](../../fm-board/spec/adapter.markdown) 第 3.4 節）。
 
 ### C54　「要你動手」的卡片把說明當成指令，沒有指令時也分不出來
 
