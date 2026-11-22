@@ -4,6 +4,10 @@
 # Usage: sh tests/signal-guard.sh <self-pid> <log-file-or-empty> <source> <signal> [pid...]
 #        sh tests/signal-guard.sh <self-pid> <log-file-or-empty> <source> <signal> \
 #          --below <recorded-pid> <command-glob> <stand-in-pid>
+#        sh tests/signal-guard.sh <self-pid> <log-file-or-empty> <source> <signal> \
+#          --identity <pid>
+#        sh tests/signal-guard.sh <self-pid> <log-file-or-empty> <source> <signal> \
+#          --group <leader-pid>
 #
 # Prints "accepted <pid>" or "refused: <why>" and never signals anything.
 # fm_test_signal in tests/lib.sh is its caller and the only code that sends the
@@ -32,9 +36,34 @@
 # it, so only a candidate whose parent does not match is kept. Exactly one
 # must be left, and it must not be a systemd process.
 #
+# --identity names a process the test did not start itself as a plain
+# background command (a grandchild, a daemon a fixture started, a pid a
+# product wrote to a file), the first supplement of P-010. The pid must pass
+# the plain checks above except the recorded-child and parent ones, must not
+# be an ancestor of <self-pid>, and must carry evidence that it belongs to
+# this test run, checked here before any signal:
+#   path      its command line contains a root listed in the file
+#             FM_TEST_RUN_ROOTS (the run's fm_test_tmproot registry) whose
+#             .fm-test-fixture marker names FM_TEST_SUITE_PID as its owner,
+#             followed by / or the end of a word;
+#   env       its environment holds FM_TEST_RUN_MARKS with FM_TEST_RUN_MARK
+#             (this run's own mark) as one of its words (Linux reads
+#             /proc/<pid>/environ; elsewhere ps -E, which cannot read a
+#             platform binary's environment, so that evidence is absent there);
+#   ancestry  walking up its parents reaches FM_TEST_SUITE_PID.
+# Depth and parentage alone are never evidence.
+#
+# --group names a process group by its leader. The leader must pass every
+# --identity check, must lead its own group (its pgid is its pid), and that
+# group must not be the group of FM_TEST_SUITE_PID, FM_TEST_SUITE_PARENT,
+# <self-pid> or any ancestor of <self-pid>. The accepted line then reads
+# "accepted group <leader>".
+#
 # With a log file it appends one line: the source, the raw arguments as
-# received, the shell, the parsed target, its command, the verdict, and the
-# target's ancestry up to pid 1 (for a refused --below call, the stand-in's).
+# received, the shell, the parsed target, its command, the verdict (for
+# --identity and --group, the evidence that held or the reason none did), and
+# the target's ancestry up to pid 1 (for a refused --below call, the
+# stand-in's).
 set -u
 
 self=$1 log=$2 source=$3
@@ -125,8 +154,128 @@ judge_below() {  # <recorded> <stand-in>: prints the verdict on the --below form
   esac
 }
 
+self_chain() {  # the pids from <self-pid> up to pid 1, space-separated with a leading space.
+  chain=" " pid=$self levels=0
+  while [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && [ "$levels" -lt 64 ]; do
+    chain="$chain$pid "
+    pid=$(ps_field ppid "$pid")
+    levels=$((levels + 1))
+  done
+  printf '%s\n' "$chain"
+}
+
+environment_of() {  # <pid>: its environment, one NAME=value per line where readable.
+  if [ -r "/proc/$1/environ" ]; then
+    tr '\000' '\n' < "/proc/$1/environ" 2>/dev/null
+  else
+    command -p ps -E -ww -o command= -p "$1" 2>/dev/null | tr ' ' '\n'
+  fi
+}
+
+path_evidence() {  # <pid>: prints the run root its command line names, or nothing.
+  [ -n "${FM_TEST_RUN_ROOTS:-}" ] && [ -f "$FM_TEST_RUN_ROOTS" ] || return 0
+  args=" $(ps_field args "$1") "
+  while IFS= read -r root; do
+    case "$root" in /?*) ;; *) continue ;; esac
+    [ "$(sed -n '1p' "$root/.fm-test-fixture" 2>/dev/null)" = "${FM_TEST_SUITE_PID:-}" ] || continue
+    case "$args" in
+      *"$root/"* | *"$root "*) printf '%s\n' "$root"; return 0 ;;
+    esac
+  done < "$FM_TEST_RUN_ROOTS"
+}
+
+env_evidence() {  # <pid>: 0 when its environment carries this run's mark.
+  [ -n "${FM_TEST_RUN_MARK:-}" ] || return 1
+  marks=$(environment_of "$1" | sed -n 's/^FM_TEST_RUN_MARKS=//p' | sed -n '1p')
+  case " $marks " in *" $FM_TEST_RUN_MARK "*) return 0 ;; esac
+  return 1
+}
+
+ancestry_evidence() {  # <pid>: 0 when walking up from it reaches the test script.
+  pid=$(ps_field ppid "$1") levels=0
+  while [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && [ "$levels" -lt 64 ]; do
+    [ "$pid" != "${FM_TEST_SUITE_PID:-}" ] || return 0
+    pid=$(ps_field ppid "$pid")
+    levels=$((levels + 1))
+  done
+  return 1
+}
+
+judge_identity() {  # <pid>: prints the verdict on the --identity form.
+  if [ -z "$command" ]; then
+    echo "refused: pid $1 is not running"
+    return
+  fi
+  if [ "$1" -le 1 ]; then
+    echo "refused: pid $1 is 1 or less"
+    return
+  fi
+  case "$1" in
+    "${FM_TEST_SUITE_PID:-}") echo "refused: pid $1 is the test script itself"; return ;;
+    "${FM_TEST_SUITE_PARENT:-}") echo "refused: pid $1 is the test script's parent"; return ;;
+    "$self") echo "refused: pid $1 is the signalling shell itself"; return ;;
+  esac
+  case "$(self_chain)" in
+    *" $1 "*) echo "refused: pid $1 is an ancestor of the signalling shell $self"; return ;;
+  esac
+  case "$command" in
+    *systemd*) echo "refused: pid $1 is the service manager '$command'"; return ;;
+  esac
+  root=$(path_evidence "$1")
+  if [ -n "$root" ]; then
+    echo "accepted $1 (evidence: path $root in its command line)"
+  elif env_evidence "$1"; then
+    echo "accepted $1 (evidence: env FM_TEST_RUN_MARKS holds this run's mark)"
+  elif ancestry_evidence "$1"; then
+    echo "accepted $1 (evidence: ancestry reaches the test script ${FM_TEST_SUITE_PID:-})"
+  else
+    echo "refused: pid $1 carries no evidence of this test run (no run root in its command line, no run mark in its environment, ancestry does not reach the test script ${FM_TEST_SUITE_PID:-none})"
+  fi
+}
+
+judge_group() {  # <leader>: prints the verdict on the --group form.
+  leader_verdict=$(judge_identity "$1")
+  case "$leader_verdict" in
+    "accepted "*) ;;
+    *) echo "refused: the group leader: ${leader_verdict#refused: }"; return ;;
+  esac
+  pgid=$(ps_field pgid "$1")
+  if [ "$pgid" != "$1" ]; then
+    echo "refused: pid $1 does not lead its own group (its group: ${pgid:-none})"
+    return
+  fi
+  for pid in ${FM_TEST_SUITE_PID:-} ${FM_TEST_SUITE_PARENT:-} $(self_chain); do
+    if [ "$(ps_field pgid "$pid")" = "$pgid" ]; then
+      echo "refused: group $pgid is the group of pid $pid, the test script, its parent, the signalling shell or one of its ancestors"
+      return
+    fi
+  done
+  echo "accepted group $1 ${leader_verdict#accepted $1 }"
+}
+
 if [ "$signal_ok" -eq 0 ]; then
   verdict="refused: '$signal' is not one of the signal names TERM KILL STOP CONT INT HUP QUIT"
+elif [ "${1-}" = --identity ] || [ "${1-}" = --group ]; then
+  form=$1
+  shift
+  if [ "$#" -ne 1 ]; then
+    verdict="refused: $form takes exactly one pid, got $#"
+  else
+    case "$1" in
+      '') verdict="refused: the pid is empty" ;;
+      *[!0-9]*) verdict="refused: '$1' is not a positive pid (a flag, a negative pid or a process group)" ;;
+      0*) verdict="refused: '$1' is 0 or starts with 0" ;;
+      *)
+        target=$1
+        command=$(ps_field args "$target")
+        if [ "$form" = --identity ]; then
+          verdict=$(judge_identity "$target")
+        else
+          verdict=$(judge_group "$target")
+        fi
+        ;;
+    esac
+  fi
 elif [ "${1-}" = --below ]; then
   glob=${3-}
   if [ "$#" -ne 4 ]; then
