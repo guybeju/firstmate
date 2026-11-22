@@ -45,7 +45,7 @@
 | `myshape/package.json`、`pnpm-lock.yaml`、`tsconfig.json`、`.gitignore` | 只有開發期相依；`.gitignore` 忽略 `node_modules/` 與 `.metrics/` | 二 |
 | `FORK-SETUP.markdown`（根目錄） | 新機器從零安裝 fork 與看板的說明；`fm-board/test/check-guide.sh` 檢查它引用的名稱 | 上線後 |
 
-first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、規則範本 `fm-board/rules/`、它們的測試與說明）不是看板的，列在 [adapter](../../fm-board/spec/adapter.markdown) 第 1 節。
+first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、規則範本 `fm-board/rules/`、它們的測試與說明）不是看板的，列在 [adapter](../../fm-board/spec/adapter.markdown) 第 1 節；這一側改到的上游檔案（`bin/fm-backlog-handoff.sh`、`bin/fm-fleet-snapshot.sh`）也列在那裡。
 
 硬性限制（都實測過，見 [verification](verification.markdown)）：
 

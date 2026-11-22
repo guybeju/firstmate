@@ -16,16 +16,19 @@
 | `bin/fm-topic.sh` | 改名前的指令名稱留下的提示（第 2 節）；每個 home 都搬完之後拿掉 |
 | `bin/fm-board-lib.sh` | 找同機 secondmate 的 home、在那個 home 執行指令；`fm-board.sh` 與 `fm-topic-board-read.sh` source 它 |
 | `bin/fm-queue-source-lib.sh` | second mate 的 home 去哪裡讀主 home 的議題清單、副本能不能用；`fm-dispatch-plan.sh` 與 `fm-board.sh tag`（只在 subshell 裡）source 它 |
-| `bin/fm-dispatch-plan.sh` | `order`：照看板的佇列排出該派、該 hold、該解除的 backlog 項目，在每個 home；`queues-in`、`queues-push`：把佇列副本送到遠端的 second mate（[dispatch-plan](../../dispatch-plan/spec/dispatch-plan.markdown)） |
+| `bin/fm-dispatch-plan.sh` | `order`：照看板的佇列排出該派、該 hold、該解除的 backlog 項目，其餘的列在「先不派」並附原因，在每個 home；`queues-in`、`queues-push`：把佇列副本送到遠端的 second mate（[dispatch-plan](../../dispatch-plan/spec/dispatch-plan.markdown)） |
+| `bin/fm-backlog-archive-lib.sh` | tasks-axi 的 Done 保留把完成的項目搬去的封存檔在哪裡、裡面有哪些完成的 id；上游的 `fm-fleet-snapshot.sh` source 它（見下面） |
 | `fm-board/rules/` | 三個規則範本，副檔名 `.md.tmpl`（fork 不能新增追蹤的 `.md`） |
 | `fm-board/test/` | `run.sh` 與這一側的測試：`feed`（`stage-1-feed.sh`），`deliver`（`stage-2-deliver.sh`），`tag`、`setup`、`bind`、`--in-home`（`stage-1-tag.sh`），帶 task 的 `split`（`stage-3-split.sh`），`adopt`（`stage-3-adopt.sh`），設定檔、session start 與群組能寫的 checkout（`stage-4-binding.sh`），規則與安裝說明（`stage-6-*.sh`、`check-guide.sh`），改名前的名字與 `migrate-myshape`（`stage-8-*.sh`） |
 | `dispatch-plan/test/` | `run.sh` 與 `fm-dispatch-plan.sh` 的測試（`stage-1` 到 `stage-4`） |
 | `dispatch-plan/spec/` | `fm-dispatch-plan.sh` 的說明 |
 | `fm-board/spec/` | 這一頁 |
 
-`bin/` 底下的七支和看板的指令一樣，要通過 `bin/fm-lint.sh <檔>` 與 bash 3.2 的語法檢查。
+`bin/` 底下的八支和看板的指令一樣，要通過 `bin/fm-lint.sh <檔>` 與 bash 3.2 的語法檢查。
 `fm-board.sh` 與 `fm-dispatch-plan.sh` 要在 git 裡是可執行的：遠端 home 的 `tag`、`setup`、`order` 與 `queues-in` 經 `fm-on.sh` 跑，它只執行追蹤、可執行的 `bin/fm-*.sh`。
 上游的 `bin/fm-backlog-handoff.sh` 在 fork 上多一行：把 backlog 項目交給遠端 second mate 之前跑 `fm-dispatch-plan.sh queues-push --to <id>`（[dispatch-plan](../../dispatch-plan/spec/dispatch-plan.markdown) 第 5 節）。
+上游的 `bin/fm-fleet-snapshot.sh` 在 fork 上多讀封存檔：source `bin/fm-backlog-archive-lib.sh`，`unresolved_blocker_ids` 把 backlog 裡沒有、但在封存檔裡是完成的 id 算成已解決（dispatch-plan 第 2 節），檔頭說明那一句跟著改；它的測試是上游既有的 `tests/fm-fleet-snapshot-view.test.sh` 多的 `test_archived_done_blockers_resolve`。
+合併上游時保留這兩處；衝突時先保留上游的改動，再把這幾行加回去。
 
 ## 2. 舊的寫法
 

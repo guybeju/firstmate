@@ -50,12 +50,13 @@
 
 ### `order`
 
-唯讀，不改 backlog，不經服務。讀三樣：議題檔與封存檔、這個 home 的 `data/*/topic`、`fm-fleet-snapshot.sh --json` 的 `backlog.records[]`（設 `FM_CREW_STATE_NO_FORGE=1`，`FM_SNAPSHOT_SECONDMATES` 同彙整腳本）。只看 `state` 是 `queued` 的紀錄。輸出四段，每行 `<task-id> <議題名稱> <佇列>`：
+唯讀，不改 backlog，不經服務。讀三樣：議題檔與封存檔、這個 home 的 `data/*/topic`、`fm-fleet-snapshot.sh --json` 的 `backlog.records[]`（設 `FM_CREW_STATE_NO_FORGE=1`，`FM_SNAPSHOT_SECONDMATES` 同彙整腳本）。只看 `state` 是 `queued` 的紀錄。輸出五段，每行 `<task-id> <議題名稱> <佇列>`：
 
 - **可派**：「高」佇列的議題、「一般」佇列的議題、沒有標記的項目，依序。同一佇列照陣列順序，同一議題內照 backlog 的順序。被別的 hold 擋住、有未解的 blocker、`hold_until` 還沒到的，不列。
 - **該 hold**：議題在「待辦」或已封存、還沒被 hold 的項目。每行後面附要跑的指令：`bin/fm-tasks-axi.sh hold <id> --reason "看板佇列：議題 <議題 id> 在待辦"`。
 - **該解除**：`hold_reason` 以 `看板佇列：` 開頭、但議題已經不在待辦也沒封存的項目。每行附 `bin/fm-tasks-axi.sh unhold <id>`（確切名稱依 1-3）。
 - **停著**：已經照上面 hold 住、議題仍在待辦或封存的項目。
+- **先不派**：不在上面四段的其他排隊項目，照 backlog 的順序，每行附原因（[dispatch-plan](../../dispatch-plan/spec/dispatch-plan.markdown) 第 2 節）。
 
 壞掉時放行，一律 exit 0：
 

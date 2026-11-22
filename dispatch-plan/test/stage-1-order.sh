@@ -89,7 +89,14 @@ test_sections() {
   assert_not_contains "$(section "$out" "可派：")" "o1" "an item held by something else must not be dispatchable"
   assert_not_contains "$(section "$out" "可派：")" "b1" "a blocked item must not be dispatchable"
   assert_not_contains "$(section "$out" "可派：")" "c1" "a captain hold must not be dispatchable"
-  pass "order prints dispatchable, to-hold, to-release, and parked sections"
+  assert_equals "o1 b1 c1 " "$(section "$out" "先不派：")" \
+    "every queued item in none of the four sections must be listed under 先不派, in backlog order"
+  assert_contains "$out" "$(printf 'o1\t帳務重構\t高\t← 被看板以外的 hold 擋著')" "an item held by something else must say so"
+  assert_contains "$out" "$(printf 'b1\t帳務重構\t高\t← 等 n1 完成')" "a blocked item must name the unfinished item it waits on"
+  assert_contains "$out" "$(printf 'c1\t帳務重構\t高\t← 等使用者決定（captain hold）')" "a captain hold must say it waits on the captain"
+  assert_equals "可派： 該 hold： 該解除： 停著： 先不派： " "$(printf '%s\n' "$out" | grep -v '^  ' | tr '\n' ' ')" \
+    "the four sections must keep their order, with 先不派 right after them"
+  pass "order prints dispatchable, to-hold, to-release, parked, and not-dispatched sections"
 }
 
 # write_items <home> <json>: the board's data/myshape/todos.json with these items.
@@ -138,6 +145,7 @@ test_falls_open_without_a_usable_topic_file() {
   assert_equals "" "$(section "$out" "該 hold：")" "without a topic file nothing may be listed to hold"
   assert_equals "" "$(section "$out" "該解除：")" "without a topic file nothing may be listed to release"
   assert_equals "l2 r1 " "$(section "$out" "停著：")" "items the board held earlier must stay visible without a topic file"
+  assert_equals "o1 b1 c1 " "$(section "$out" "先不派：")" "without a topic file held and blocked items must still be listed"
   printf 'not json' > "$home/data/topics.json"
   out=$(tb_run "$home" "$PLAN" order) || fail "order failed on an unreadable topic file"
   assert_contains "$out" "讀不懂" "order did not explain the unreadable topic file"
@@ -191,7 +199,89 @@ test_warns_about_holds_from_before_the_rename() {
   assert_equals "" "$(section "$out" "停著：")" "an old-prefix hold is not the board's to park"
   assert_equals "" "$(section "$out" "該解除：")" "an old-prefix hold is not the board's to release"
   assert_not_contains "$(section "$out" "可派：")" "r1" "an old-prefix hold must not become dispatchable"
+  assert_equals "l2 r1 o1 b1 c1 " "$(section "$out" "先不派：")" "an old-prefix hold must be listed under 先不派"
+  assert_contains "$out" "$(printf 'r1\t帳務重構\t高\t← 舊標記的 hold，先跑 bin/fm-board.sh migrate-myshape')" \
+    "an old-prefix hold must name the migration command"
   pass "order warns about holds from before the rename and leaves them held"
+}
+
+# every_listed <output>: each task id listed under any section, one per line, sorted and unique.
+every_listed() {
+  printf '%s\n' "$1" | awk '/^  / { sub(/^  /, ""); split($0, cols, "\t"); print cols[1] }' | sort -u
+}
+
+# A blocker that is done counts as resolved after Done retention has moved it
+# into the archive the backlog root's .tasks.toml names; a live record of the
+# same id wins over an archived one, and an id found in neither stays open.
+# Every queued item lands in a section, and those in none of the four are
+# listed under 先不派 with why.
+test_resolves_archived_blockers_and_lists_every_item() {
+  local home out
+  home=$(tb_make_home order-archive)
+  tb_free_port > "$home/config/myshape-port"
+  mkdir -p "$TMP_ROOT/user-home"
+  tb_write_topics "$home"
+  printf 'backend = "markdown"\n\n[markdown]\npath = "data/backlog.md"\narchive = "data/old-done.md"\n' \
+    > "$home/.tasks.toml"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] g1 - Waits on one archived item blocked-by: fin1 (repo: sample) (kind: ship)
+- [ ] g2 - Waits on two archived items blocked-by: fin1 blocked-by: fin2 (repo: sample) (kind: ship)
+- [ ] w1 - Waits on queued work blocked-by: open1 (repo: sample) (kind: ship)
+- [ ] open1 - Still queued (repo: sample) (kind: ship)
+- [ ] z1 - Waits on a typo blocked-by: fni1 (repo: sample) (kind: ship)
+- [ ] r1 - Waits on a reused id blocked-by: reused (repo: sample) (kind: ship)
+- [ ] reused - Reused id, open again (repo: sample) (kind: ship) (hold: waiting for a vendor)
+- [ ] q1 - Waits on an item archived unfinished blocked-by: prq (repo: sample) (kind: ship)
+- [ ] d1 - Waits on an item in the unconfigured archive blocked-by: dflt (repo: sample) (kind: ship)
+- [ ] c1 - Held and blocked blocked-by: open1 (repo: sample) (kind: captain) (hold: choose a route) (hold-kind: captain)
+
+## Done
+EOF
+  cat > "$home/data/old-done.md" <<'EOF'
+
+## Archived 2026-11-01T00:00:00Z
+- [x] fin1 - Finished long ago (repo: sample) (kind: ship) (done 2026-10-01)
+  A body line.
+- [x] reused - An earlier item with this id (repo: sample) (kind: ship) (done 2026-10-01)
+
+## Archived 2026-11-02T00:00:00Z
+- [x] fin2 - Finished later (repo: sample) (kind: ship) (done 2026-10-02)
+- [ ] prq - Pruned while queued (repo: sample) (kind: ship)
+EOF
+  printf '\n## Archived 2026-11-01T00:00:00Z\n- [x] dflt - Only in the default archive (repo: sample) (kind: ship)\n' \
+    > "$home/data/done-archive.md"
+  out=$(HOME="$TMP_ROOT/user-home" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$PLAN" order 2> "$TMP_ROOT/order-archive.err") ||
+    fail "order failed on a home with an archive"
+  assert_equals "" "$(cat "$TMP_ROOT/order-archive.err")" "order must not write to stderr"
+  assert_equals "g1 g2 open1 " "$(section "$out" "可派：")" \
+    "an item whose blockers are all done and archived must be dispatchable"
+  assert_equals "w1 z1 r1 reused q1 d1 c1 " "$(section "$out" "先不派：")" \
+    "every other queued item must be listed under 先不派"
+  assert_contains "$out" "$(printf 'w1\t（未分類）\t-\t← 等 open1 完成')" "an unfinished blocker must be named"
+  assert_contains "$out" "$(printf 'z1\t（未分類）\t-\t← 找不到它等的 fni1（不在 backlog，也不在封存檔）')" \
+    "a blocker in neither the backlog nor the archive must be named as not found"
+  assert_contains "$out" "$(printf 'r1\t（未分類）\t-\t← 等 reused 完成')" \
+    "a blocker open in the backlog must stay open although an older item of its id is archived"
+  assert_contains "$out" "$(printf 'q1\t（未分類）\t-\t← 找不到它等的 prq')" \
+    "an item archived unfinished must not count as done"
+  assert_contains "$out" "$(printf 'd1\t（未分類）\t-\t← 找不到它等的 dflt')" \
+    "only the archive the backlog root configures may be read"
+  assert_contains "$out" "$(printf 'c1\t（未分類）\t-\t← 等使用者決定（captain hold）；等 open1 完成')" \
+    "an item held and blocked must give both reasons"
+  assert_equals "$(sed -n 's/^- \[ \] \([^ ]*\) - .*/\1/p' "$home/data/backlog.md" | sort -u)" "$(every_listed "$out")" \
+    "every queued item must be listed in some section"
+
+  chmod 000 "$home/data/old-done.md"
+  out=$(HOME="$TMP_ROOT/user-home" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$PLAN" order 2> "$TMP_ROOT/order-archive.err") ||
+    fail "order failed on an unreadable archive"
+  chmod 600 "$home/data/old-done.md"
+  assert_equals "" "$(cat "$TMP_ROOT/order-archive.err")" "an unreadable archive must not write to stderr"
+  assert_equals "open1 " "$(section "$out" "可派：")" "an unreadable archive must resolve nothing extra"
+  assert_contains "$out" "$(printf 'g1\t（未分類）\t-\t← 找不到它等的 fin1')" "an unreadable archive must leave its ids open"
+  pass "order resolves archived blockers and lists every queued item with why"
 }
 
 test_falls_open_when_the_snapshot_fails() {
@@ -212,4 +302,5 @@ test_falls_open_when_the_snapshot_fails() {
 
 fm_test_run test_sections test_lists_hands_on_items_waiting_for_a_check \
   test_falls_open_without_a_usable_topic_file test_ranks_an_untagged_item_by_its_topic_line \
-  test_warns_about_holds_from_before_the_rename test_falls_open_when_the_snapshot_fails
+  test_warns_about_holds_from_before_the_rename test_resolves_archived_blockers_and_lists_every_item \
+  test_falls_open_when_the_snapshot_fails

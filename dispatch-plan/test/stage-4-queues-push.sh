@@ -108,6 +108,20 @@ backdate_delivery() {
   mv "$record.new" "$record"
 }
 
+# A mate with no failing record yet: its first push, delivered or not, must
+# not print the shell's "No such file or directory" for pushed/<id>.failing.
+test_a_first_push_prints_no_shell_error() {
+  local rc=0
+  push_setup quiet-stderr far1 far2
+  mode far2 down
+  FM_HOME="$MAIN" FM_ROOT_OVERRIDE="$CODE" "$CODE/bin/fm-dispatch-plan.sh" queues-push \
+    > "$TMP_ROOT/quiet-stderr.out" 2> "$TMP_ROOT/quiet-stderr.err" || rc=$?
+  assert_equals "1" "$rc" "a push with a failed transfer must exit 1"
+  assert_contains "$(cat "$TMP_ROOT/quiet-stderr.out")" "far1：已送出（" "the reachable mate must still get the copy"
+  assert_equals "" "$(cat "$TMP_ROOT/quiet-stderr.err")" "a first push must write nothing to stderr"
+  pass "a first push prints no shell error for a mate with no failing record"
+}
+
 test_pushes_once_per_mate_whose_copy_differs() {
   local out check
   push_setup differs far1 far2
@@ -366,7 +380,8 @@ test_handoff_pushes_the_copy_first() {
   pass "a backlog handoff to a remote mate pushes the copy first and goes on when the push fails"
 }
 
-fm_test_run test_pushes_once_per_mate_whose_copy_differs test_resends_an_unchanged_copy_after_30_minutes \
+fm_test_run test_a_first_push_prints_no_shell_error test_pushes_once_per_mate_whose_copy_differs \
+  test_resends_an_unchanged_copy_after_30_minutes \
   test_retries_a_failed_transfer_at_the_next_run test_does_not_hammer_a_mate_without_queues_in \
   test_stops_starting_transfers_after_18_seconds test_prints_the_behind_line_once_per_episode \
   test_runs_only_where_there_is_something_to_send test_to_sends_one_mate_its_copy_now \

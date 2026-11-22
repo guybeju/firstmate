@@ -13,12 +13,14 @@
 #        when the queues or the backlog cannot be read it says so and lets
 #        dispatch proceed. An item under 該解除 is also listed under 可派, marked
 #        as still held, so its place in the order is visible before the hold is
-#        lifted. Items held by anything else (a captain hold, another hold, an
-#        unresolved blocker) are in no section: upstream's own gates decide
-#        those. Without usable queues, items the board held earlier are
+#        lifted. Without usable queues, items the board held earlier are
 #        still listed under 停著 so that a leftover hold is not forgotten.
-#        A hold whose reason still starts with the board's prefix from before
-#        the rename (topic-board：) is in no section; order prints one line
+#        Every other queued item is listed under 先不派, after 停著, with why:
+#        held by anything else (a captain hold, another hold), or waiting on a
+#        blocker that is unfinished or that neither the backlog nor its Done
+#        archive knows; upstream's own gates decide those. A hold whose reason
+#        still starts with the board's prefix from before the rename
+#        (topic-board：) is one of them, and order also leads with one line
 #        naming how many there are and bin/fm-board.sh migrate-myshape.
 #        An untagged item ranks under the topic its bare "topic: <id>" body
 #        line names; a tag wins.
@@ -259,6 +261,9 @@ cmd_order() {
            decision: ($r.kind == "captain"),
            own_hold: (($r.hold_reason // "") | startswith($own)),
            other_hold: ($r.hold_reason != null and ((($r.hold_reason // "") | startswith($own)) | not)),
+           old_hold: (($r.hold_reason // "") | startswith($old)),
+           captain_hold: ($r.hold_kind == "captain"),
+           waits: ($r.unresolved_blocker_ids // []),
            blocked: (($r.unresolved_blocker_ids // []) | length > 0),
            parked: ($p.queue == "later" or $p.queue == "archived")} ] as $items
     | def line: "  \(.id)\t\(.name)\t\(.queue | queue_name)";
@@ -269,7 +274,20 @@ cmd_order() {
     | ($items | map(select(.parked and (.own_hold | not) and (.other_hold | not)))) as $to_hold
     | ($items | map(select($doc != null and .own_hold and (.parked | not)))) as $to_release
     | ($items | map(select(.own_hold and (.parked or $doc == null)))) as $parked
-    | ([ .backlog.records[] | select(.state == "queued" and ((.hold_reason // "") | startswith($old))) ] | length) as $stale
+    | ([$ready[], $to_hold[], $to_release[], $parked[]] | map(.index)) as $placed
+    | ($items | map(select(.index as $i | any($placed[]; . == $i) | not))) as $unplaced
+    | ([.backlog.records[] | select(.structured == true) | {key: .id, value: true}] | from_entries) as $known
+    | def why:
+        [ (if .old_hold then "舊標記的 hold，先跑 bin/fm-board.sh migrate-myshape"
+           elif .other_hold and .captain_hold then "等使用者決定（captain hold）"
+           elif .other_hold then "被看板以外的 hold 擋著"
+           else empty end),
+          (.waits | map(select($known[.] == true))
+           | if length > 0 then "等 \(join("、")) 完成" else empty end),
+          (.waits | map(select($known[.] != true))
+           | if length > 0 then "找不到它等的 \(join("、"))（不在 backlog，也不在封存檔）" else empty end) ]
+        | join("；");
+      ([ .backlog.records[] | select(.state == "queued" and ((.hold_reason // "") | startswith($old))) ] | length) as $stale
     | (if $stale > 0 and $sm == 0 then "有 \($stale) 個舊標記的 hold，先跑 bin/fm-board.sh migrate-myshape" else empty end),
       (if $note != "" then $note else empty end),
       (if $stale > 0 and $sm == 1 then "有 \($stale) 個舊標記的 hold，先跑 bin/fm-board.sh migrate-myshape" else empty end),
@@ -283,6 +301,8 @@ cmd_order() {
       ($to_release[] | line + "\t→ bin/fm-tasks-axi.sh unhold \(.id)"),
       "停著：",
       ($parked[] | line),
+      "先不派：",
+      ($unplaced[] | line + "\t← " + why),
       ([ ($todos[0].items // {}) | to_entries[] | select(.value.state == "claimed")
          | (.value.topic | if . == null then null else resolve end) as $topic
          | place($topic) as $p
@@ -343,7 +363,7 @@ report() {
 # run of transfers to <mate>, from pushed/<mate>.failing ("<since> <last> <rc>").
 failing_field() {
   local since last rc
-  read -r since last rc < "$PUSHED_DIR/$1.failing" 2>/dev/null || return 1
+  read -r since last rc 2>/dev/null < "$PUSHED_DIR/$1.failing" || return 1
   case "$2" in
     1) printf '%s\n' "$since" ;;
     2) printf '%s\n' "$last" ;;

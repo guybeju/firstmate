@@ -470,6 +470,95 @@ EOF
   pass "backlog normalization preserves strict roles and resolves every blocker compatibly"
 }
 
+# queued_blocker_view <home> <user-home> <fakebin>: each queued record's
+# unresolved blockers and hold bucket, keyed by id; stderr goes to
+# $TMP_ROOT/archived-blockers.err. Returns 1 when the snapshot fails.
+queued_blocker_view() {
+  HOME="$2" PATH="$3:$PATH" FM_HOME="$1" "$SNAPSHOT" --json \
+    > "$TMP_ROOT/archived-blockers.json" 2> "$TMP_ROOT/archived-blockers.err" || return 1
+  jq -c '[.backlog.records[] | select(.state == "queued")
+          | {key: .id, value: {u: .unresolved_blocker_ids, b: .hold_bucket}}] | from_entries' \
+    "$TMP_ROOT/archived-blockers.json"
+}
+
+# A blocker that is done still resolves after Done retention moved it into the
+# markdown archive; a live record of the same id wins, and an id found in
+# neither place, or archived unfinished, stays open. The archive is the one
+# tasks-axi itself appends to, and a missing or unreadable one changes nothing.
+test_archived_done_blockers_resolve() {
+  local home fakebin user out err
+  home=$(make_home archived-blockers)
+  user=$TMP_ROOT/archived-blockers-user
+  mkdir -p "$user"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] after-archived - Waits on archived work blocked-by: finished (repo: alpha) (kind: ship)
+- [ ] after-reused - Waits on a reused id blocked-by: reused (repo: alpha) (kind: ship)
+- [ ] reused - Reused id, open again (repo: alpha) (kind: ship)
+- [ ] after-unknown - Waits on a typo blocked-by: finishde (repo: alpha) (kind: ship)
+- [ ] after-pruned - Waits on work archived unfinished blocked-by: pruned (repo: alpha) (kind: ship)
+- [ ] archived-call - Call after archived work blocked-by: finished (repo: alpha) (kind: captain) (hold: choose a route) (hold-kind: captain)
+
+## Done
+EOF
+  cat > "$home/data/done-archive.md" <<'EOF'
+
+## Archived 2026-07-01T00:00:00Z
+- [x] finished - Finished work (repo: alpha) (kind: ship) (done 2026-06-30)
+  A body line.
+- [x] reused - Earlier work with this id (repo: alpha) (kind: ship) (done 2026-06-30)
+
+## Archived 2026-07-02T00:00:00Z
+- [ ] pruned - Pruned while queued (repo: alpha) (kind: ship)
+EOF
+  fakebin=$(make_fakebin "$home")
+  out=$(queued_blocker_view "$home" "$user" "$fakebin")
+  printf '%s' "$out" | jq -e '
+    .["after-archived"].u == [] and .["after-reused"].u == ["reused"]
+      and .["after-unknown"].u == ["finishde"] and .["after-pruned"].u == ["pruned"]
+      and .["archived-call"].u == [] and .["archived-call"].b == "live"
+  ' >/dev/null || fail "archived blockers resolved wrongly: $out"
+
+  printf 'backend = "markdown"\n\n[markdown]\narchive = "data/configured.md"\n' > "$home/.tasks.toml"
+  out=$(queued_blocker_view "$home" "$user" "$fakebin")
+  printf '%s' "$out" | jq -e '.["after-archived"].u == ["finished"]' >/dev/null ||
+    fail "an archive other than the configured one was read: $out"
+  mv "$home/data/done-archive.md" "$home/data/configured.md"
+  out=$(queued_blocker_view "$home" "$user" "$fakebin")
+  printf '%s' "$out" | jq -e '.["after-archived"].u == []' >/dev/null ||
+    fail "the archive the backlog root configures was not read: $out"
+
+  printf 'backend = "markdown"\n' > "$home/.tasks.toml"
+  mkdir -p "$user/.tasks-axi"
+  printf '[markdown]\narchive = "data/configured.md"\n' > "$user/.tasks-axi/config.toml"
+  out=$(queued_blocker_view "$home" "$user" "$fakebin")
+  printf '%s' "$out" | jq -e '.["after-archived"].u == []' >/dev/null ||
+    fail "the user-level archive setting was not honored: $out"
+
+  printf 'backend = "beads"\n\n[markdown]\narchive = "data/configured.md"\n' > "$home/.tasks.toml"
+  out=$(queued_blocker_view "$home" "$user" "$fakebin")
+  printf '%s' "$out" | jq -e '.["after-archived"].u == ["finished"]' >/dev/null ||
+    fail "a non-markdown backend must not read a markdown archive: $out"
+
+  printf 'backend = "markdown"\n\n[markdown]\narchive = "data/configured.md"\n' > "$home/.tasks.toml"
+  chmod 000 "$home/data/configured.md"
+  out=$(queued_blocker_view "$home" "$user" "$fakebin") || fail "the snapshot failed on an unreadable archive"
+  chmod 600 "$home/data/configured.md"
+  err=$(cat "$TMP_ROOT/archived-blockers.err")
+  assert_equals "" "$err" "an unreadable archive must not write to stderr"
+  printf '%s' "$out" | jq -e '.["after-archived"].u == ["finished"]' >/dev/null ||
+    fail "an unreadable archive must resolve nothing: $out"
+
+  mv "$home/data/configured.md" "$home/data/configured.gone"
+  out=$(queued_blocker_view "$home" "$user" "$fakebin") || fail "the snapshot failed without its archive"
+  assert_equals "" "$(cat "$TMP_ROOT/archived-blockers.err")" "a missing archive must not write to stderr"
+  printf '%s' "$out" | jq -e '.["after-archived"].u == ["finished"] and .["archived-call"].b == "blocked"' >/dev/null ||
+    fail "a missing archive must resolve nothing: $out"
+  pass "done blockers moved into the archive resolve, and nothing else does"
+}
+
 test_event_hints_follow_reconciled_current_state() {
   local home fakebin out hint_gen
   home=$(make_home event-hints)
@@ -1160,6 +1249,7 @@ fm_test_run \
   test_hold_buckets_are_total_and_text_blind \
   test_main_inventory_orphan_and_unstructured_disclosure \
   test_normalized_roles_and_plural_blocker_readiness \
+  test_archived_done_blockers_resolve \
   test_event_hints_follow_reconciled_current_state \
   test_open_decision_survives_later_unrelated_event \
   test_secondmate_open_decision_survives_live_endpoint \
