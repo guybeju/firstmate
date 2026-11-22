@@ -872,6 +872,8 @@ install_cmd() {
     tmux|node|git|gh|curl|jq|orca|zellij) echo "brew install $1  # or the platform's package manager" ;;
     cmux) echo "brew install --cask cmux  # or see https://cmux.com" ;;
     hc) echo "bin/fm-install-hc.sh <dir> && add <dir> to PATH  # or see docs/hc-backend.md" ;;
+    shellcheck) echo "bin/fm-install-shellcheck.sh <dir> && add <dir> to PATH" ;;
+    actionlint) echo "bin/fm-install-actionlint.sh <dir> && add <dir> to PATH" ;;
     treehouse) echo "curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh" ;;
     no-mistakes) echo "curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh" ;;
     gh-axi|chrome-devtools-axi|lavish-axi) echo "npm install -g $1 && $1 setup hooks" ;;
