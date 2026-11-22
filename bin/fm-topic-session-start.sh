@@ -5,14 +5,20 @@
 #
 # bin/fm-session-start.sh runs this once per full session start that holds the
 # session lock; a lock-refused session and a context re-emit never run it. It
-# makes sure the board service of this home is running and prints exactly one
-# line saying what it found:
+# makes sure the board service of this home is running and prints one line
+# saying what it found:
 #
 #   看板服務：在跑
 #   看板服務：原本沒在跑，已啟動
 #   看板服務：原本沒有回應，已重新啟動
 #   看板服務：已接上 firstmate，換上新的看板
 #   看板服務：無法啟動：<原因>
+#
+# When it has just written the missing binding (below), it prints the
+# 已接上 firstmate line once: alone when the board was running and has been
+# replaced, after the started or restarted line, and before the 無法啟動 line
+# so that a failure is the last line. It does not print it when bind wrote
+# nothing (a file appeared at that path in the meantime).
 #
 # It prints nothing and starts nothing when this home does not use the board:
 # in a secondmate home, and in a main home without state/myshape/token.
@@ -55,6 +61,8 @@ STATUS_BOUND=10
 START_BOUND=30
 RUNNING_LINE='看板服務：在跑'
 HUNG_LINE='看板服務：沒有回應'
+BOUND_LINE='看板服務：已接上 firstmate，換上新的看板'
+BIND_WROTE_LINE='ok bind 看板的 aggregator 設定已寫：firstmate'
 
 # shellcheck source=bin/fm-primary-scope-lib.sh
 . "$SCRIPT_DIR/fm-primary-scope-lib.sh"
@@ -76,6 +84,23 @@ start_failure_reason() {  # <rc> <text>
   printf '%s\n' "$reason"
 }
 
+# The line or lines for one open that exited <rc>, given the status line
+# <first> seen before it and whether the binding was just written (<bound>).
+report_open() {  # <rc> <err> <first> <bound>
+  local rc=$1 err=$2 first=$3 bound=$4
+  if [ "$rc" -ne 0 ]; then
+    [ "$bound" -eq 0 ] || printf '%s\n' "$BOUND_LINE"
+    printf '%s\n' "看板服務：無法啟動：$(start_failure_reason "$rc" "$err")"
+    return 0
+  fi
+  if [ "$first" = "$HUNG_LINE" ]; then
+    printf '%s\n' '看板服務：原本沒有回應，已重新啟動'
+  elif [ "$first" != "$RUNNING_LINE" ]; then
+    printf '%s\n' '看板服務：原本沒在跑，已啟動'
+  fi
+  [ "$bound" -eq 0 ] || printf '%s\n' "$BOUND_LINE"
+}
+
 main() {
   local status_out first err rc=0 bound=0
   fm_root_is_secondmate_home "$FM_HOME" && return 0
@@ -85,7 +110,7 @@ main() {
     return 0
   fi
   if [ ! -e "$CONFIG/myshape-aggregator.json" ] && [ ! -L "$CONFIG/myshape-aggregator.json" ]; then
-    "$SCRIPT_DIR/fm-board.sh" bind >/dev/null 2>&1 && bound=1
+    [ "$("$SCRIPT_DIR/fm-board.sh" bind 2>/dev/null)" != "$BIND_WROTE_LINE" ] || bound=1
   fi
   status_out=$(fm_run_timed "$STATUS_BOUND" "$SCRIPT_DIR/myshape.sh" status 2>/dev/null) || true
   IFS= read -r first <<< "$status_out" || true
@@ -94,16 +119,7 @@ main() {
     return 0
   fi
   err=$(fm_run_timed "$START_BOUND" "$SCRIPT_DIR/myshape.sh" open 2>&1 >/dev/null) || rc=$?
-  if [ "$rc" -ne 0 ]; then
-    printf '%s\n' "看板服務：無法啟動：$(start_failure_reason "$rc" "$err")"
-    return 0
-  elif [ "$first" = "$RUNNING_LINE" ]; then
-    printf '%s\n' '看板服務：已接上 firstmate，換上新的看板'
-  elif [ "$first" = "$HUNG_LINE" ]; then
-    printf '%s\n' '看板服務：原本沒有回應，已重新啟動'
-  else
-    printf '%s\n' '看板服務：原本沒在跑，已啟動'
-  fi
+  report_open "$rc" "$err" "$first" "$bound"
 }
 
 main

@@ -5,8 +5,10 @@
 # the board runs it without a confirmation even though its group may write
 # it. fm-board.sh setup writes the binding; in a home set up before the board
 # read one, the session-start hook writes it and replaces the running board,
-# which then reads the home through fm-board.sh feed. fm-board.sh tag and
-# split write a missing binding too, feed and deliver never do, and an
+# which then reads the home through fm-board.sh feed; whenever it writes the
+# binding it says so in one line, also when the board was stopped, did not
+# answer or failed to start (the failure stays the last line). fm-board.sh tag
+# and split write a missing binding too, feed and deliver never do, and an
 # empty file at that path stays and runs nothing. Everything runs on a scratch
 # home with its own port, in a clean environment.
 # shellcheck disable=SC2016 # jq filters are literal text.
@@ -28,6 +30,7 @@ trap 'tb_stop_boards; sig_leftovers; fm_test_cleanup' EXIT
 sig_init
 
 BINDING='{"v":1,"name":"firstmate","feed":"bin/fm-board.sh","deliver":"bin/fm-board.sh"}'
+BOUND_LINE='看板服務：已接上 firstmate，換上新的看板'
 CODE=$TMP_ROOT/checkout
 mkdir -p "$CODE" "$TMP_ROOT/h" "$TMP_ROOT/tmp"
 git -C "$ROOT" ls-files -z | (cd "$ROOT" && xargs -0 tar -cf - --) | tar -xf - -C "$CODE"
@@ -107,11 +110,104 @@ test_the_hook_leaves_a_bound_board_alone() {
 test_the_hook_starts_a_stopped_board_with_the_binding() {
   run "$CODE/bin/myshape.sh" stop >/dev/null
   rm "$MAIN/config/myshape-aggregator.json"
-  assert_equals "看板服務：原本沒在跑，已啟動" "$(run "$CODE/bin/fm-topic-session-start.sh")" "a stopped board must be started"
+  assert_equals "$(printf '%s\n' "看板服務：原本沒在跑，已啟動" "$BOUND_LINE")" "$(run "$CODE/bin/fm-topic-session-start.sh")" \
+    "a stopped board must be started, and the written binding said after that line"
   assert_equals "$BINDING" "$(cat "$MAIN/config/myshape-aggregator.json")" "the hook must write the missing binding first"
   assert_equals true "$(aggregator '.connected')" "the started board must be bound"
   run "$CODE/bin/myshape.sh" stop >/dev/null
-  pass "the hook writes a missing binding before it starts a stopped board"
+  pass "the hook writes a missing binding before it starts a stopped board, and says so"
+}
+
+# A code root whose bin/myshape.sh is a stand-in answering status and open as
+# <root>/standin-mode says, so the hook meets a board that does not answer or
+# fails to start without any board being started or signalled. Every other
+# command is the checkout's; with bind-noop in the mode, bin/fm-board.sh bind
+# writes nothing and says the binding was already there.
+STANDIN=$TMP_ROOT/standin
+mkdir -p "$STANDIN/bin"
+ln -s "$CODE"/bin/* "$STANDIN/bin/"
+rm "$STANDIN/bin/myshape.sh" "$STANDIN/bin/fm-board.sh"
+cat > "$STANDIN/bin/myshape.sh" <<'SH'
+#!/usr/bin/env bash
+mode=$(cat "$(dirname "$0")/../standin-mode")
+case "$1:$mode" in
+  status:hung*) printf '看板服務：沒有回應\n' ;;
+  status:running*) printf '看板服務：在跑\n' ;;
+  status:*) printf '看板服務：沒在跑\n' ;;
+  open:*fail*)
+    printf '看板服務無法啟動：測試用的原因。這次的要求沒有寫入。\n' >&2
+    exit 69
+    ;;
+  open:*) printf 'http://127.0.0.1:1/#t=stand-in\n' ;;
+esac
+exit 0
+SH
+cat > "$STANDIN/bin/fm-board.sh" <<SH
+#!/usr/bin/env bash
+case "\$1:\$(cat "$STANDIN/standin-mode")" in
+  bind:*bind-noop*) printf '%s\\n' 'ok bind aggregator 設定本來就是 firstmate' && exit 0 ;;
+esac
+exec "$CODE/bin/fm-board.sh" "\$@"
+SH
+chmod +x "$STANDIN/bin/myshape.sh" "$STANDIN/bin/fm-board.sh"
+
+# standin_hook <home name> <mode>: the hook's output for a fresh unbound main
+# home whose board has run, with the stand-in root.
+standin_hook() {
+  local home
+  home=$(tb_make_service_home "$1")
+  mkdir -p "$home/state/myshape"
+  printf 'stand-in-secret\n' > "$home/state/myshape/token"
+  printf '%s\n' "$2" > "$STANDIN/standin-mode"
+  RUN_HOME="$home" run "$STANDIN/bin/fm-topic-session-start.sh"
+  printf '%s\n' "$home" > "$TMP_ROOT/standin-home"
+}
+
+test_the_hook_says_it_bound_a_board_that_did_not_answer() {
+  local out
+  out=$(standin_hook hung-home hung)
+  assert_equals "$(printf '%s\n' "看板服務：原本沒有回應，已重新啟動" "$BOUND_LINE")" "$out" \
+    "a board that did not answer must get its restarted line, then the written binding"
+  assert_equals "$BINDING" "$(cat "$(cat "$TMP_ROOT/standin-home")/config/myshape-aggregator.json")" \
+    "the hook must write firstmate's binding"
+  pass "the hook says it wrote the binding after restarting a board that did not answer"
+}
+
+test_the_hook_says_it_bound_a_board_that_failed_to_start() {
+  local out mode failed="看板服務：無法啟動：測試用的原因。"
+  for mode in running-fail hung-fail stopped-fail; do
+    out=$(standin_hook "$mode-home" "$mode")
+    assert_equals "$(printf '%s\n' "$BOUND_LINE" "$failed")" "$out" \
+      "a start that failed ($mode) must get the written binding, then the failure as the last line"
+    assert_equals "$BINDING" "$(cat "$(cat "$TMP_ROOT/standin-home")/config/myshape-aggregator.json")" \
+      "the hook must write firstmate's binding ($mode)"
+  done
+  pass "the hook says it wrote the binding before saying the board could not start"
+}
+
+test_the_hook_says_nothing_of_a_binding_bind_did_not_write() {
+  local out home
+  out=$(standin_hook noop-home running-bind-noop)
+  home=$(cat "$TMP_ROOT/standin-home")
+  assert_equals "看板服務：在跑" "$out" "a binding bind did not write must not be reported, nor replace the board"
+  assert_absent "$home/config/myshape-aggregator.json" "the stand-in bind must have written nothing"
+  pass "the hook prints the binding line only when bind wrote the file"
+}
+
+test_the_hook_says_it_bound_a_real_board_that_failed_to_start() {
+  local home out
+  home=$(tb_make_service_home bad-port)
+  mkdir -p "$home/state/myshape"
+  printf 'stand-in-secret\n' > "$home/state/myshape/token"
+  printf 'abc\n' > "$home/config/myshape-port"
+  out=$(RUN_HOME="$home" run "$CODE/bin/fm-topic-session-start.sh")
+  assert_equals "$BOUND_LINE" "$(printf '%s\n' "$out" | head -n 1)" "the written binding must come first"
+  assert_contains "$(printf '%s\n' "$out" | sed -n 2p)" "看板服務：無法啟動：config/myshape-port 不是 1024 到 65535 的埠號。" \
+    "the failure must be the second line"
+  assert_equals 2 "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" "a failed start after a written binding must give two lines"
+  assert_equals "$BINDING" "$(cat "$home/config/myshape-aggregator.json")" "the hook must write firstmate's binding"
+  assert_equals 0 "$(tb_board_count "$home")" "a failed start must leave no board"
+  pass "with the checkout's own board, a start that fails after the binding is written gives both lines"
 }
 
 test_no_binding_in_a_home_without_a_board() {
@@ -199,7 +295,9 @@ test_nothing_is_left() {
 
 fm_test_run test_the_checkout_is_group_writable_and_clean test_setup_writes_the_binding \
   test_the_hook_binds_and_replaces_a_running_board test_the_hook_leaves_a_bound_board_alone \
-  test_the_hook_starts_a_stopped_board_with_the_binding test_no_binding_in_a_home_without_a_board \
+  test_the_hook_starts_a_stopped_board_with_the_binding test_the_hook_says_it_bound_a_board_that_did_not_answer \
+  test_the_hook_says_it_bound_a_board_that_failed_to_start test_the_hook_says_nothing_of_a_binding_bind_did_not_write \
+  test_the_hook_says_it_bound_a_real_board_that_failed_to_start test_no_binding_in_a_home_without_a_board \
   test_board_commands_write_a_missing_binding test_feed_and_deliver_never_write_the_binding \
   test_an_empty_binding_stays_and_runs_nothing test_no_binding_from_board_commands_where_the_board_does_not_run \
   test_nothing_is_left

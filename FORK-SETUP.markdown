@@ -171,6 +171,7 @@ bin/myshape.sh status
 
 服務第一次成功啟動之後，主 first mate 每次開 session 都會檢查它：沒在跑就啟動，並在啟動摘要 fleet state 那一段的最後印一行 `看板服務：在跑`、`看板服務：原本沒在跑，已啟動`、`看板服務：原本沒有回應，已重新啟動`、`看板服務：已接上 firstmate，換上新的看板` 或 `看板服務：無法啟動：<原因>`（[`bin/fm-topic-session-start.sh`](bin/fm-topic-session-start.sh)）。
 少了 `config/myshape-aggregator.json` 時它先寫好（同 `bin/fm-board.sh bind`），在跑的看板就換掉，印的是 `看板服務：已接上 firstmate，換上新的看板`。
+看板原本沒在跑或沒有回應時，這一行接在啟動的那一行後面；啟動失敗時它排在 `看板服務：無法啟動：<原因>` 前面，失敗是最後一行。
 沒拿到 session 鎖的唯讀 session、second mate 的 home、服務從來沒成功啟動過的主 home，都不檢查也不印這一行。
 
 **不對時**：
@@ -180,7 +181,7 @@ bin/myshape.sh status
   開 session 時的 `看板服務：無法啟動：<原因>` 是同一個原因，照著修，下一次開 session 或任何一個看板指令會再試。
 - 上一次啟動失敗的原因在 `state/myshape/startup-error`，服務的輸出在 `state/myshape/service.log`（contracts 第 3 節）。
 - 某個 home 顯示 `無法回報`（頁面上那個 home 的橫幅說原因，例如 `還沒換到 fork`）、`版本不相容` 或 `版本不同`，或頁面說帳本未開，表示那個 home 不在同一版或沒開帳本；只有主 home 時不會出現，有 second mate 時見第 8 節。
-- `aggregator：沒有接上（<路徑> 的群組也能寫（權限 0775）；需要確認的程式不能讓群組寫…）`：設定檔寫的程式不是 git 追蹤、和 HEAD 相同的 `bin/` 底下的檔，又是群組能寫的。first mate 的設定檔只會在 `bin/fm-board.sh` 在 checkout 裡被改過、還沒提交時遇到；把那個改動提交或還原之後再跑一次 `bin/myshape.sh open`，不要對整個 checkout 改權限。
+- `aggregator：沒有接上（<路徑> 的群組也能寫（權限 0775）；需要確認的程式不能讓群組寫…）`：設定檔寫的程式不是 git 追蹤、和 HEAD 相同的 `bin/` 底下的檔，又是群組能寫的。first mate 的設定檔只會在兩種情況遇到：`bin/fm-board.sh` 在 checkout 裡被改過、還沒提交，這時把那個改動提交或還原之後再跑一次 `bin/myshape.sh open`；或是啟動看板的環境裡有 `FM_ROOT_OVERRIDE`，指向 `bin/myshape.sh` 所在的 checkout 以外的目錄（這時每支程式都要確認），這時拿掉那個變數再跑 `bin/myshape.sh restart`。不要對整個 checkout 改權限。
 - 不用時 `bin/myshape.sh stop` 停掉服務；主 first mate 下一次開 session 時會再把它啟動。
 
 ## 6. 裝規則，重開 session

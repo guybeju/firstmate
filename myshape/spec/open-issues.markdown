@@ -502,7 +502,9 @@ C58 之後看板只記得在頁面上答的；在聊天裡答、first mate 自�
 - 看板改版之前（B2）的稽核紀錄不再換算：讀到就略過，不接著送、不顯示。
 - first mate 這一側：一個函式寫設定檔，`fm-board.sh setup`、新的 `bind`、`tag`、`split`、`adopt` 與 session start 都經它；後四個只在用看板的 home 少了它時寫並印一行，session start 另換掉沒有設定檔就啟動的看板（使用者在更新的空檔上選了 D）。看板自己跑的 `feed`、`deliver` 不寫；路徑上已經有的檔不換掉，所以放一個空檔就是一直不接的做法。
 - 防呆：`binding.test.ts`、`commands.test.ts`、`sending.test.ts`、`ops.test.ts` 的 `program-confirm`、`check-state-writers.sh` 的 `confirmations.json`、`stage-5-http.sh` 的確認路由、`stage-7-aggregator.sh` 的 AT9、`stage-7-upgrade.sh` 的 B3 到 B4、`fm-board/test/stage-4-binding.sh`。
-- 不在這一條：拆 repository；`FM_ROOT_OVERRIDE` 指定 code root 時不給免確認（security 提的選項，看板與轉接層的測試靠這個變數找 code root）。
+- `FM_ROOT_OVERRIDE` 的實體路徑不是 `bin/myshape.sh` 自己的位置，或進不去、解析不出來時，沒有程式不用確認（B4 之後補上，security 的建議）；防呆是 `stage-7-aggregator.sh` 的 `test_bind_an_override_keeps_the_exemption_only_for_the_own_location`。
+- session start 每次替 home 寫了設定檔都印 `看板服務：已接上 firstmate，換上新的看板`，看板原本沒在跑、沒有回應或啟動失敗時也印（B4 之後補上，D 的第三個條件）；防呆是 `fm-board/test/stage-4-binding.sh`。
+- 不在這一條：拆 repository。
 
 ### C28　使用者的 ub-mode 與全域規範裡沒有做到的
 

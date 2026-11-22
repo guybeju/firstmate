@@ -785,6 +785,56 @@ test_bind_a_tracked_program_needs_no_confirmation() {
   pass "a tracked program under bin/ runs without a confirmation, group-writable or not (AT9.5, AT4.6)"
 }
 
+# r9_over <override> <myshape.sh arguments...>: r9 with FM_ROOT_OVERRIDE set
+# in the starter's environment; R9_FROM, when set, is the root the command is
+# run from instead of R9.
+r9_over() {
+  local SA_ROOT=${R9_FROM:-$R9} override=$1 rc=0
+  shift
+  SA_ENV=("${BASE_ENV[@]}" "FM_ROOT_OVERRIDE=$override")
+  sa "$BH" "$@" || rc=$?
+  SA_ENV=("${BASE_ENV[@]}")
+  return "$rc"
+}
+
+# security's FM_ROOT_OVERRIDE tightening: a tracked program needs no
+# confirmation only while the override's physical path is the command's own
+# location's; any other override, one that cannot be entered included, keeps
+# no such case.
+test_bind_an_override_keeps_the_exemption_only_for_the_own_location() {
+  local own other=$TMP_ROOT/root9-other/board link=$TMP_ROOT/root9-link rc=0 out
+  own=$(cd "$R9" && pwd -P)
+  chmod 755 "$R9/bin/stub-plain"
+  r9_over "$R9" restart >/dev/null
+  assert_equals "true|0" "$(agg_b '"\(.connected)|\(.confirm | length)"')" \
+    "an override naming the command's own location must keep the tracked program exempt"
+  assert_contains "$(r9_over "$R9" status)" "程式目錄：$own" "the code root must be the compared own location"
+  ln -s "$TMP_ROOT/root9" "$link"
+  r9_over "$link/board" restart >/dev/null
+  assert_equals "true|0" "$(agg_b '"\(.connected)|\(.confirm | length)"')" \
+    "an override reaching the own location through a symlinked directory must keep the exemption"
+  R9_FROM=$link/board r9_over "$R9" restart >/dev/null
+  assert_equals "true|0" "$(agg_b '"\(.connected)|\(.confirm | length)"')" \
+    "a command run through a symlinked directory with the override naming the same place must keep the exemption"
+  mkdir -p "$(dirname "$other")"
+  git clone -q "$R9" "$other"
+  chmod 755 "$other/bin/stub-plain"
+  [ -z "$(git -C "$other" status --porcelain)" ] || fail "the other checkout must equal its commit"
+  r9_over "$other" restart >/dev/null
+  assert_equals "false|1|$other/bin/stub-plain" "$(agg_b '"\(.connected)|\(.confirm | length)|\(.confirm[0].path)"')" \
+    "with an override naming another checkout, its tracked program must wait for a confirmation"
+  assert_contains "$(r9_over "$other" status)" "程式目錄：$other" "the code root must be the override"
+  r9_over "$TMP_ROOT/no-such-root" restart >/dev/null 2>&1 || rc=$?
+  assert_equals 69 "$rc" "an override that cannot be entered must start no board"
+  out=$(r9_over "$TMP_ROOT/no-such-root" status 2>&1) || true
+  assert_contains "$out" "編譯結果不見了" "the refusal must say the board's build is not under that root"
+  chmod 775 "$R9/bin/stub-plain"
+  r9 restart >/dev/null
+  assert_equals "true|0" "$(agg_b '"\(.connected)|\(.confirm | length)"')" \
+    "without the override the tracked program must run with nothing to confirm again"
+  pass "an override keeps the no-confirmation case only when its physical path is the command's own location"
+}
+
 # AT9.1: the binding holds paths only; the board adds feed and deliver itself.
 test_bind_paths_only() {
   local before id case_json reason
@@ -1004,6 +1054,7 @@ fm_test_run test_fm_setup test_fm_work_reaches_the_page test_fm_every_home_is_re
   test_plain_setup test_plain_work test_plain_ledger test_plain_second_home test_plain_banners \
   test_plain_work_only_under_topics test_plain_topics_and_order test_plain_the_captains_channel test_plain_hands_on \
   test_plain_changes_are_marked test_plain_texts_name_no_firstmate \
-  test_bind_setup test_bind_a_tracked_program_needs_no_confirmation test_bind_paths_only \
+  test_bind_setup test_bind_a_tracked_program_needs_no_confirmation \
+  test_bind_an_override_keeps_the_exemption_only_for_the_own_location test_bind_paths_only \
   test_bind_a_confirmation_is_bound_to_the_bytes test_bind_a_fixed_environment test_bind_only_the_page_confirms \
   test_bind_what_needs_a_confirmation test_bind_the_undo test_nothing_is_left
