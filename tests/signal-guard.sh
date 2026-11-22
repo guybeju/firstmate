@@ -1,33 +1,44 @@
-#!/bin/sh
-# tests/signal-guard.sh - the verdict of signal policy P-010 on one signal call.
+#!/usr/bin/env bash
+# tests/signal-guard.sh - the guarded helper of signal policy P-010: the verdict
+# on one signal call, and the one place a test's computed signal is sent.
 #
-# Usage: sh tests/signal-guard.sh <self-pid> <log-file-or-empty> <source> <signal> [pid...]
-#        sh tests/signal-guard.sh <self-pid> <log-file-or-empty> <source> <signal> \
-#          --below <recorded-pid> <command-glob> <stand-in-pid>
-#        sh tests/signal-guard.sh <self-pid> <log-file-or-empty> <source> <signal> \
-#          --identity <pid>
-#        sh tests/signal-guard.sh <self-pid> <log-file-or-empty> <source> <signal> \
-#          --group <leader-pid>
+# Verdict only (never signals):
+#   sh tests/signal-guard.sh <self-pid> <log-file-or-empty> <source> <signal> <form>
+# Judge and send (the caller is this process's own parent, never an argument):
+#   tests/signal-guard.sh --send <source> <signal> <form>
+# where <form> is one of
+#   <pid>                                         a recorded child of the caller
+#   --below <recorded-pid> <command-glob> <stand-in-pid>
+#   --identity <pid>                              a process with evidence of this run
+#   --group <leader-pid>                          a group whose live leader has evidence
+#   --members <group-id>                          each live member of a group, one by one
 #
-# Prints "accepted <pid>" or "refused: <why>" and never signals anything.
-# fm_test_signal in tests/lib.sh is its caller and the only code that sends the
-# signal it accepts. <self-pid> is the shell that would send it, and
-# FM_TEST_RECORDED_CHILDREN holds the space-separated pids that shell recorded
-# with fm_test_record_child right after starting each one with `&`.
+# --send must be run directly as a program with an argument list (Perl
+# `system LIST`, Python's subprocess list, Node's spawn args, or a plain shell
+# command), never through a shell string, so that its parent is the caller.
+# It prints one verdict line per target. It exits 0 when every target was
+# accepted (and, outside log-only mode, signalled), 1 when any was refused
+# (nothing is sent to a refused target), 2 on a usage error, and 3 when an
+# accepted target was gone by the time of the send. In log-only mode
+# (FM_TEST_SIGNAL_DRY_RUN set, FM_TEST_SIGNAL_LOG an absolute path) it sends
+# nothing and appends its record to FM_TEST_SIGNAL_LOG.
 #
-# Accepted is exactly one signal name from TERM KILL STOP CONT INT HUP QUIT, then
-# exactly one pid, written in digits with no leading 0, that is greater than 1, is
-# not the test script FM_TEST_SUITE_PID, its parent FM_TEST_SUITE_PARENT or
-# <self-pid>, is not a systemd process (the user's service manager adopts
-# orphans on a desktop, and the same user may signal it), is in
-# FM_TEST_RECORDED_CHILDREN, and whose parent is <self-pid>. Everything else is
-# refused: an empty or missing pid, 0, -1, negative pids and process groups,
-# flags, several pids, and any pid found by walking up the process tree.
+# Every form refuses pid 1 or less, the test script FM_TEST_SUITE_PID, its
+# parent FM_TEST_SUITE_PARENT, the signalling shell, any ancestor of the
+# signalling shell, any systemd process (the user's service manager adopts
+# orphans on a desktop, and the same user may signal it), and every argument
+# that is not exactly one positive pid in digits with no leading 0 (empty or
+# missing, 0, -1, negative pids, flags, several pids). Accepted signal names:
+# TERM KILL STOP CONT INT HUP QUIT.
 #
-# --below names a process under a recorded child instead: the one the case
-# means to crash sits between the child and a stand-in that stopped at a crash
-# point. The stand-in pid only proposes where to look; the guard decides live.
-# <recorded-pid> must pass every check above. Walking up from <stand-in-pid>
+# <pid> is accepted only when it is in FM_TEST_RECORDED_CHILDREN (pids the
+# caller recorded with fm_test_record_child right after starting each one with
+# `&`) and its parent is the signalling shell.
+#
+# --below names a process under a recorded child: the one the case means to
+# crash sits between the child and a stand-in that stopped at a crash point.
+# The stand-in pid only proposes where to look; the guard decides live.
+# <recorded-pid> must pass the checks above. Walking up from <stand-in-pid>
 # must reach <recorded-pid> without meeting pid 1 or less, the test script or
 # the signalling shell. Among the processes on that walk, below
 # <recorded-pid>, those whose whole command line matches <command-glob> (a
@@ -38,10 +49,8 @@
 #
 # --identity names a process the test did not start itself as a plain
 # background command (a grandchild, a daemon a fixture started, a pid a
-# product wrote to a file), the first supplement of P-010. The pid must pass
-# the plain checks above except the recorded-child and parent ones, must not
-# be an ancestor of <self-pid>, and must carry evidence that it belongs to
-# this test run, checked here before any signal:
+# product wrote to a file), the first supplement of P-010. It must carry
+# evidence that it belongs to this test run, read here, live, before any send:
 #   path      its command line contains a root listed in the file
 #             FM_TEST_RUN_ROOTS (the run's fm_test_tmproot registry) whose
 #             .fm-test-fixture marker names FM_TEST_SUITE_PID as its owner,
@@ -53,21 +62,52 @@
 #   ancestry  walking up its parents reaches FM_TEST_SUITE_PID.
 # Depth and parentage alone are never evidence.
 #
-# --group names a process group by its leader. The leader must pass every
-# --identity check, must lead its own group (its pgid is its pid), and that
-# group must not be the group of FM_TEST_SUITE_PID, FM_TEST_SUITE_PARENT,
-# <self-pid> or any ancestor of <self-pid>. The accepted line then reads
-# "accepted group <leader>".
+# --group names a process group by its leader. The leader must be alive, pass
+# the --identity refusals, carry path or ancestry evidence (the environment
+# alone is not enough for a group), lead its own group (its pgid is its pid),
+# and that group must not be the group of FM_TEST_SUITE_PID,
+# FM_TEST_SUITE_PARENT, the signalling shell or any of its ancestors. The
+# signal goes to the whole group.
 #
-# With a log file it appends one line: the source, the raw arguments as
-# received, the shell, the parsed target, its command, the verdict (for
-# --identity and --group, the evidence that held or the reason none did), and
-# the target's ancestry up to pid 1 (for a refused --below call, the
-# stand-in's).
+# --members names a group whose leader may already be gone. The guard lists
+# the group's live members itself; a group id of 1 or less, or the group of
+# the test script, its parent, the signalling shell or one of its ancestors,
+# is refused outright. Each member is then judged as --identity on its own
+# evidence and signalled alone if accepted; a refused member is left. A group
+# with no live member is accepted with nothing to signal.
+#
+# With a log file each target appends one line: the source, the raw arguments
+# as received, the shell, the target, its command, the verdict (with the
+# evidence that held, or why none did), and the target's ancestry up to pid 1
+# (for a refused --below call, the stand-in's).
 set -u
 
-self=$1 log=$2 source=$3
-shift 3
+mode=verdict
+if [ "${1-}" = --send ]; then
+  mode=send
+  shift
+  self=$PPID
+  log=
+  if [ -n "${FM_TEST_SIGNAL_DRY_RUN:-}" ]; then
+    case "${FM_TEST_SIGNAL_LOG:-}" in
+      /*) log=$FM_TEST_SIGNAL_LOG ;;
+      *) echo "refused: log-only mode needs FM_TEST_SIGNAL_LOG, an absolute path" >&2; exit 2 ;;
+    esac
+  fi
+  if [ "$#" -lt 2 ]; then
+    echo "usage: tests/signal-guard.sh --send <source> <signal> <form>" >&2
+    exit 2
+  fi
+  source=$1
+  shift
+else
+  if [ "$#" -lt 3 ]; then
+    echo "usage: sh tests/signal-guard.sh <self-pid> <log-file-or-empty> <source> <signal> <form>" >&2
+    exit 2
+  fi
+  self=$1 log=$2 source=$3
+  shift 3
+fi
 raw="argc=$#"
 for arg in "$@"; do raw="$raw [$arg]"; done
 signal=${1-}
@@ -164,6 +204,12 @@ self_chain() {  # the pids from <self-pid> up to pid 1, space-separated with a l
   printf '%s\n' "$chain"
 }
 
+own_groups() {  # the groups of the test script, its parent, the shell and its ancestors.
+  for pid in ${FM_TEST_SUITE_PID:-} ${FM_TEST_SUITE_PARENT:-} $(self_chain); do
+    ps_field pgid "$pid"
+  done
+}
+
 environment_of() {  # <pid>: its environment, one NAME=value per line where readable.
   if [ -r "/proc/$1/environ" ]; then
     tr '\000' '\n' < "/proc/$1/environ" 2>/dev/null
@@ -201,8 +247,9 @@ ancestry_evidence() {  # <pid>: 0 when walking up from it reaches the test scrip
   return 1
 }
 
-judge_identity() {  # <pid>: prints the verdict on the --identity form.
-  if [ -z "$command" ]; then
+judge_identity() {  # <pid> [group]: prints the verdict on the --identity form.
+  identity_command=$(ps_field args "$1")
+  if [ -z "$identity_command" ]; then
     echo "refused: pid $1 is not running"
     return
   fi
@@ -218,23 +265,25 @@ judge_identity() {  # <pid>: prints the verdict on the --identity form.
   case "$(self_chain)" in
     *" $1 "*) echo "refused: pid $1 is an ancestor of the signalling shell $self"; return ;;
   esac
-  case "$command" in
-    *systemd*) echo "refused: pid $1 is the service manager '$command'"; return ;;
+  case "$identity_command" in
+    *systemd*) echo "refused: pid $1 is the service manager '$identity_command'"; return ;;
   esac
   root=$(path_evidence "$1")
   if [ -n "$root" ]; then
     echo "accepted $1 (evidence: path $root in its command line)"
-  elif env_evidence "$1"; then
+  elif [ "${2-}" != group ] && env_evidence "$1"; then
     echo "accepted $1 (evidence: env FM_TEST_RUN_MARKS holds this run's mark)"
   elif ancestry_evidence "$1"; then
     echo "accepted $1 (evidence: ancestry reaches the test script ${FM_TEST_SUITE_PID:-})"
+  elif [ "${2-}" = group ]; then
+    echo "refused: pid $1 carries no path or ancestry evidence of this test run (a group leader is not accepted on its environment)"
   else
     echo "refused: pid $1 carries no evidence of this test run (no run root in its command line, no run mark in its environment, ancestry does not reach the test script ${FM_TEST_SUITE_PID:-none})"
   fi
 }
 
 judge_group() {  # <leader>: prints the verdict on the --group form.
-  leader_verdict=$(judge_identity "$1")
+  leader_verdict=$(judge_identity "$1" group)
   case "$leader_verdict" in
     "accepted "*) ;;
     *) echo "refused: the group leader: ${leader_verdict#refused: }"; return ;;
@@ -244,37 +293,94 @@ judge_group() {  # <leader>: prints the verdict on the --group form.
     echo "refused: pid $1 does not lead its own group (its group: ${pgid:-none})"
     return
   fi
-  for pid in ${FM_TEST_SUITE_PID:-} ${FM_TEST_SUITE_PARENT:-} $(self_chain); do
-    if [ "$(ps_field pgid "$pid")" = "$pgid" ]; then
-      echo "refused: group $pgid is the group of pid $pid, the test script, its parent, the signalling shell or one of its ancestors"
-      return
-    fi
-  done
+  case " $(own_groups | tr '\n' ' ') " in
+    *" $pgid "*) echo "refused: group $pgid is the group of the test script, its parent, the signalling shell or one of its ancestors"; return ;;
+  esac
   echo "accepted group $1 ${leader_verdict#accepted $1 }"
 }
 
+group_members() {  # <group-id>: the live pids in that group, one per line.
+  command -p ps -ww -eo pid=,pgid= 2>/dev/null | awk -v g="$1" '$2 == g { print $1 }'
+}
+
+log_line() {  # <target> <command> <verdict> <walk-from>: one record in the log.
+  [ -n "$log" ] || return 0
+  chain="" pid=${4:-$1} levels=0
+  while [ "$pid" != - ] && [ -n "$pid" ] && [ "$levels" -lt 64 ]; do
+    chain="$chain < $pid $(ps_field args "$pid")"
+    [ "$pid" -gt 1 ] 2>/dev/null || break
+    pid=$(ps_field ppid "$pid")
+    levels=$((levels + 1))
+  done
+  printf 'source=%s | raw: %s | shell=%s | target=%s command=%s | %s | ancestry: %s\n' \
+    "$source" "$raw" "$self" "$1" "${2:--}" "$3" "${chain# < }" >> "$log"
+}
+
+send_one() {  # <signal> <pid> or <signal> -- -<group>: the one send of an accepted target.
+  if [ "$mode" != send ] || [ -n "${FM_TEST_SIGNAL_DRY_RUN:-}" ]; then
+    return 0
+  fi
+  kill -s "$@" 2>/dev/null || sent_rc=3
+}
+
+parse_pid() {  # <arg>: sets pid_error when the argument is not one positive pid.
+  case "$1" in
+    '') pid_error="refused: the pid is empty" ;;
+    *[!0-9]*) pid_error="refused: '$1' is not a positive pid (a flag, a negative pid or a process group)" ;;
+    0*) pid_error="refused: '$1' is 0 or starts with 0" ;;
+    *) pid_error= ;;
+  esac
+}
+
+sent_rc=0 refused=0
 if [ "$signal_ok" -eq 0 ]; then
   verdict="refused: '$signal' is not one of the signal names TERM KILL STOP CONT INT HUP QUIT"
+elif [ "${1-}" = --members ]; then
+  shift
+  parse_pid "${1-}"
+  if [ "$#" -ne 1 ]; then
+    verdict="refused: --members takes exactly one group id, got $#"
+  elif [ -n "$pid_error" ]; then
+    verdict=$pid_error
+  elif [ "$1" -le 1 ]; then
+    verdict="refused: group $1 is 1 or less"
+  else
+    case " $(own_groups | tr '\n' ' ') " in
+      *" $1 "*) verdict="refused: group $1 is the group of the test script, its parent, the signalling shell or one of its ancestors" ;;
+      *)
+        group=$1 count=0
+        for member in $(group_members "$group"); do
+          count=$((count + 1))
+          member_verdict=$(judge_identity "$member")
+          log_line "$member" "$(ps_field args "$member")" "group $group member: $member_verdict" ""
+          printf 'group %s member: %s\n' "$group" "$member_verdict"
+          case "$member_verdict" in
+            "accepted "*) send_one "$signal" "$member" ;;
+            *) refused=1 ;;
+          esac
+        done
+        [ "$count" -gt 0 ] || { log_line "$group" - "accepted group $group: no live member, nothing to signal" ""; echo "accepted group $group: no live member, nothing to signal"; }
+        [ "$refused" -eq 0 ] || exit 1
+        exit "$sent_rc"
+        ;;
+    esac
+  fi
 elif [ "${1-}" = --identity ] || [ "${1-}" = --group ]; then
   form=$1
   shift
+  parse_pid "${1-}"
   if [ "$#" -ne 1 ]; then
     verdict="refused: $form takes exactly one pid, got $#"
+  elif [ -n "$pid_error" ]; then
+    verdict=$pid_error
   else
-    case "$1" in
-      '') verdict="refused: the pid is empty" ;;
-      *[!0-9]*) verdict="refused: '$1' is not a positive pid (a flag, a negative pid or a process group)" ;;
-      0*) verdict="refused: '$1' is 0 or starts with 0" ;;
-      *)
-        target=$1
-        command=$(ps_field args "$target")
-        if [ "$form" = --identity ]; then
-          verdict=$(judge_identity "$target")
-        else
-          verdict=$(judge_group "$target")
-        fi
-        ;;
-    esac
+    target=$1
+    command=$(ps_field args "$target")
+    if [ "$form" = --identity ]; then
+      verdict=$(judge_identity "$target")
+    else
+      verdict=$(judge_group "$target")
+    fi
   fi
 elif [ "${1-}" = --below ]; then
   glob=${3-}
@@ -304,28 +410,30 @@ elif [ "${1-}" = --below ]; then
 elif [ "$#" -ne 1 ]; then
   verdict="refused: takes exactly one pid, got $#"
 else
-  case "$1" in
-    '') verdict="refused: the pid is empty" ;;
-    *[!0-9]*) verdict="refused: '$1' is not a positive pid (a flag, a negative pid or a process group)" ;;
-    0*) verdict="refused: '$1' is 0 or starts with 0" ;;
-    *)
-      target=$1
-      parent=$(ps_field ppid "$target")
-      command=$(ps_field args "$target")
-      verdict=$(judge_pid "$target")
-      ;;
-  esac
+  parse_pid "$1"
+  if [ -n "$pid_error" ]; then
+    verdict=$pid_error
+  else
+    target=$1
+    parent=$(ps_field ppid "$target")
+    command=$(ps_field args "$target")
+    verdict=$(judge_pid "$target")
+  fi
 fi
 
-if [ -n "$log" ]; then
-  chain="" pid=${walk_from:-$target} levels=0
-  while [ "$pid" != - ] && [ -n "$pid" ] && [ "$levels" -lt 64 ]; do
-    chain="$chain < $pid $(ps_field args "$pid")"
-    [ "$pid" -gt 1 ] 2>/dev/null || break
-    pid=$(ps_field ppid "$pid")
-    levels=$((levels + 1))
-  done
-  printf 'source=%s | raw: %s | shell=%s | target=%s command=%s | %s | ancestry: %s\n' \
-    "$source" "$raw" "$self" "$target" "${command:--}" "$verdict" "${chain# < }" >> "$log"
-fi
+log_line "$target" "$command" "$verdict" "$walk_from"
 printf '%s\n' "$verdict"
+case "$verdict" in
+  "accepted group "*)
+    leader=${verdict#accepted group }
+    leader=${leader%% *}
+    send_one "$signal" -- "-$leader"
+    ;;
+  "accepted "*)
+    accepted=${verdict#accepted }
+    accepted=${accepted%% *}
+    send_one "$signal" "$accepted"
+    ;;
+  *) [ "$mode" = verdict ] || exit 1 ;;
+esac
+exit "$sent_rc"
