@@ -59,6 +59,7 @@ def make(name):
         "FM_HOME_SUMMARY_INTERVAL": "999999",
         "FM_CHECK_INTERVAL": "999999",
         "FM_CLAUDE_AUTOARM_SYNC_WAIT_MS": "0",
+        "FM_PROCEVENT_CLAIM_ROOT": str(LAB / "procevent-claims"),
     }
     return root, env
 
@@ -74,22 +75,27 @@ def run(env, command):
 
 
 # A stand-in owner idles until stop() ends it, and ends by itself after 600 s,
-# past this script's worst case (seven 20 s waits and its 30 s runs), so a run
-# whose signals were only logged leaves nothing behind.
-IDLE = 'i=0; while [ "$i" -lt 600 ]; do sleep 1; i=$((i + 1)); done'
+# past this script's worst case (seven 20 s waits and its 30 s runs). In a
+# log-only run, where stop()'s signals are only logged, stop() also writes the
+# stand-in's release file, so it ends at once and leaves nothing behind.
+IDLE = ('i=0; while [ ! -e "$REPRO_IDLE_RELEASE" ] && [ "$i" -lt 600 ]; '
+        'do sleep 1; i=$((i + 1)); done')
+LOG_ONLY = bool(os.environ.get("FM_TEST_SIGNAL_DRY_RUN"))
 
 
 def start(env, command, name):
     output = (OUT / name).open("w")
+    release = OUT / (name + ".release")
     process = subprocess.Popen(
         [str(FAKE), "-c", command],
-        env=env,
+        env=env | {"REPRO_IDLE_RELEASE": str(release)},
         stdout=output,
         stderr=subprocess.STDOUT,
         start_new_session=True,
         text=True,
     )
     output.close()
+    process.idle_release = release
     PROCS.append(process)
     return process
 
@@ -143,6 +149,8 @@ def guarded_signal(signal_name, form, pid):
 
 def stop(process):
     if process.poll() is None:
+        if LOG_ONLY:
+            process.idle_release.touch()
         guarded_signal("TERM", "--group", process.pid)
         try:
             process.wait(timeout=5)
