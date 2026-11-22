@@ -171,6 +171,7 @@ bin/myshape.sh status
 
 服務第一次成功啟動之後，主 first mate 每次開 session 都會檢查它：沒在跑就啟動，並在啟動摘要 fleet state 那一段的最後印一行 `看板服務：在跑`、`看板服務：原本沒在跑，已啟動`、`看板服務：原本沒有回應，已重新啟動`、`看板服務：已接上 firstmate，換上新的看板` 或 `看板服務：無法啟動：<原因>`（[`bin/fm-topic-session-start.sh`](bin/fm-topic-session-start.sh)）。
 少了 `config/myshape-aggregator.json` 時它先寫好（同 `bin/fm-board.sh bind`），在跑的看板就換掉，印的是 `看板服務：已接上 firstmate，換上新的看板`。
+看板原本沒在跑或沒有回應時，這一行接在啟動的那一行後面；啟動失敗時它排在 `看板服務：無法啟動：<原因>` 前面，失敗是最後一行。
 沒拿到 session 鎖的唯讀 session、second mate 的 home、服務從來沒成功啟動過的主 home，都不檢查也不印這一行。
 
 **不對時**：

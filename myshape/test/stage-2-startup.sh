@@ -105,6 +105,7 @@ test_reports_a_running_board_without_touching_it() {
 test_starts_a_stopped_board() {
   local home out
   home=$(used_home stopped)
+  tb_bind_home "$home"
   out=$(session_start "$home")
   assert_equals "看板服務：原本沒在跑，已啟動" "$(board_lines "$out")" "a stopped board must get exactly the started line"
   assert_equals 1 "$(tb_board_count "$home")" "session start must leave exactly one board"
@@ -117,6 +118,7 @@ test_starts_a_stopped_board() {
 test_restarts_a_board_that_does_not_answer() {
   local home out pid
   home=$(tb_make_service_home hung)
+  tb_bind_home "$home"
   tb_run "$home" "$TOPIC" open >/dev/null || fail "the board did not start"
   pid=$(tb_board_pid "$home")
   kill -STOP "$pid"
@@ -133,6 +135,7 @@ test_restarts_a_board_that_does_not_answer() {
 test_reports_why_a_board_could_not_start() {
   local home out port listener
   home=$(used_home occupied)
+  tb_bind_home "$home"
   port=$(cat "$home/config/myshape-port")
   node -e 'require("node:net").createServer().listen(Number(process.argv[1]), "127.0.0.1")' "$port" &
   listener=$!
@@ -179,6 +182,7 @@ esac
 SH
   chmod +x "$root/bin/myshape.sh"
   home=$(tb_make_service_home multiline)
+  tb_bind_home "$home"
   mkdir -p "$home/state/myshape"
   printf 'stand-in-secret\n' > "$home/state/myshape/token"
   out=$(START_ROOT=$root session_start "$home")

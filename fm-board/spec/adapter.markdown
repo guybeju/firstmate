@@ -53,6 +53,7 @@ stderr 第一行指出新的指令，第二行說使用者還要做什麼：這�
 看板服務執行 home 的 `config/myshape-aggregator.json` 寫的兩支程式（contracts 第 7 節）。
 first mate 的設定檔是 `{"v":1,"name":"firstmate","feed":"bin/fm-board.sh","deliver":"bin/fm-board.sh"}`：兩支都是 `bin/fm-board.sh`，看板加上 `feed` 或 `deliver`；它們的程式在 `bin/fm-board-io-lib.sh`，檔頭寫明每一種跑什麼。
 寫這個設定檔的只有 `fm-board.sh` 裡一個函式：`setup` 與 `bind` 用它；session start（`bin/fm-topic-session-start.sh`）在用看板的主 home 少了它時經 `bind` 寫，然後跑 `myshape.sh open`，把沒有設定檔就啟動的看板換掉；`tag`、`split` 在用看板的 home（不是 secondmate 的 home，而且有 `state/myshape/token`）少了它時先寫好，在 stderr 印一行「看板的 aggregator 設定原本不在，已寫好：firstmate（config/myshape-aggregator.json）」。
+session start 只要 `bind` 寫了設定檔，就印一次 `看板服務：已接上 firstmate，換上新的看板`：看板原本在跑時只印這一行，原本沒在跑或沒有回應時接在啟動的那一行後面，啟動失敗時排在 `看板服務：無法啟動：<原因>` 前面。
 看板自己跑的 `feed` 與 `deliver`（包括 `deliver` 為歸併跑的 `tag`，看板給它們 `MYSHAPE_HOME`）、`bin/myshape.sh` 與看板服務都不寫。
 它只寫上面那一行內容、不收參數，路徑上已經有的檔或連結不管寫什麼都不換掉；secondmate 的 home 不跑看板，不寫。
 所以只刪掉設定檔不會讓看板一直不接：下一次 session start 或下一個這些指令會寫回來；要一直不接，在那個路徑放一個別的內容的檔（例如空檔），看板把它當成沒有程式。
