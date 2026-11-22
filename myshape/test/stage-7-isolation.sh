@@ -146,7 +146,7 @@ test_the_word_scan_catches_a_word() {
 test_no_machine_field() {
   local found
   found=$(cd "$ROOT/myshape/src" && grep -nE '^[[:space:]]*(readonly[[:space:]]+)?(remote|machine|host|placement)\??:' \
-    report.ts view.ts topics.ts writes.ts actions.ts poller.ts commands.ts legacy.ts || true)
+    report.ts view.ts topics.ts writes.ts actions.ts poller.ts commands.ts binding.ts confirmations.ts || true)
   assert_equals "" "$found" "no board type may have a remote, machine, host or placement field"
   found=$(awk '/^## 4\. /{on=1; next} /^## /{on=0} on' "$ROOT/myshape/spec/contracts.markdown" | grep -nE '"(remote|machine|host|placement)"' || true)
   assert_equals "" "$found" "the feed schema must document no machine field"
