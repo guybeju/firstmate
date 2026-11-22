@@ -425,6 +425,7 @@ test_rearm_resurfaces_durable_queue_and_remote_open_decision() {
   is_live_non_zombie "$ARM_PID" || fail "pre-outage watcher did not stay live"
   watcher_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
   fm_test_signal_try KILL --identity "$watcher_pid" || fail "could not abruptly stop pre-outage watcher: $FM_TEST_SIGNAL_VERDICT"
+  fm_test_signal_skipped "a re-arm resurfaces the durable queue and the remote decision" && return 0
   wait "$ARM_PID" 2>/dev/null || true
   [ ! -e "$state/.watcher-down" ] || fail "abrupt watcher exit unexpectedly ran cleanup"
 
@@ -532,6 +533,7 @@ test_slow_rearm_recovery_is_still_surfaced() {
   is_live_non_zombie "$first_arm" || fail "slow-recovery fixture watcher did not stay live"
   watcher_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
   fm_test_signal_try KILL --identity "$watcher_pid" || fail "could not abruptly stop slow-recovery fixture watcher: $FM_TEST_SIGNAL_VERDICT"
+  fm_test_signal_skipped "a slow re-arm still surfaces its recovery" && return 0
   wait "$first_arm" 2>/dev/null || true
   append_wake "$state" check startup-network 'check: startup-network before a slow re-arm'
 
@@ -584,6 +586,7 @@ test_marker_publish_failure_retains_recovery_evidence() {
   watcher_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
   mkdir "$state/.watcher-down"
   fm_test_signal_try TERM --identity "$watcher_pid" || fail "could not stop marker-failure fixture watcher: $FM_TEST_SIGNAL_VERDICT"
+  fm_test_signal_skipped "a failed marker publish keeps its recovery evidence" && return 0
   wait "$first_arm" 2>/dev/null || true
 
   [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$watcher_pid" ] \
@@ -1476,6 +1479,7 @@ test_downtime_marker_does_not_follow_symlink() {
   printf 'must remain intact\n' > "$sentinel"
   ln -s "$sentinel" "$state/.watcher-down"
   fm_test_signal_try TERM --identity "$watcher_pid" || fail "could not stop symlink fixture watcher: $FM_TEST_SIGNAL_VERDICT"
+  fm_test_signal_skipped "the downtime marker does not follow a symlink" && return 0
   wait "$ARM_PID" 2>/dev/null || true
 
   [ "$(cat "$sentinel")" = "must remain intact" ] \
