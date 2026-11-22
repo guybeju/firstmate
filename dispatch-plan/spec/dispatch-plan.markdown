@@ -9,7 +9,7 @@
 
 | 子命令 | 在哪裡跑 | 做什麼 |
 | --- | --- | --- |
-| `order` | 每個 home | 列出排隊中的項目該派、該 hold、該解除的順序 |
+| `order` | 每個 home | 列出排隊中的項目該派、該 hold、該解除的順序，其餘的列在「先不派」並附原因 |
 | `queues-in -` | 遠端的 second mate | 收下主 home 送來的佇列副本 |
 | `queues-push [--check \| --to <id>]` | 主 home | 把佇列副本送到每個遠端的 second mate，或只送給 `<id>` |
 
@@ -31,6 +31,10 @@
 - 遠端的 second mate 照最後收到的副本排；副本的時間與年紀的意思在第 4 節。
 - 排隊中的項目沒有議題標記時，用它內文裡單獨一行的 `topic: <議題 id>`（first mate 轉交時寫的那一行），和看板認那一行的規則相同；有標記時標記優先。
 - 合併過的 id 跟著 `merged` 走到現在的議題，封存的議題列為該 hold，副本也帶著這兩樣。
+- 不在「可派」「該 hold」「該解除」「停著」任何一段的排隊中項目，照 backlog 的順序列在「停著」後面的「先不派」，每行附原因：被看板以外的 hold 擋著、等使用者決定（captain hold）、舊標記的 hold，或它等的項目還沒完成、找不到它等的 id。
+  這一段只是讓每個排隊中的項目都看得到為什麼沒派，不要 first mate 做什麼；前四段的意思與順序不變。
+  一個項目等的 id 算完成，照 `bin/fm-fleet-snapshot.sh` 的判斷：backlog 裡那一筆是 Done，或 backlog 裡沒有那個 id、但 Done 的保留把它搬進封存檔時是完成的（封存檔的位置照 tasks-axi 自己的設定，`bin/fm-backlog-archive-lib.sh`）。
+  backlog 裡還開著的同一個 id 優先於封存檔裡舊的那一筆；兩邊都找不到的 id 不算完成，所以打錯的 id 不會被當成做完了。
 - 「等你驗證」列的是看板 `data/myshape/todos.json` 裡使用者按了做完了的項目（contracts 第 3.6 節），每個附它的議題與佇列；second mate 的 home 不印這一段：那些項目是主 home 看板上的。
 
 壞掉時放行，都 exit 0：
@@ -107,10 +111,10 @@ watcher 每 5 分鐘（`CHECK_INTERVAL`）跑一次，最多 30 秒，丟掉 exi
 
 | 檔 | 測什麼 |
 | --- | --- |
-| `stage-1-order.sh` | 主 home 的各段、`topic:` 那一行、壞掉時放行 |
+| `stage-1-order.sh` | 主 home 的各段與「先不派」的原因、封存檔裡已完成的依賴、`topic:` 那一行、壞掉時放行 |
 | `stage-2-sources.sh` | 同機與遠端的 second mate 的來源、第一行、一小時的提醒、等你驗證不出現 |
 | `stage-3-queues-in.sh` | 收下、略過較舊的、拒收壞的與太大的、只在 second mate 的 home 跑 |
-| `stage-4-queues-push.sh` | 每台只送一次、沒變不送、30 分鐘再送、失敗下一輪再試、拒收的每小時一次、18 秒、通知只一則、`--to` 只送一台、交給遠端之前先送 |
+| `stage-4-queues-push.sh` | 第一次送時 stderr 沒有 shell 的錯誤、每台只送一次、沒變不送、30 分鐘再送、失敗下一輪再試、拒收的每小時一次、18 秒、通知只一則、`--to` 只送一台、交給遠端之前先送 |
 
 `stage-4` 從一個暫時的 code root 跑，那裡的 `bin/fm-on.sh` 是假的：它把副本交給暫時的「遠端」home 裡真的 `queues-in`，或照設定失敗，所以測試不會連到任何別的機器。
 

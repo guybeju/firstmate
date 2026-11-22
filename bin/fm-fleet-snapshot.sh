@@ -24,7 +24,9 @@
 #     unresolved_blocker_ids, captain_actionable, hold_set, hold_age_days,
 #     and hold_bucket fields.
 #     Repeated blocker tokens remain ordered; a blocker resolves only when its
-#     structured record is Done, and missing ids stay open.
+#     structured record is Done or, with no record of that id in the backlog,
+#     a checked row of it is in the markdown Done archive
+#     (bin/fm-backlog-archive-lib.sh); ids found in neither stay open.
 #     There is no separate decision type: any captain-held task is the same
 #     primitive, whatever kind its row carries.
 #     hold_bucket is the single classification for every captain hold, decided
@@ -232,6 +234,8 @@ esac
 . "$SCRIPT_DIR/fm-merge-authority-lib.sh"
 # shellcheck source=bin/fm-hold-reason-lib.sh
 . "$SCRIPT_DIR/fm-hold-reason-lib.sh"
+# shellcheck source=bin/fm-backlog-archive-lib.sh
+. "$SCRIPT_DIR/fm-backlog-archive-lib.sh"
 
 usage() {
   cat <<'EOF'
@@ -390,16 +394,18 @@ first_pr_url_in_file() {  # <file>
 
 # Isolate this read-only projection from the fleet collector's shell state.
 backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
-  local backlog=${1:-$BACKLOG}
+  local backlog=${1:-$BACKLOG} archive=/dev/null
   if [ ! -f "$backlog" ]; then
     jq -n --arg path "$backlog" '{path:$path,present:false,records:[]}'
     return 0
   fi
 
+  archive=$(fm_backlog_archive_path "${backlog%/*}") || archive=/dev/null
   set -o pipefail
   # shellcheck disable=SC2094
   jq -Rn --arg path "$backlog" --arg today "$SNAPSHOT_TODAY" --arg now "$SNAPSHOT_NOW" \
-    --argjson age_days "$FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS" '
+    --argjson age_days "$FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS" \
+    --rawfile archived <(fm_backlog_archived_done_ids "$archive") '
     def trim: gsub("^[[:space:]]+|[[:space:]]+$"; "");
     def timestamp_epoch($d):
       if ($d | type) != "string" then null
@@ -553,12 +559,14 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
     | .records as $records
     | (reduce ($records[] | select(.structured)) as $record ({};
          .[$record.id] = ((.[$record.id] // true) and ($record.state == "done")))) as $resolved_ids
+    | ($archived | split("\n") | map(select(. != "") | {key: ., value: true}) | from_entries) as $archived_ids
     | .records |= map(
         if .structured then
           . as $record
           | .unresolved_blocker_ids = [
               $record.blocked_by_ids[] as $blocker
-              | select($resolved_ids[$blocker] != true)
+              | select(if $resolved_ids | has($blocker) then $resolved_ids[$blocker] != true
+                       else $archived_ids[$blocker] != true end)
               | $blocker
             ]
           | .current_role =
