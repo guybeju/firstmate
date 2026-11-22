@@ -86,7 +86,7 @@ case "$1 $2" in
       # records the pass's PID once it has started it.
       rm -f "$FORGE/interrupt-$rest"
       for attempt in $(seq 1 100); do [ -s "$FORGE/poll-pid" ] && break; sleep 0.05; done
-      [ -s "$FORGE/poll-pid" ] && kill -TERM "$(cat "$FORGE/poll-pid")" && : > "$FORGE/interrupted"
+      [ -s "$FORGE/poll-pid" ] && "$FM_TEST_SIGNAL_GUARD" --send fake-forge TERM --identity "$(cat "$FORGE/poll-pid")" >/dev/null && : > "$FORGE/interrupted"
       exit 1
     fi
     case "$rest" in

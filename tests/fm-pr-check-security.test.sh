@@ -3034,7 +3034,7 @@ SH
       run_watcher_bounded "$dir/home" "$fakebin" > "$dir/watch.out" 2> "$dir/watch.err" || rc=$?
     child_pid=$(cat "$child_pid_file" 2>/dev/null || true)
     if [ -n "$child_pid" ] && process_is_live_non_zombie "$child_pid"; then
-      kill -KILL "$child_pid" 2>/dev/null || true
+      fm_test_signal_try KILL --identity "$child_pid" || true
       fail "$backend watcher left a returned check descendant alive"
     fi
     [ "$rc" -eq 0 ] \
@@ -3893,12 +3893,12 @@ group/subgroup/project
   if [ -z "$hung" ] || ! kill -0 "$hung" 2>/dev/null; then
     fail "the hung GitLab detail read never started"
   fi
-  kill -TERM -- "-$poll_pid" 2>/dev/null
+  fm_test_signal_try TERM --group "$poll_pid" || true
   wait "$poll_pid" 2>/dev/null || true
   waited=0
   while kill -0 "$hung" 2>/dev/null && [ "$waited" -lt 40 ]; do sleep 0.05; waited=$((waited + 1)); done
   if kill -0 "$hung" 2>/dev/null; then
-    kill -KILL "$hung" 2>/dev/null
+    fm_test_signal_try KILL --identity "$hung" || true
     fail "a stopped GitLab poll left its hung detail read running"
   fi
   rm -f "$dir/glab.log.hangpid"

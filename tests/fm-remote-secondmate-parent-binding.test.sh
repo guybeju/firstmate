@@ -60,7 +60,7 @@ cleanup() {
     "$ROOT/bin/fm-procevent.sh" sweep-home >/dev/null 2>&1 || true
   if [ -f "$TMP_ROOT/remote-jobs/worker.pid" ]; then
     worker_pid=$(cat "$TMP_ROOT/remote-jobs/worker.pid")
-    kill "$worker_pid" 2>/dev/null || true
+    fm_test_signal_try TERM --identity "$worker_pid" || true
   fi
   rm -rf -- "$TMP_ROOT"
 }

@@ -297,7 +297,7 @@ descendant_state=$(ps -o stat= -p "$descendant_pid" 2>/dev/null | tr -d ' ' || t
 case "$descendant_state" in
   ''|Z*) ;;
   *)
-    kill -KILL "$descendant_pid" 2>/dev/null || true
+    fm_test_signal_try KILL --identity "$descendant_pid" || true
     fail "a timed-out action left descendant $descendant_pid alive ($descendant_state)"
     ;;
 esac

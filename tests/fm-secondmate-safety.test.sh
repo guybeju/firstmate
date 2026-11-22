@@ -2924,7 +2924,7 @@ EOF
   [ -e "$lock" ] || fail "forced teardown removed the publisher's task-set lock"
   grep -F 'task-set lock is held' "$err" >/dev/null \
     || fail "the refusal did not name the task-set contention: $(cat "$err")"
-  kill "$holder" 2>/dev/null || true
+  fm_test_signal_try TERM --identity "$holder" || true
   wait "$holder" 2>/dev/null || true
   pass "forced teardown refuses while a fresh task is being published in the home"
 }
@@ -2943,7 +2943,7 @@ EOF
   lock=${held#* }
   if FM_HOME="$subhome" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" newtask "$subhome/projects/alpha" --scout >/dev/null 2>"$err"; then
-    kill "$holder" 2>/dev/null || true
+    fm_test_signal_try TERM --identity "$holder" || true
     fail "a fresh spawn published a task while a forced teardown owned the set"
   fi
   [ ! -e "$subhome/state/newtask.meta" ] \
@@ -2953,7 +2953,7 @@ EOF
     || fail "the spawn refusal did not name the task-set contention: $(cat "$err")"
   [ ! -e "$subhome/state/.spawn-newtask.lock" ] \
     || fail "a refused spawn left its own task lock behind"
-  kill "$holder" 2>/dev/null || true
+  fm_test_signal_try TERM --identity "$holder" || true
   wait "$holder" 2>/dev/null || true
   pass "a fresh spawn refuses to publish while a forced teardown owns the task set"
 }
@@ -2970,13 +2970,13 @@ EOF
   holder=${held%% *}
   if FM_HOME="$subhome" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" newtask "$subhome/projects/alpha" --scout >/dev/null 2>"$err"; then
-    kill "$holder" 2>/dev/null || true
+    fm_test_signal_try TERM --identity "$holder" || true
     fail "a fresh spawn published while another spawn owned the task set"
   fi
   grep -F "task set is locked by another spawn" "$err" >/dev/null \
     || fail "the refusal did not name the other spawn: $(cat "$err")"
   [ ! -e "$subhome/state/newtask.meta" ] || fail "a refused spawn published a task"
-  kill "$holder" 2>/dev/null || true
+  fm_test_signal_try TERM --identity "$holder" || true
   wait "$holder" 2>/dev/null || true
   pass "a fresh spawn refusal identifies another spawn as the task-set holder"
 }
@@ -2994,7 +2994,7 @@ test_fresh_remote_secondmate_spawn_refuses_while_task_set_is_owned() {
   lock=${held#* }
   if FM_HOME="$home" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" remote-new --secondmate >/dev/null 2>"$err"; then
-    kill "$holder" 2>/dev/null || true
+    fm_test_signal_try TERM --identity "$holder" || true
     fail "a fresh remote secondmate spawn published while the task set was owned"
   fi
   [ ! -e "$home/state/remote-new.meta" ] \
@@ -3004,7 +3004,7 @@ test_fresh_remote_secondmate_spawn_refuses_while_task_set_is_owned() {
     || fail "the remote spawn refusal did not name task-set contention: $(cat "$err")"
   [ ! -e "$home/state/.spawn-remote-new.lock" ] \
     || fail "a refused remote secondmate spawn left its own task lock behind"
-  kill "$holder" 2>/dev/null || true
+  fm_test_signal_try TERM --identity "$holder" || true
   wait "$holder" 2>/dev/null || true
   pass "a fresh remote secondmate spawn refuses while the task set is owned"
 }

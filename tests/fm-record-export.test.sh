@@ -544,10 +544,10 @@ test_archive_detects_a_source_change_during_capture() {
   worker_pid=$(ps -eo pid=,args= | awk -v pattern="$ROOT/bin/fm-record-export.py archive-task task-a" \
     'index($0, pattern) { print $1; exit }')
   [ -n "$worker_pid" ] || { wait "$archive_pid" || true; fail "archive source-race fixture could not identify the filesystem worker"; }
-  kill -STOP "$worker_pid"
+  fm_test_signal STOP --identity "$worker_pid"
   rm "$home/state/task-a.status"
   ln -s "$outside/sentinel" "$home/state/task-a.status"
-  kill -CONT "$worker_pid"
+  fm_test_signal CONT --identity "$worker_pid"
   wait "$archive_pid" || rc=$?
   [ "$rc" -ne 0 ] || fail "archive committed while a source changed during capture"
   assert_absent "$archive/manifest.v1.json" "source race committed a manifest"

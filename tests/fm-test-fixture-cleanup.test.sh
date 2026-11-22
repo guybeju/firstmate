@@ -189,7 +189,7 @@ test_cleanup_reaps_orphaned_poller_naming_its_root() {
     i=$((i + 1))
   done
   if kill -0 "$poller" 2>/dev/null; then
-    kill -KILL "$poller" 2>/dev/null || true
+    fm_test_signal_try KILL --identity "$poller" || true
     fail "the owning suite's teardown left its fixture poller pid $poller running"
   fi
   survivors=$(ps -ww -eo pid=,args= | FM_ROOT_MATCH="$child_dir/" awk 'index($0, ENVIRON["FM_ROOT_MATCH"])')

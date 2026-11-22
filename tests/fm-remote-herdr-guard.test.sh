@@ -33,10 +33,11 @@ LAB_HELPER="$ROOT/bin/fm-herdr-lab.sh"
 LAB_SESSION=
 LAB_AGENT_PID=
 cleanup() {
-  [ -z "$LAB_AGENT_PID" ] || kill -TERM "$LAB_AGENT_PID" 2>/dev/null || true
+  [ -z "$LAB_AGENT_PID" ] || fm_test_signal_try TERM --identity "$LAB_AGENT_PID" || true
   [ -z "$LAB_SESSION" ] || "$LAB_HELPER" teardown "$LAB_SESSION" >/dev/null 2>&1 \
     || printf 'warning: lab session %s needs a manual teardown through %s\n' "$LAB_SESSION" "$LAB_HELPER" >&2
-  if [ "${#HOLDER_PIDS[@]}" -gt 0 ]; then kill "${HOLDER_PIDS[@]}" 2>/dev/null || true; fi
+  local holder
+  for holder in "${HOLDER_PIDS[@]+"${HOLDER_PIDS[@]}"}"; do fm_test_signal_try TERM --identity "$holder" || true; done
   fm_test_cleanup || true
 }
 trap cleanup EXIT
@@ -333,13 +334,14 @@ env -i PATH="$CASE_PATH" HOME="$TMP_ROOT" \
   FM_FAKE_SOCKET_OWNER="$CASE_OWNER" FM_FAKE_HERDR_SOCKET="$CASE_SOCKET" \
   "$GUARD" "$FAKE/herdr" "$SESSION" > "$CASE_STATE/guard.out" 2>&1 &
 agent_pid=$!
+fm_test_record_child "$agent_pid"
 HOLDER_PIDS+=("$agent_pid")
 i=0
 while [ ! -f "$CASE_STATE/started" ] && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
 assert_started "the guard did not start the long-running server"
 assert_session_leader_child "$agent_pid"
 server_pid=$(started_field pid)
-kill -TERM "$agent_pid"
+fm_test_signal TERM "$agent_pid"
 wait_exit "$agent_pid" "the launch agent sent TERM"
 expect_code 0 "$WAIT_RC" "the launch agent did not exit with the server's clean-shutdown status after a forwarded TERM"
 assert_present "$CASE_STATE/server-terminated" "the TERM sent to the launch agent never reached the server"

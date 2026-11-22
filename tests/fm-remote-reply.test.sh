@@ -96,7 +96,7 @@ stop_reply_listener() {
   local pid _
   pid=$(sed -n '2p' "$CLAIMS/$SID.claim" 2>/dev/null || true)
   case "$pid" in ''|*[!0-9]*) return 0 ;; esac
-  kill -TERM -- -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+  fm_test_signal_try TERM --members "$pid" || fm_test_signal_try TERM --identity "$pid" || true
   for _ in $(seq 1 80); do
     kill -0 "$pid" 2>/dev/null || return 0
     sleep 0.05
@@ -257,8 +257,8 @@ wait_for_content "$TMP_ROOT/leak-fetch-started" || fail "the leak-check document
 kill -TERM "$leak_pid"
 # Bash can defer TERM until its foreground fetch exits. Interrupt that fetch
 # before waiting so normal completion cannot satisfy the cleanup assertion.
-kill -TERM "$(cat "$TMP_ROOT/leak-fetch-started")" 2>/dev/null \
-  || fail "the leak-check fetch exited before it could be interrupted"
+fm_test_signal_try TERM --identity "$(cat "$TMP_ROOT/leak-fetch-started")" \
+  || fail "the leak-check fetch exited before it could be interrupted: $FM_TEST_SIGNAL_VERDICT"
 leak_rc=0
 wait "$leak_pid" 2>/dev/null || leak_rc=$?
 [ "$leak_rc" -eq 143 ] || fail "interrupted ingest returned an unexpected status: $leak_rc"
@@ -274,8 +274,8 @@ wait_for_content "$TMP_ROOT/leak-fetch-started" || fail "the leak-check source r
 [ -n "$(find "$LEAK_TMPDIR" -name 'fm-remote-reply-source.*' -print -quit)" ] \
   || fail "the leak-check source read did not stage its output file"
 kill -TERM "$leak_pid"
-kill -TERM "$(cat "$TMP_ROOT/leak-fetch-started")" 2>/dev/null \
-  || fail "the leak-check source read exited before it could be interrupted"
+fm_test_signal_try TERM --identity "$(cat "$TMP_ROOT/leak-fetch-started")" \
+  || fail "the leak-check source read exited before it could be interrupted: $FM_TEST_SIGNAL_VERDICT"
 leak_rc=0
 wait "$leak_pid" 2>/dev/null || leak_rc=$?
 [ "$leak_rc" -eq 143 ] || fail "interrupted source returned an unexpected status: $leak_rc"

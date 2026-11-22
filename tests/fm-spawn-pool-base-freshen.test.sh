@@ -1096,7 +1096,7 @@ SH
   out=$(run_spawn "$id" --harness polytoken --model zai/glm-5.3-flash --effort low --mode no-mistakes --yolo off)
   status=$?
   holder_pid=$(cat "$CASE_DIR/holder.pid" 2>/dev/null || true)
-  [ -z "$holder_pid" ] || kill "$holder_pid" 2>/dev/null || true
+  [ -z "$holder_pid" ] || fm_test_signal_try TERM --identity "$holder_pid" || true
   [ "$status" -ne 0 ] || fail "a polytoken launch into a project with its own hook layer should refuse"
   [ -e "$CASE_DIR/holder.ready" ] || fail "the stand-in retry never took the per-id spawn lock"$'\n'"$out"
   assert_contains "$out" "another spawn of $id holds its spawn lock" \

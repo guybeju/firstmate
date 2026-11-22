@@ -177,7 +177,7 @@ test_operational_foreign_and_unowned_input_is_dropped() {
   printf '%s\n' "$!" > "$other/state/.lock"
   printf '%s' '{"hook_event_name":"UserPromptSubmit","prompt":"not the owner"}' \
     | FM_HOME="$other" FM_ROOT_OVERRIDE="$PRIMARY_ROOT" "$FAKE_CLAUDE" -c '"$0" hook claude' "$MIRROR"
-  kill "$(cat "$other/state/.lock")" 2>/dev/null || true
+  fm_test_signal_try TERM --identity "$(cat "$other/state/.lock")" || true
   assert_absent "$other/state/.host-mirror.jsonl" "a session that does not hold the fleet lock must mirror nothing"
   pass "mirror: operational input, a harness-started turn, a foreign host's payload, other events, and a session without the lock are never mirrored"
 }

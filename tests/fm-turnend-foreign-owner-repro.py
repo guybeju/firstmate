@@ -129,13 +129,19 @@ def autoarm(env, label):
     return process
 
 
+def guarded_signal(signal_name, form, pid):
+    """Send through the test's guarded helper (signal policy P-010), run directly."""
+    subprocess.run([os.environ["FM_TEST_SIGNAL_GUARD"], "--send", "turnend-foreign-owner-repro",
+                    signal_name, form, str(pid)], stdout=subprocess.DEVNULL, check=False)
+
+
 def stop(process):
     if process.poll() is None:
-        os.killpg(process.pid, signal.SIGTERM)
+        guarded_signal("TERM", "--group", process.pid)
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
+            guarded_signal("KILL", "--members", process.pid)
             process.wait()
 
 

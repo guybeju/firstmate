@@ -157,7 +157,7 @@ EOF
   lock_pid=$(sed -n 's/^T1_LOCK_PID=//p' <<<"$out" | tail -1)
   messages=$(sed -n 's/^T1_MESSAGES=//p' <<<"$out" | tail -1)
   if [ -n "$lock_pid" ]; then
-    kill -TERM "$lock_pid" 2>/dev/null || true
+    fm_test_signal_try TERM --identity "$lock_pid" || true
   fi
   expect_code 0 "$status" "an unacknowledged recovery must be announced at most once per generation: $out"
   [ "$messages" = 1 ] || fail "T1 did not report a single recovery follow-up: $out"

@@ -26,8 +26,8 @@ orphan_cleanup() {
   local pid
   for pid in "${TRACKED_PIDS[@]:-}"; do
     [ -n "$pid" ] || continue
-    kill -KILL -- "-$pid" 2>/dev/null || true
-    kill -KILL "$pid" 2>/dev/null || true
+    fm_test_signal_try KILL --members "$pid" || true
+    fm_test_signal_try KILL --identity "$pid" || true
   done
   fm_test_cleanup
 }
@@ -158,7 +158,7 @@ wait_orphaned "$WORKER" 5 ||
 # refusal. The supervisor respawns, so the tree survives a teardown that looks
 # complete.
 rm -rf "$CASE1/remote-jobs"
-kill -KILL "$SERVE" 2>/dev/null || true
+fm_test_signal_try KILL --identity "$SERVE" || true
 wait_gone "$SERVE" 10 || fail "the recorded serving child did not stop"
 alive "$WORKER" || fail "the fixture supervisor did not survive a lone child kill, so this case no longer covers the leak"
 wait_child "$WORKER" 15 || fail "the supervisor did not respawn after its recorded child pid was killed"

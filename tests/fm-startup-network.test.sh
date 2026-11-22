@@ -826,7 +826,7 @@ EOF
     "the failed record did not say how to rerun the stage"
   assert_grep 'check	startup-network' "$home/state/.wake-queue" \
     "a worker that gave up on the lock did not surface to the agent"
-  kill "$holder" 2>/dev/null || true
+  fm_test_signal_try TERM --identity "$holder" || true
   await_pid_exit "$holder" 50 || fail "could not release the first lock holder"
 
   # After the sweeps: the worker registers and sweeps freely, then finds the
@@ -855,7 +855,7 @@ EOF
     "the unpublished result did not name the process holding the lock"
   assert_grep 'check	startup-network' "$home/state/.wake-queue" \
     "a result that could not be published under the lock did not surface to the agent"
-  kill "$holder" 2>/dev/null || true
+  fm_test_signal_try TERM --identity "$holder" || true
   pass "fm-startup-network: a held publish lock ends the worker inside its budget with a failed-rerun record"
 }
 

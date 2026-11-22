@@ -458,7 +458,7 @@ wait_for "$FM_PROCEVENT_CLAIM_ROOT/shared-src.claim" || fail "shared-group start
 shared_sibling=$(cat "$SHARED_SIBLING")
 pe "$HPG" retire shared-src >/dev/null
 kill -0 "$shared_sibling" 2>/dev/null || fail "retirement signaled an unrelated caller-group process"
-kill "$shared_sibling" 2>/dev/null || true
+fm_test_signal_try TERM --identity "$shared_sibling" || true
 wait "$shared_launcher" || fail "shared caller-group fixture did not exit cleanly"
 pass "public start never claims an inherited caller process group"
 
@@ -2094,7 +2094,7 @@ orphan_leader=$(sed -n '2p' "$FM_PROCEVENT_CLAIM_ROOT/orphan-src.claim")
 case "$orphan_leader" in ''|*[!0-9]*) fail "could not read the runner leader pid: $orphan_leader" ;; esac
 printf '%s\n' "$orphan_leader" > "$ORPHAN_GROUP"
 
-kill -KILL "$orphan_leader" 2>/dev/null || fail "could not kill the runner leader"
+fm_test_signal_try KILL --identity "$orphan_leader" || fail "could not kill the runner leader: $FM_TEST_SIGNAL_VERDICT"
 for _ in $(seq 1 50); do kill -0 "$orphan_leader" 2>/dev/null || break; sleep 0.1; done
 kill -0 "$orphan_leader" 2>/dev/null && fail "the runner leader survived SIGKILL"
 kill -0 -"$orphan_leader" 2>/dev/null || fail "fixture invalid: the owned child group did not survive the leader"
@@ -2145,7 +2145,7 @@ assert_contains "$orphan_again" "uncertain=1" \
   || fail "the second cycle started a source beside an ambiguous leaderless group"
 kill -0 -"$orphan_leader" 2>/dev/null \
   || fail "announcing the strand signalled the leaderless process group"
-kill -KILL -"$orphan_leader" 2>/dev/null || true
+fm_test_signal_try KILL --members "$orphan_leader" || true
 for _ in $(seq 1 50); do kill -0 -"$orphan_leader" 2>/dev/null || break; sleep 0.1; done
 kill -0 -"$orphan_leader" 2>/dev/null && fail "could not clean up the leaderless fixture group"
 pe "$HG" retire orphan-src >/dev/null
@@ -2196,8 +2196,8 @@ case "$sr_leader" in ''|*[!0-9]*) fail "could not read the state-root fixture le
 [ -n "$(sed -n '8p' "$FM_PROCEVENT_CLAIM_ROOT/state-root-src.claim")" ] \
   || fail "fixture invalid: the claim carries no state-root identity to invalidate"
 
-kill -KILL -"$sr_leader" 2>/dev/null || true
-kill -KILL "$sr_leader" 2>/dev/null || true
+fm_test_signal_try KILL --members "$sr_leader" || true
+fm_test_signal_try KILL --identity "$sr_leader" || true
 for _ in $(seq 1 50); do kill -0 -"$sr_leader" 2>/dev/null || break; sleep 0.1; done
 kill -0 "$sr_leader" 2>/dev/null && fail "the state-root fixture leader survived SIGKILL"
 kill -0 -"$sr_leader" 2>/dev/null && fail "fixture invalid: the owned group outlived the whole generation"
@@ -2811,7 +2811,7 @@ sweep_pid_two=$(sed -n '2p' "$FM_PROCEVENT_CLAIM_ROOT/sweep-two.claim")
 # generation now observes the identity mismatch, self-retires, and releases its
 # claim - so the sweep would race that exit and see one source or two depending
 # on which won.
-kill -KILL -"$sweep_pid_two" 2>/dev/null || true
+fm_test_signal_try KILL --members "$sweep_pid_two" || true
 for _ in $(seq 1 50); do kill -0 "$sweep_pid_two" 2>/dev/null || break; sleep 0.1; done
 kill -0 "$sweep_pid_two" 2>/dev/null \
   && fail "the claim-only sweep fixture runner did not stop"
@@ -2990,7 +2990,7 @@ SH
   # a stopped lock owner instead of exercising the signal checks below.
   FM_PROC_ROOT_OVERRIDE="$TMP_ROOT/no-post-term-proc" pe "$HPOST_TERM" list >/dev/null \
     || fail "the post-TERM fixture never finished its source launch"
-  kill -STOP "$POST_TERM_RUNNER" || fail "the post-TERM fixture could not keep its leader alive"
+  fm_test_signal_try STOP --identity "$POST_TERM_RUNNER" || fail "the post-TERM fixture could not keep its leader alive: $FM_TEST_SIGNAL_VERDICT"
   cat > "$POST_TERM_BIN/ps" <<SH
 #!/usr/bin/env bash
 if [ "\${1-}" = -p ] && [ "\${2-}" = "$POST_TERM_RUNNER" ] \
@@ -3029,7 +3029,7 @@ SH
         "first-signal $post_term_case evidence preserves registration"
       assert_present "$FM_PROCEVENT_CLAIM_ROOT/post-term-src.claim" \
         "first-signal $post_term_case evidence preserves its claim"
-      kill -KILL -"$POST_TERM_RUNNER" 2>/dev/null || true
+      fm_test_signal_try KILL --members "$POST_TERM_RUNNER" || true
       ;;
     *)
       if [ ! -s "$POST_TERM_SIGNALS" ]; then
@@ -4370,7 +4370,7 @@ PL
   PROOF_RELEASE=
   proof_status=0
   wait "$PROOF_STOP" || proof_status=$?
-  [ "$proof_reaped" -eq 1 ] || kill -KILL -"$PROOF_PID" 2>/dev/null || true
+  [ "$proof_reaped" -eq 1 ] || fm_test_signal_try KILL --members "$PROOF_PID" || true
   wait "$PROOF_START" 2>/dev/null || true
   [ "$proof_transition" -eq 1 ] || fail "the runner never became $proof_state after TERM"
   [ "$proof_survivor" -eq 1 ] || fail "no child survived the $proof_state leader's TERM"
@@ -4750,7 +4750,7 @@ wait_for "$HCRASH/state/procevent/crash-src.runner" \
 CRASH_PID=$(cat "$HCRASH/state/procevent/crash-src.runner")
 wait_for "$TMP_ROOT/crash-leader.descendant" \
   || fail "the crash-fixture listener's child never spawned its own descendant"
-kill -KILL "$CRASH_PID" 2>/dev/null || fail "the crash fixture could not stop its own leader"
+fm_test_signal_try KILL --identity "$CRASH_PID" || fail "the crash fixture could not stop its own leader: $FM_TEST_SIGNAL_VERDICT"
 deadline=$((SECONDS + 10))
 while kill -0 "$CRASH_PID" 2>/dev/null; do
   [ "$SECONDS" -lt "$deadline" ] || fail "the crash fixture's leader never died"
@@ -4767,7 +4767,7 @@ assert_present "$HCRASH/state/procevent/crash-src.source" \
 kill -0 -"$CRASH_PID" 2>/dev/null \
   || fail "a refused retirement signalled the leaderless group anyway"
 pass "a group whose leader died to something else is still refused, not signalled"
-kill -KILL -"$CRASH_PID" 2>/dev/null || true
+fm_test_signal_try KILL --members "$CRASH_PID" || true
 
 # --- arm reports ready only once this registration's listener is running ----
 # The public arm path used to print armed as soon as registration was stored.

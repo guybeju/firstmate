@@ -52,10 +52,10 @@ cleanup() {
   trap - EXIT
   if [ -f "$FM/state/.supervision-host" ]; then
     pid=$(awk -F '\t' '$1 == "host" { print $2; exit }' "$FM/state/.supervision-host")
-    [ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
+    [ -z "$pid" ] || fm_test_signal_try TERM --identity "$pid" || true
   fi
   pid=$(cat "$FM/state/.watch.lock/pid" 2>/dev/null || true)
-  [ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
+  [ -z "$pid" ] || fm_test_signal_try TERM --identity "$pid" || true
   "$LAB_HELPER" teardown "$SESSION" || rc=1
   [ -z "${FM_WARM_COMPACT_LIVE_TRACE:-}" ] || cp "$LAB/screens.log" /tmp/wc-screens.log 2>/dev/null
   rm -rf "${PROJECTS:?}/$(printf '%s' "$FM" | sed 's/[^A-Za-z0-9]/-/g')"

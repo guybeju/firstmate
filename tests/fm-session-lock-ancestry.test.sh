@@ -1038,7 +1038,7 @@ BG_FIXTURE_PIDS=()
 reap_background_fixture() {
   local pid
   for pid in ${BG_FIXTURE_PIDS[@]+"${BG_FIXTURE_PIDS[@]}"}; do
-    kill -TERM "$pid" 2>/dev/null || true
+    fm_test_signal_try TERM --identity "$pid" || true
   done
 }
 trap 'reap_background_fixture; fm_test_cleanup' EXIT
@@ -1224,7 +1224,7 @@ test_e2e_background_session_keeps_its_lock_across_a_recycled_chain() {
   # adopts orphans on this host (init, or a user service manager), and the
   # front-end that holds the lock stays alive. Phase 2 below proves the
   # ancestry no longer reaches the front-end.
-  kill -TERM "$daemon"
+  fm_test_signal TERM --identity "$daemon"
   i=0
   while [ "$i" -lt 200 ]; do
     ptyhost_parent=$(ps -o ppid= -p "$ptyhost" 2>/dev/null | tr -d ' ')
