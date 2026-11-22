@@ -132,7 +132,8 @@ first mate 的設定檔是 `{"v":1,"name":"firstmate","feed":"bin/fm-board.sh","
 second mate 的 home 查 `fm-dispatch-plan.sh order` 排的那一份（`bin/fm-queue-source-lib.sh`）：同機的是主 home 的 `data/topics.json`，現讀；遠端的是主 home 推來的副本，拒絕時多說副本的時間，並說議題如果是之後才建的，等下一份副本再跑一次。
 second mate 的 home 讀不到那一份時（沒有檔或副本、讀不懂、副本 60 分鐘以上沒更新、沒有 `jq`）不擋：照給的 id 寫入，stderr 一行說沒有檢查和原因。
 `order` 照一小時以上的副本仍然排，`tag` 卻不再拿它擋，因為這段時間裡新建的議題不在副本裡。
-`tag <新 id> --from <舊 id>` 照舊沿用舊 task 的議題，不檢查。
+`tag <新 id> --from <舊 id>` 取舊 task 現在的議題，在跑的那個 home 照上面同一套檢查：合併過的記成它指到的議題；封存的、不認得的拒絕（exit 1），訊息與直接 `tag` 一樣，再多一行說新 task 沒有標記、改用 `tag <新 id> <議題 id>` 標一個還開著的；讀不到清單時照寫並說沒有檢查。
+舊 task 沒有標記（或沒有這個 task）照舊 exit 1。
 確切的字在 `fm-board.sh --help`；測試在 `stage-1-tag.sh`。
 
 ## 4. `fm-board.sh` 的 exit code
