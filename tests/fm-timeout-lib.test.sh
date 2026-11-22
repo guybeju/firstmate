@@ -302,9 +302,9 @@ test_an_owner_that_dies_during_startup_ends_the_command() {
     if [ "$((SECONDS - started))" -ge 15 ]; then
       if [ -s "$dir/pid" ]; then
         pid=$(cat "$dir/pid")
-        kill -KILL -- "-$pid" 2>/dev/null || true
+        fm_test_signal_try KILL --members "$pid" || true
       fi
-      kill -KILL "$watchdog" 2>/dev/null || true
+      fm_test_signal_try KILL --identity "$watchdog" || true
       fail "a watchdog whose owner died during startup ran on toward its bound"
     fi
     sleep 0.02
@@ -336,9 +336,9 @@ test_a_top_level_parent_that_dies_during_startup_ends_the_command() {
     if [ "$((SECONDS - started))" -ge 15 ]; then
       if [ -s "$dir/pid" ]; then
         pid=$(cat "$dir/pid")
-        kill -KILL -- "-$pid" 2>/dev/null || true
+        fm_test_signal_try KILL --members "$pid" || true
       fi
-      kill -KILL "$watchdog" 2>/dev/null || true
+      fm_test_signal_try KILL --identity "$watchdog" || true
       fail "top-level watchdog lost its pre-exec parent and ran toward its bound"
     fi
     sleep 0.02
@@ -592,6 +592,12 @@ test_run_timed_perl_interrupt_cleanup() {
         [ "$signal" != timeout ] || [ "$disposition" = default ] || [ "$disposition" = substitution-default ] || continue
         PATH=$PERL_ONLY perl -MPOSIX=setpgid,WNOHANG -MTime::HiRes=time,sleep -MIO::Select -e '
           my ($root, $dir, $signal, $target, $disposition) = @ARGV;
+          sub guarded {  # <signal> <form> <pid>: send through the test signal guard (P-010).
+            my ($sig, $form, $pid) = @_;
+            my $guard = $ENV{FM_TEST_SIGNAL_GUARD} // die "FM_TEST_SIGNAL_GUARD is not set\n";
+            local $ENV{PATH} = "/usr/bin:/bin:/usr/sbin:/sbin";
+            return system($guard, "--send", "timeout-lib-harness", $sig, $form, $pid) == 0;
+          }
           mkdir $dir or die "mkdir $dir: $!";
           pipe(my $output, my $writer) or die "pipe: $!";
           my $caller = fork;
@@ -671,7 +677,8 @@ test_run_timed_perl_interrupt_cleanup() {
             die "invalid fixture pid" unless $$pid =~ /^\d+$/ && $$pid > 1;
           }
           if ($signal ne "timeout") {
-            kill $signal, ($target eq "group" ? -$caller : $owner) or die "signal: $!";
+            ($target eq "group" ? guarded($signal, "--group", $caller) : guarded($signal, "--identity", $owner))
+              or die "signal: the guard refused";
           }
           my $end = time + 5;
           my $select = IO::Select->new($output);
@@ -710,8 +717,8 @@ test_run_timed_perl_interrupt_cleanup() {
         };
         $error = $@;
         # These groups were created solely by this fixture, never the test runner.
-        kill "KILL", -$command if $command;
-        kill "KILL", -$caller;
+        guarded("KILL", "--members", $command) if $command;
+        guarded("KILL", "--members", $caller);
         waitpid $caller, 0 unless defined $status;
         die "$signal to $target with $disposition disposition: $error" if $error;
       ' "$ROOT" "$TMP_ROOT/interrupt-$signal-$target-$disposition" "$signal" "$target" "$disposition" \
@@ -749,6 +756,12 @@ PERL
       for target in caller group; do
         "$real_perl" -MPOSIX=setpgid,WNOHANG -MTime::HiRes=time,sleep -MIO::Select -e '
           my ($root, $bin, $dir, $signal, $target, $monitor, $real_perl) = @ARGV;
+          sub guarded {  # <signal> <form> <pid>: send through the test signal guard (P-010).
+            my ($sig, $form, $pid) = @_;
+            my $guard = $ENV{FM_TEST_SIGNAL_GUARD} // die "FM_TEST_SIGNAL_GUARD is not set\n";
+            local $ENV{PATH} = "/usr/bin:/bin:/usr/sbin:/sbin";
+            return system($guard, "--send", "timeout-lib-harness", $sig, $form, $pid) == 0;
+          }
           mkdir $dir or die "mkdir: $!";
           pipe(my $output, my $writer) or die "pipe: $!";
           my $caller = fork;
@@ -786,7 +799,8 @@ PERL
             $runner = <$f>;
             chomp $runner;
             die "invalid runner pid" unless $runner =~ /^\d+$/ && $runner > 1;
-            kill $signal, ($target eq "group" ? -$caller : $caller) or die "signal: $!";
+            ($target eq "group" ? guarded($signal, "--group", $caller) : kill($signal, $caller))
+              or die "signal: $!";
             my $end = time + 5;
             my $select = IO::Select->new($output);
             until (defined $status && $eof) {
@@ -808,10 +822,10 @@ PERL
           };
           my $error = $@;
           if ($runner) {
-            kill "KILL", -$runner;
-            kill "KILL", $runner;
+            guarded("KILL", "--members", $runner);
+            guarded("KILL", "--identity", $runner);
           }
-          kill "KILL", -$caller;
+          guarded("KILL", "--members", $caller);
           waitpid $caller, 0 unless defined $status;
           die "$signal to $target with monitor $monitor: $error" if $error;
         ' "$ROOT" "$startup_bin" "$TMP_ROOT/startup-$monitor-$signal-$target" "$signal" "$target" "$monitor" "$real_perl" \
@@ -905,6 +919,12 @@ my $held = 0;
 PERL
   "$real_perl" -MPOSIX=setpgid,WNOHANG -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC,sleep -MIO::Select -e '
     my ($root, $path, $dir, $mode, $signal) = @ARGV;
+    sub guarded {  # <signal> <form> <pid>: send through the test signal guard (P-010).
+      my ($sig, $form, $pid) = @_;
+      my $guard = $ENV{FM_TEST_SIGNAL_GUARD} // die "FM_TEST_SIGNAL_GUARD is not set\n";
+      local $ENV{PATH} = "/usr/bin:/bin:/usr/sbin:/sbin";
+      return system($guard, "--send", "timeout-lib-harness", $sig, $form, $pid) == 0;
+    }
     pipe(my $output, my $writer) or die "pipe: $!";
     my $caller = fork;
     die "fork: $!" unless defined $caller;
@@ -987,9 +1007,9 @@ PERL
     if ($error) {
       $command ||= eval { read_pid("$dir/command") } || 0;
       $runner ||= eval { read_pid("$dir/runner") } || 0;
-      kill "KILL", -$command if $command;
-      kill "KILL", -$runner if $runner;
-      kill "KILL", -$caller;
+      guarded("KILL", "--members", $command) if $command;
+      guarded("KILL", "--members", $runner) if $runner;
+      guarded("KILL", "--members", $caller);
       waitpid $caller, 0 unless defined $status;
       die "$mode/$signal: $error";
     }
