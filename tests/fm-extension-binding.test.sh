@@ -76,8 +76,8 @@ extension_test_cleanup() {
   [ -z "$registry_race_pid" ] || kill -TERM "$registry_race_pid" 2>/dev/null || true
   [ -z "$leaf_race_pid" ] || kill -TERM "$leaf_race_pid" 2>/dev/null || true
   [ -z "$owner_retire_pid" ] || kill -TERM "$owner_retire_pid" 2>/dev/null || true
-  [ -z "$owner_worker_pid" ] || fm_test_signal_try CONT --env-path FM_HOME "$owner_worker_pid" || true
-  [ -z "$owner_worker_pid" ] || fm_test_signal_try KILL --env-path FM_HOME "$owner_worker_pid" || true
+  [ -z "$owner_worker_pid" ] || fm_test_signal_try CONT --env-path FM_HOME "$owner_worker_pid" || printf '# fm-extension-binding cleanup: %s\n' "$FM_TEST_SIGNAL_VERDICT" >&2
+  [ -z "$owner_worker_pid" ] || fm_test_signal_try KILL --env-path FM_HOME "$owner_worker_pid" || printf '# fm-extension-binding cleanup: %s\n' "$FM_TEST_SIGNAL_VERDICT" >&2
   [ -z "$owner_register_pid" ] || kill -TERM "$owner_register_pid" 2>/dev/null || true
   [ -z "$signal_worker_pid" ] || fm_test_signal_try CONT --identity "$signal_worker_pid" || true
   [ -z "$signal_worker_pid" ] || fm_test_signal_try KILL --identity "$signal_worker_pid" || true
@@ -85,7 +85,7 @@ extension_test_cleanup() {
   [ -z "$active_runner_release" ] || touch "$active_runner_release" 2>/dev/null || true
   [ -z "$active_runner_pid" ] || kill -TERM "$active_runner_pid" 2>/dev/null || true
   [ -z "$remote_active_release" ] || touch "$remote_active_release" 2>/dev/null || true
-  [ -z "$unrelated_daemon_pid" ] || kill -KILL "$unrelated_daemon_pid" 2>/dev/null || true
+  [ -z "$unrelated_daemon_pid" ] || fm_test_signal_try KILL --identity "$unrelated_daemon_pid" || printf '# fm-extension-binding cleanup: %s\n' "$FM_TEST_SIGNAL_VERDICT" >&2
   [ -z "$unrelated_launcher_pid" ] || kill -KILL "$unrelated_launcher_pid" 2>/dev/null || true
   [ -z "$signal_cleanup_host_pid" ] || kill -KILL "$signal_cleanup_host_pid" 2>/dev/null || true
   [ -z "$signal_cleanup_group_pid" ] || fm_test_signal_try KILL --members "$signal_cleanup_group_pid" || true
@@ -96,7 +96,7 @@ extension_test_cleanup() {
   [ -z "$crash_silent_runner_pid" ] || fm_test_signal_try TERM --members "$crash_silent_runner_pid" || true
   [ -z "$override_crash_start_pid" ] || kill -TERM "$override_crash_start_pid" 2>/dev/null || true
   [ -z "$override_crash_runner_pid" ] || fm_test_signal_try TERM --members "$override_crash_runner_pid" || true
-  [ -z "$handshake_orphan_pid" ] || kill -KILL "$handshake_orphan_pid" 2>/dev/null || true
+  [ -z "$handshake_orphan_pid" ] || fm_test_signal_try KILL --identity "$handshake_orphan_pid" || printf '# fm-extension-binding cleanup: %s\n' "$FM_TEST_SIGNAL_VERDICT" >&2
   [ -z "$order_release" ] || touch "$order_release" 2>/dev/null || true
   [ -z "$order_register_pid" ] || kill -KILL "$order_register_pid" 2>/dev/null || true
   [ -z "$order_reconcile_pid" ] || kill -TERM "$order_reconcile_pid" 2>/dev/null || true
@@ -1178,7 +1178,9 @@ assert_contains "$(cat "$overlap_out")" "overlap complete" "overlap fixture did 
 kill -0 "$unrelated_daemon_pid" 2>/dev/null || fail "extension cleanup terminated an unrelated same-user daemon"
 wait "$unrelated_launcher_pid"
 unrelated_launcher_pid=
-kill -KILL "$unrelated_daemon_pid" 2>/dev/null || true
+# The stand-in shares nothing with the run by design, so once its launcher is
+# gone the guard finds no evidence and sends nothing; it ends after its 300 s.
+fm_test_signal_try KILL --identity "$unrelated_daemon_pid" || true
 unrelated_daemon_pid=
 pass "process cleanup never adopts a proven-unrelated same-user process"
 fi
@@ -1654,7 +1656,8 @@ FM_HOME="$H_LOCK_OWNER" "$PROCEVENT" register-extension ext-lock-owner owner-sou
 owner_register_pid=$!
 sleep 0.2
 kill -0 "$owner_register_pid" 2>/dev/null || fail "wrapper death released a live retirement worker's lifecycle lock"
-fm_test_signal_try KILL --env-path FM_HOME "$owner_worker_pid" || true
+fm_test_signal_try KILL --env-path FM_HOME "$owner_worker_pid" \
+  || fail "the orphaned retirement worker could not be ended through the guard's environment evidence (P-010 supplement 4): $FM_TEST_SIGNAL_VERDICT"
 wait "$owner_worker_pid" 2>/dev/null || true
 owner_worker_pid=
 owner_register_rc=0
