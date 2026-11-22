@@ -118,7 +118,9 @@ case "$*" in
     mv "$FM_FAKE_STATE/started.tmp" "$FM_FAKE_STATE/started"
     if [ -f "$FM_FAKE_STATE/server-runs" ]; then
       trap 'printf "terminated\n" > "$FM_FAKE_STATE/server-terminated"; exit 0' TERM
-      while :; do sleep 0.1; done
+      i=0
+      while [ "$i" -lt $((${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120} * 10)) ]; do sleep 0.1; i=$((i + 1)); done
+      exit 1
     fi
     [ ! -f "$FM_FAKE_STATE/server-killed" ] || kill -KILL "$$"
     exit "$(cat "$FM_FAKE_STATE/server-exit" 2>/dev/null || printf 0)"

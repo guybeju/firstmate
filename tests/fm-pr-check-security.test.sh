@@ -2927,7 +2927,8 @@ test_custom_snapshot_cleanup_on_signal() {
   child_pid_file="$dir/custom-child.pid"
   # shellcheck disable=SC2016  # The generated child expands $$ when it runs.
   printf '%s\n' '#!/usr/bin/env bash' 'trap "" TERM' \
-    'printf "%s\n" "$$" > "$FM_TEST_CUSTOM_CHILD_PID"' 'while :; do sleep 1; done' \
+    'printf "%s\n" "$$" > "$FM_TEST_CUSTOM_CHILD_PID"' \
+    'i=0; while [ "$i" -lt "${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}" ]; do sleep 1; i=$((i + 1)); done' \
     > "$state/custom.check.sh"
   chmod 0700 "$state/custom.check.sh"
   cat > "$dir/fakebin/timeout" <<'SH'

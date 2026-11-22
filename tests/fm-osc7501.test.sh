@@ -250,7 +250,7 @@ from pathlib import Path
 script, home = sys.argv[1:]
 root = Path(home)
 agent = root / "claude"
-agent.write_text("#!" + sys.executable + "\n" + '''import os, signal, sys
+agent.write_text("#!" + sys.executable + "\n" + '''import os, signal, sys, time
 from pathlib import Path
 root = Path(__file__).parent
 if "--version" not in sys.argv:
@@ -260,8 +260,9 @@ signal.signal(signal.SIGTERM, signal.SIG_IGN)
 child = os.fork()
 with (root / "probe-pids").open("a") as f:
     f.write(str(os.getpid()) + "\\n")
-while True:
-    signal.pause()
+# Deaf to TERM; ends by itself after the stub ceiling, so a log-only run
+# leaves no probe behind.
+time.sleep(float(os.environ.get("FM_TEST_STUB_MAX_BLOCK_SECONDS", "120")))
 ''')
 agent.chmod(0o755)
 tty = root / "tty"

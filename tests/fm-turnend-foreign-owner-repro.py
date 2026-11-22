@@ -73,6 +73,12 @@ def run(env, command):
     )
 
 
+# A stand-in owner idles until stop() ends it, and ends by itself after 600 s,
+# past this script's worst case (seven 20 s waits and its 30 s runs), so a run
+# whose signals were only logged leaves nothing behind.
+IDLE = 'i=0; while [ "$i" -lt 600 ]; do sleep 1; i=$((i + 1)); done'
+
+
 def start(env, command, name):
     output = (OUT / name).open("w")
     process = subprocess.Popen(
@@ -154,7 +160,7 @@ try:
     root, env = make("nonowner")
     owner = start(
         env,
-        '"$FM_ROOT_OVERRIDE/bin/fm-lock.sh" && touch "$FM_HOME/state/owner-ready" && while :; do sleep 1; done',
+        '"$FM_ROOT_OVERRIDE/bin/fm-lock.sh" && touch "$FM_HOME/state/owner-ready" && ' + IDLE,
         "owner-idle.txt",
     )
     lock_path = root / "state/.lock"
@@ -225,7 +231,7 @@ try:
     same_env["CLAUDE_CODE_SESSION_ID"] = "synthetic-same"
     same_owner = start(
         same_env,
-        'export CLAUDE_PID=$$; "$FM_ROOT_OVERRIDE/bin/fm-lock.sh" && touch "$FM_HOME/state/owner-ready" && while :; do sleep 1; done',
+        'export CLAUDE_PID=$$; "$FM_ROOT_OVERRIDE/bin/fm-lock.sh" && touch "$FM_HOME/state/owner-ready" && ' + IDLE,
         "same-owner.txt",
     )
     same_lock = same / "state/.lock"
@@ -251,7 +257,7 @@ try:
         'export CLAUDE_PID=$$; printf "%s\\n" "$$" > "$FM_HOME/state/accepted-pid"; '
         '"$FM_ROOT_OVERRIDE/bin/fm-lock.sh"; printf "%s\\n" "$?" > "$FM_HOME/state/accepted-rc.tmp"; '
         'mv "$FM_HOME/state/accepted-rc.tmp" "$FM_HOME/state/accepted-rc"; '
-        "while :; do sleep 1; done",
+        + IDLE,
         "same-accepted.txt",
     )
     until(

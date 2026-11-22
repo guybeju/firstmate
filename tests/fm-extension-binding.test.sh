@@ -186,6 +186,20 @@ def success(result, **extra):
 def write_exclusive(path, content):
     with open(path, "x", encoding="utf-8") as output: output.write(content)
 
+# Every blocking branch ends by itself after FM_TEST_STUB_MAX_BLOCK_SECONDS
+# (tests/lib.sh's ceiling), without answering, so no run leaves it behind.
+BLOCK_SECONDS = float(os.environ.get("FM_TEST_STUB_MAX_BLOCK_SECONDS", "120"))
+
+def wait_for_release(path):
+    deadline = time.monotonic() + BLOCK_SECONDS
+    while not os.path.exists(path):
+        if time.monotonic() >= deadline: sys.exit(75)
+        time.sleep(.01)
+
+def block_until_ended():
+    time.sleep(BLOCK_SECONDS)
+    sys.exit(75)
+
 def stubborn_child():
     return subprocess.Popen([sys.executable, "-c", "import signal,time;signal.signal(signal.SIGTERM, signal.SIG_IGN);time.sleep(300)"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -195,7 +209,7 @@ if verb == "handshake":
         try: write_exclusive(marker, f"{os.getpid()}\n")
         except FileExistsError: pass
         else:
-            while not os.path.exists(release): time.sleep(.01)
+            wait_for_release(release)
     if fixed == "handshake-wrong-id": raw(handshake(request_id="sha256:" + "0" * 64))
     elif fixed == "handshake-unknown": raw(handshake(authority="merge"))
     elif fixed == "handshake-duplicate": raw(json.dumps(handshake()).replace('"request_id": ', f'"request_id":"{request["request_id"]}","request_id": ', 1))
@@ -225,7 +239,7 @@ elif mode == "error-injection": raw({"schema":"firstmate.extension-response.v1",
 elif mode == "oversize": raw("x" * 70000)
 elif mode == "stderr-oversize":
     sys.stderr.write("e" * 9000); sys.stderr.flush()
-    while True: time.sleep(1)
+    block_until_ended()
 elif mode in ("timeout", "leak", "foreground-leak"):
     os.makedirs(state, exist_ok=True)
     child = stubborn_child()
@@ -233,13 +247,13 @@ elif mode in ("timeout", "leak", "foreground-leak"):
     with open(os.path.join(state, name), "w", encoding="utf-8") as output: output.write(f"{child.pid}\n")
     if mode == "timeout":
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        while True: time.sleep(1)
+        block_until_ended()
     if mode == "leak": time.sleep(.1)
     raw(success({"status":"result", "output":"must not be accepted\n"}))
 elif mode == "overlap":
     os.makedirs(state, exist_ok=True)
     with open(os.path.join(state, "overlap-ready"), "w", encoding="utf-8") as output: output.write("ready\n")
-    while not os.path.exists(os.path.join(state, "overlap-release")): time.sleep(.01)
+    wait_for_release(os.path.join(state, "overlap-release"))
     raw(success({"status":"result", "output":"overlap complete\n"}))
 elif mode in ("replay", "replay-no-result"):
     os.makedirs(state, exist_ok=True)
@@ -259,7 +273,7 @@ elif mode == "host-error-output" and request["operation"] == "source.poll":
 elif mode.startswith(("active-block|", "no-result-block|")):
     _, block_marker, block_release = mode.split("|", 2)
     write_exclusive(block_marker, f"{os.getpid()}\n")
-    while not os.path.exists(block_release): time.sleep(.01)
+    wait_for_release(block_release)
     raw(success({"status":"no-result", "output":""} if mode.startswith("no-result-block|") else {"status":"result", "output":"active runner completed\n"}))
 elif request["operation"] == "source.poll": raw(success({"status":"no-result" if mode == "no-result" else "result", "output":"" if mode == "no-result" else f"external evidence: {mode}\n"}))
 elif request["operation"] == "result.classify": raw(success({"classification":"external-ready"}))
@@ -271,7 +285,7 @@ elif request["operation"] == "result.silent":
     elif content.startswith("external evidence: silent-block|"):
         _, block_marker, block_release = content.rstrip("\n").split("|", 2)
         write_exclusive(block_marker, f"{os.getpid()}\n")
-        while not os.path.exists(block_release): time.sleep(.01)
+        wait_for_release(block_release)
         raw(success({"value":True}))
     else: raw(success({"value":content == "external evidence: silent-result\n"}))
 else: sys.exit(6)
@@ -404,10 +418,22 @@ terminate_section_lanes() {
     section_child_pid=$(sed -n '1p' "${section_results[$index]}.pid" 2>/dev/null || true)
     case "$section_child_pid" in
       ''|*[!0-9]*) ;;
-      *) terminate_section_lane_child "$section_child_pid" ;;
+      *) end_recorded_section_child "$section_child_pid" ;;
     esac
     wait "$section_pid" 2>/dev/null || true
   done
+}
+
+# end_recorded_section_child <pid read from a lane's pid file>: the coordinator
+# already sent TERM through the guard; a section child still running after 1 s
+# gets KILL through the guard too. Only a lane signals its own child directly.
+end_recorded_section_child() {
+  local section_child_pid=$1 cleanup_attempt
+  for ((cleanup_attempt = 0; cleanup_attempt < 20; cleanup_attempt++)); do
+    kill -0 "$section_child_pid" 2>/dev/null || return 0
+    sleep 0.05
+  done
+  fm_test_signal_try KILL --identity "$section_child_pid" || true
 }
 
 terminate_section_lane_child() {
@@ -2251,7 +2277,8 @@ JS
 }
 crash_cleanup_group_pid=$(node - "$ROOT/bin/fm-extension-launch-barrier.mjs" "$orphan_token" <<'JS'
 const {spawn} = require("child_process");
-const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", ...process.argv.slice(2)],
+const idle = "setTimeout(() => {}, 1000 * Number(process.env.FM_TEST_STUB_MAX_BLOCK_SECONDS || 120))";
+const child = spawn(process.execPath, ["-e", idle, ...process.argv.slice(2)],
   {detached: true, stdio: "ignore"});
 console.log(child.pid);
 child.unref();

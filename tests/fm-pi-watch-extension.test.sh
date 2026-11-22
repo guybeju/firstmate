@@ -3717,7 +3717,9 @@ printf '%s\n%s\n' "$$" "$marker" > "$FM_ARM_LOG.pid"
 if [ -n "$previous" ] && [ -f "$previous_marker" ]; then
   "$FM_TEST_SIGNAL_GUARD" --send fm-watch-arm-stand-in TERM --identity "$previous" >/dev/null 2>&1 || true
 fi
-while :; do
+i=0
+while [ "$i" -lt $((${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120} * 50)) ]; do
+  i=$((i + 1))
   if [ -e "$FM_TRIGGER_FILE" ]; then
     outcome=$(cat "$FM_TRIGGER_FILE")
     rm -f "$FM_TRIGGER_FILE"
@@ -3729,6 +3731,7 @@ while :; do
   [ ! -e "$FM_STOP_FILE" ] || exit 0
   sleep 0.02
 done
+exit 1
 SH
   chmod +x "$repo/bin/fm-watch-arm.sh"
   out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_MARKER_ROOT="$marker_root" FM_TRIGGER_FILE="$trigger" FM_STOP_FILE="$stop" node --input-type=module 2>&1 <<'EOF'
@@ -4163,7 +4166,9 @@ printf '%s\n%s\n' "$$" "$live" > "$FM_ARM_LOG.pid"
 if [ -n "$previous" ] && [ -f "$previous_marker" ]; then "$FM_TEST_SIGNAL_GUARD" --send fm-watch-arm-stand-in TERM --identity "$previous" >/dev/null 2>&1 || true; fi
 if [ "$FM_HELD_CLOSE_CASE" = replacement ] && [ "$count" -eq 3 ]; then
   printf 'waiting=3\n' >> "$FM_ARM_LOG"
-  while :; do sleep 0.02; done
+  i=0
+  while [ "$i" -lt $((${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120} * 50)) ]; do sleep 0.02; i=$((i + 1)); done
+  exit 1
 fi
 printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
 printf 'ready=%s\n' "$count" >> "$FM_ARM_LOG"
@@ -4745,7 +4750,11 @@ fi
 previous=$(cat "$FM_CHILD_MARKER" 2>/dev/null || true)
 if [ -n "$previous" ] && kill -0 "$previous" 2>/dev/null; then
   "$FM_TEST_SIGNAL_GUARD" --send fm-watch-arm-stand-in TERM --identity "$previous" >/dev/null 2>&1 || true
-  while kill -0 "$previous" 2>/dev/null; do sleep 0.01; done
+  i=0
+  while kill -0 "$previous" 2>/dev/null && [ "$i" -lt $((${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120} * 100)) ]; do
+    sleep 0.01
+    i=$((i + 1))
+  done
 fi
 cleanup() { rm -f "$FM_CHILD_MARKER"; }
 trap cleanup EXIT

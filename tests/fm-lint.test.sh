@@ -1522,9 +1522,12 @@ if [ "${1:-}" = "--version" ]; then
 fi
 printf '%s\n' "$$" > "$FM_TEST_SHELLCHECK_PID"
 trap 'exit 143' HUP INT TERM
-while :; do
+i=0
+while [ "$i" -lt "${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}" ]; do
   sleep 1
+  i=$((i + 1))
 done
+exit 1
 SH
   chmod +x "$fakebin/shellcheck"
 

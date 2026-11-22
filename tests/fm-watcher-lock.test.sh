@@ -2020,7 +2020,12 @@ case "$last" in
       i=$((i + 1))
     done
     "$FM_TEST_SIGNAL_GUARD" --send stand-in TERM --identity "$(cat "$FM_TEST_ARM_PID_FILE")" >/dev/null 2>&1 || true
-    while [ ! -e "$FM_TEST_RELEASE" ]; do sleep 0.05; done
+    i=0
+    while [ ! -e "$FM_TEST_RELEASE" ] && [ "$i" -lt $((${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120} * 20)) ]; do
+      sleep 0.05
+      i=$((i + 1))
+    done
+    [ -e "$FM_TEST_RELEASE" ] || exit 1
     ;;
 esac
 exec "$FM_TEST_REAL_LN" "$@"
