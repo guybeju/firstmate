@@ -2815,33 +2815,40 @@ sweep_pid_two=$(sed -n '2p' "$FM_PROCEVENT_CLAIM_ROOT/sweep-two.claim")
 # runner forks while the group is listed escapes one pass, so the group is
 # signalled again until it is empty; a member that never ends fails by name.
 fm_test_signal_try KILL --members "$sweep_pid_two" || true
-for _ in $(seq 1 50); do
-  kill -0 -"$sweep_pid_two" 2>/dev/null || break
-  sleep 0.2
-  fm_test_signal_try KILL --members "$sweep_pid_two" || true
-done
-kill -0 "$sweep_pid_two" 2>/dev/null \
-  && fail "the claim-only sweep fixture runner did not stop"
-kill -0 -"$sweep_pid_two" 2>/dev/null \
-  && fail "the claim-only sweep fixture group $sweep_pid_two outlived its KILL: $(
-    ps -e -o pid=,pgid=,args= | awk -v g="$sweep_pid_two" '$2 == g' | tr '\n' ';')"
-assert_present "$FM_PROCEVENT_CLAIM_ROOT/sweep-two.claim" \
-  "a killed runner leaves its owned claim behind for the sweep"
-rm -f "$HM/state/procevent/sweep-two.source"
-out=$(pe "$HM" sweep-home --preflight)
-assert_contains "$out" "sweep preflight: ready" "home sweep preflight validates the full bounded snapshot"
-assert_present "$HM/state/procevent/sweep-one.source" "home sweep preflight does not remove registrations"
-assert_present "$FM_PROCEVENT_CLAIM_ROOT/sweep-one.claim" "home sweep preflight does not release claims"
-out=$(pe "$HM" sweep-home)
-assert_contains "$out" "swept: attempted=2" "home sweep retires registrations and owned claim-only sources"
-for sweep_pid in "$sweep_pid_one" "$sweep_pid_two"; do
-  for _ in $(seq 1 40); do kill -0 "$sweep_pid" 2>/dev/null || break; sleep 0.1; done
-  kill -0 "$sweep_pid" 2>/dev/null && fail "home sweep left a runner alive"
-done
-assert_absent "$HM/state/procevent/sweep-one.source" "home sweep removes registrations"
-assert_absent "$FM_PROCEVENT_CLAIM_ROOT/sweep-one.claim" "home sweep releases the first claim"
-assert_absent "$FM_PROCEVENT_CLAIM_ROOT/sweep-two.claim" "home sweep releases a claim with no registration"
-pass "bounded home sweep preflights then retires every locally owned source"
+if fm_test_signal_skipped \
+  "bounded home sweep preflights then retires every locally owned source"; then
+  # Log-only: the KILL above was logged and not sent, so both runners still
+  # live; the product's own sweep ends them and releases their claims.
+  pe "$HM" sweep-home >/dev/null 2>&1 || true
+else
+  for _ in $(seq 1 50); do
+    kill -0 -"$sweep_pid_two" 2>/dev/null || break
+    sleep 0.2
+    fm_test_signal_try KILL --members "$sweep_pid_two" || true
+  done
+  kill -0 "$sweep_pid_two" 2>/dev/null \
+    && fail "the claim-only sweep fixture runner did not stop"
+  kill -0 -"$sweep_pid_two" 2>/dev/null \
+    && fail "the claim-only sweep fixture group $sweep_pid_two outlived its KILL: $(
+      ps -e -o pid=,pgid=,args= | awk -v g="$sweep_pid_two" '$2 == g' | tr '\n' ';')"
+  assert_present "$FM_PROCEVENT_CLAIM_ROOT/sweep-two.claim" \
+    "a killed runner leaves its owned claim behind for the sweep"
+  rm -f "$HM/state/procevent/sweep-two.source"
+  out=$(pe "$HM" sweep-home --preflight)
+  assert_contains "$out" "sweep preflight: ready" "home sweep preflight validates the full bounded snapshot"
+  assert_present "$HM/state/procevent/sweep-one.source" "home sweep preflight does not remove registrations"
+  assert_present "$FM_PROCEVENT_CLAIM_ROOT/sweep-one.claim" "home sweep preflight does not release claims"
+  out=$(pe "$HM" sweep-home)
+  assert_contains "$out" "swept: attempted=2" "home sweep retires registrations and owned claim-only sources"
+  for sweep_pid in "$sweep_pid_one" "$sweep_pid_two"; do
+    for _ in $(seq 1 40); do kill -0 "$sweep_pid" 2>/dev/null || break; sleep 0.1; done
+    kill -0 "$sweep_pid" 2>/dev/null && fail "home sweep left a runner alive"
+  done
+  assert_absent "$HM/state/procevent/sweep-one.source" "home sweep removes registrations"
+  assert_absent "$FM_PROCEVENT_CLAIM_ROOT/sweep-one.claim" "home sweep releases the first claim"
+  assert_absent "$FM_PROCEVENT_CLAIM_ROOT/sweep-two.claim" "home sweep releases a claim with no registration"
+  pass "bounded home sweep preflights then retires every locally owned source"
+fi
 
 HN="$TMP_ROOT/hn"; HO="$TMP_ROOT/ho"; new_home "$HN"; new_home "$HO"
 FOREIGN_TRIGGER="$TMP_ROOT/foreign-trigger"
