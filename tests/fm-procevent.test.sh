@@ -2826,6 +2826,7 @@ if fm_test_signal_dry_run; then
   [ "$sweep_status" -eq 0 ] \
     || fail "log-only: the product sweep of the claim-only fixture home failed (exit $sweep_status)"
   for sweep_group in "$sweep_pid_one" "$sweep_pid_two"; do
+    case "$sweep_group" in '' | 0* | *[!0-9]*) fail "log-only: sweep fixture runner pid '$sweep_group' from its claim file is not a pid" ;; esac
     for _ in $(seq 1 50); do
       { kill -0 "$sweep_group" || kill -0 -"$sweep_group"; } 2>/dev/null || break
       sleep 0.2
