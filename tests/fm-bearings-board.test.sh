@@ -607,13 +607,19 @@ test_build_starts_a_listener_for_an_already_armed_board() {
   claim="$home/procevent-claims/$sid.claim"
   assert_present "$claim" "the first build left no listener to lose"
   listener=$(sed -n '2p' "$claim")
-  # The guard refuses a group member it cannot tie to this run, such as a short
-  # child the detached listener started with a clean environment; such a member
-  # must end with its group, and one that does not fails here by name.
+  # The guard refuses a group member it cannot tie to this run, such as the
+  # perl reader the poll pipes into, which ends on its own once the poll is
+  # gone. A poll the listener forks while the group is being listed escapes one
+  # pass, so the group is listed and signalled again until it is empty; a
+  # member that never ends fails here by name.
   fm_test_signal_try KILL --members "$listener" || true
   fm_test_signal_try KILL --identity "$listener" || true
   fm_test_signal_skipped "a lost listener is re-armed by the rebuild" && return 0
-  for _ in $(seq 1 100); do kill -0 -"$listener" 2>/dev/null || break; sleep 0.1; done
+  for _ in $(seq 1 50); do
+    kill -0 -"$listener" 2>/dev/null || break
+    sleep 0.2
+    fm_test_signal_try KILL --members "$listener" || true
+  done
   if kill -0 -"$listener" 2>/dev/null; then
     fail "listener group $listener outlived its KILL: $(ps -e -o pid=,pgid=,args= \
       | awk -v g="$listener" '$2 == g' | tr '\n' ';')"
