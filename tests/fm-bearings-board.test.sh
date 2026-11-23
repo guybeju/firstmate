@@ -594,7 +594,7 @@ test_build_refuses_to_arm_when_the_session_stays_ended() {
 }
 
 test_build_starts_a_listener_for_an_already_armed_board() {
-  local home data board out sid claim
+  local home data board out sid claim listener
   home=$(make_home relisten)
   data="$home/payload.json"
   board="$home/.lavish/bearings-board.html"
@@ -606,9 +606,18 @@ test_build_starts_a_listener_for_an_already_armed_board() {
   # would, then rebuild. `already-armed` must not be the end of the story.
   claim="$home/procevent-claims/$sid.claim"
   assert_present "$claim" "the first build left no listener to lose"
-  fm_test_signal KILL --members "$(sed -n '2p' "$claim")"
-  fm_test_signal_try KILL --identity "$(sed -n '2p' "$claim")" || true
+  listener=$(sed -n '2p' "$claim")
+  # The guard refuses a group member it cannot tie to this run, such as a short
+  # child the detached listener started with a clean environment; such a member
+  # must end with its group, and one that does not fails here by name.
+  fm_test_signal_try KILL --members "$listener" || true
+  fm_test_signal_try KILL --identity "$listener" || true
   fm_test_signal_skipped "a lost listener is re-armed by the rebuild" && return 0
+  for _ in $(seq 1 100); do kill -0 -"$listener" 2>/dev/null || break; sleep 0.1; done
+  if kill -0 -"$listener" 2>/dev/null; then
+    fail "listener group $listener outlived its KILL: $(ps -e -o pid=,pgid=,args= \
+      | awk -v g="$listener" '$2 == g' | tr '\n' ';')"
+  fi
   sleep 1
 
   out=$(run_board "$home" build "$data") || fail "the rebuild failed"
