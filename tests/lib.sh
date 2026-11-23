@@ -941,8 +941,9 @@ fm_test_process_state() {  # <pid>: its ps state letter, empty once it is gone.
 # the stand-in whose command line matches it (fm_test_signal --below). Fails
 # if <pid> exits first, if the point is not reached within 30 s, if the
 # stand-in is not running under <pid>, if the guard refuses, or if the victim
-# does not take the signal; before failing it ends <pid> through
-# fm_test_crash_abandon, so a failed case never leaves its own child behind.
+# does not take the signal; before failing it tries to end <pid> through
+# fm_test_crash_abandon, which waits only a bounded time: a failed case may
+# leave its child running when the guard refuses the KILL or it does not land.
 fm_test_crash_at() {
   local dir=$1 name=$2 signal=$3 pid=$4 glob=${5-} i=0 chain
   while [ ! -s "$dir/$name.reached" ]; do
