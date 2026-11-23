@@ -1343,6 +1343,7 @@ test_signal_check_findings_fail_lint() {
     [ "$rc" -eq 0 ] || fail "lint failed a clean test tree under the signal check ($mode mode)"$'\n'"$out"
   done
 
+  # shellcheck disable=SC2016 # The fixture test's $(...) and $home are literal text.
   printf '%s -TERM "$(cat "$home/state/x.pid")" || true\n' "$sig" > "$repo/tests/pidfile.test.sh"
   for mode in ci changed explicit; do
     rc=0
