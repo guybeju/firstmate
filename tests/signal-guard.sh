@@ -357,7 +357,7 @@ judge_group() {  # <leader>: prints the verdict on the --group form.
   case " $(own_groups | tr '\n' ' ') " in
     *" $pgid "*) echo "refused: group $pgid is the group of the test script, its parent, the signalling shell or one of its ancestors"; return ;;
   esac
-  echo "accepted group $1 ${leader_verdict#accepted $1 }"
+  echo "accepted group $1 ${leader_verdict#"accepted $1 "}"
 }
 
 group_members() {  # <group-id>: the live pids in that group, one per line.
