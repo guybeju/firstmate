@@ -4360,6 +4360,7 @@ test_self_merged_lane_is_still_cleaned_up_by_the_poll() {
     || fail "self-merge-cleanup: merge entrypoint failed: $(cat "$dir/merge.err")"
   [ -f "$state/task-a.pr-poll-merge-notified" ] \
     || fail "self-merge-cleanup: the merge entrypoint did not record the outcome first"
+  # shellcheck disable=SC2016 # The stub's $i, $((...)) and $* expand when the stub runs.
   printf '#!/usr/bin/env bash\nprintf started > "%s/teardown.started"\ni=0\nwhile [ ! -e "%s/teardown.release" ] \\\n  && [ "$i" -lt $((${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120} * 20)) ]; do\n  sleep 0.05\n  i=$((i + 1))\ndone\nprintf "%%s\\n" "$*" >> "%s/teardown.log"\n' "$dir" "$dir" "$dir" > "$dir/teardown-stub"
   chmod +x "$dir/teardown-stub"
   retire_contributions_observer "$dir"
