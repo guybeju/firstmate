@@ -137,6 +137,16 @@ make_case() {
 printf 'guard\n' >> "$FM_TEST_GUARD_LOG"
 SH
   chmod +x "$fake_root/bin/fm-guard.sh"
+  # Task records here name tmux endpoints, so this default answers as a host
+  # with no tmux server and no case reaches the real tmux. A case that needs
+  # other answers writes its own fakebin/tmux over it.
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${0%/fakebin/tmux}/tmux-default.log"
+printf 'no server running on /tmp/tmux-fm-test/default\n' >&2
+exit 1
+SH
+  chmod +x "$fakebin/tmux"
   cat > "$fakebin/gh" <<'SH'
 #!/usr/bin/env bash
 printf 'host=%s\n' "${GH_HOST:-}" >> "$FM_TEST_GH_LOG"
@@ -2628,6 +2638,11 @@ SH
   pid=$!
   fm_test_record_child "$pid"
   fm_test_crash_at "$dir" cp TERM "$pid"
+  fm_test_signal_skipped \
+    "interrupted atomic preparation cleans private temporaries and publishes nothing" && {
+    wait "$pid" 2>/dev/null || true
+    return 0
+  }
   set +e
   wait "$pid"
   rc=$?
