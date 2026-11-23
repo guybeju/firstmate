@@ -992,8 +992,19 @@ fm_test_crash_abandon() {
   if [ "$i" -ge 600 ]; then
     fm_test_signal_try KILL "$pid" ||
       printf 'fm_test_crash_abandon: could not end pid %s: %s\n' "$pid" "$FM_TEST_SIGNAL_VERDICT" >&2
+    # A KILL the guard refused, or one that has not landed yet, must not hold
+    # the failure: reap only once the pid is gone, within 30 s.
+    i=0
+    while [ "$i" -lt 600 ]; do
+      case "$(fm_test_process_state "$pid")" in '' | Z*) break ;; esac
+      sleep 0.05
+      i=$((i + 1))
+    done
   fi
-  fm_test_signal_dry_run || wait "$pid" 2>/dev/null || true
+  case "$(fm_test_process_state "$pid")" in
+    '' | Z*) fm_test_signal_dry_run || wait "$pid" 2>/dev/null || true ;;
+    *) printf 'fm_test_crash_abandon: pid %s is still running; not waiting for it\n' "$pid" >&2 ;;
+  esac
   fail "$4"
 }
 
