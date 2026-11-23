@@ -19,7 +19,7 @@ DRIVER=$TMP_ROOT/fake-term.py
 # fake-term.py <cap-file> <slave-name-file> [cmd...] - a terminal emulator
 # on a pty: writes the slave path and captures output. A command runs as the
 # pane's shell: its own session with the pty as controlling terminal, so its
-# /dev/tty is this terminal. Runs until killed.
+# /dev/tty is this terminal. Runs until killed, or until the stub ceiling.
 cat >"$DRIVER" <<'PY'
 import fcntl, os, pty, select, sys, termios, time
 
@@ -35,7 +35,8 @@ if len(sys.argv) > 3 and os.fork() == 0:
         os.dup2(slave, fd)
     os.execvp(sys.argv[3], sys.argv[3:])
 cap = open(cap_path, "ab", buffering=0)
-while True:
+deadline = time.monotonic() + float(os.environ.get("FM_TEST_STUB_MAX_BLOCK_SECONDS", "120"))
+while time.monotonic() < deadline:
     r, _, _ = select.select([master], [], [], 0.1)
     if not r:
         continue
@@ -295,7 +296,10 @@ finally:
         for pid in pidfile.read_text().splitlines():
             subprocess.run([guard, "--send", "osc7501-stubborn-probe", "KILL", "--identity", pid.strip()],
                            stdout=subprocess.DEVNULL, check=False)
-    launch.wait()
+    try:
+        launch.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        sys.exit("the worker launch was still running 15 s after its group was stopped")
 PYTEST
   then
     fail "TERM-resistant version probe prevented bounded worker launch"
@@ -601,6 +605,12 @@ t_arm_clears_stale_record() {
   wpid=$(watcher_pid "$d/state") || fail "clear: no first watcher"
   wait_cap 'state=working' "$d/cap" 60 || fail "clear: the first watcher never reported working"
   fm_test_signal_try KILL --identity "$wpid" || true
+  fm_test_signal_skipped \
+    "lifecycle: arm clears a dead watcher's stale record once the gates pass" && {
+    env "${CLEAN_UNSET[@]}" FM_OSC7501_TTY="$TERM_SLAVE" bash "$SCRIPT" disarm --state "$d/state"
+    stop_term
+    return 0
+  }
   wait_gone "$wpid" || true
   : >"$d/cap"
   rm -f "$d/state/t32.busy-state" "$d/state/t32.busy-gen"
@@ -716,7 +726,15 @@ t_unarmed_relaunch_clears_leftover() {
       --state "$d/state" --config "$d/config"
     wpid=$(watcher_pid "$d/state") || fail "leftover $kind: no watcher armed"
     wait_cap 'state=working' "$d/cap" 60 || fail "leftover $kind: no working record"
-    fm_test_signal_try KILL --identity "$wpid" || true; wait "$wpid" 2>/dev/null || true
+    fm_test_signal_try KILL --identity "$wpid" || true
+    fm_test_signal_skipped \
+      "lifecycle: disarm retires a dead watcher's record; off and native relaunches stay parked" \
+      && {
+      env "${CLEAN_UNSET[@]}" FM_OSC7501_TTY="$TERM_SLAVE" bash "$SCRIPT" disarm --state "$d/state"
+      stop_term
+      return 0
+    }
+    wait "$wpid" 2>/dev/null || true
     n0=$(grep -o 'state=' "$d/cap" | wc -l | tr -d ' ')
     # the real launch order runs disarm after the agent command returns;
     # the pidfile names a watcher that is already gone, so disarm writes
