@@ -2815,11 +2815,26 @@ sweep_pid_two=$(sed -n '2p' "$FM_PROCEVENT_CLAIM_ROOT/sweep-two.claim")
 # runner forks while the group is listed escapes one pass, so the group is
 # signalled again until it is empty; a member that never ends fails by name.
 fm_test_signal_try KILL --members "$sweep_pid_two" || true
-if fm_test_signal_skipped \
-  "bounded home sweep preflights then retires every locally owned source"; then
+if fm_test_signal_dry_run; then
   # Log-only: the KILL above was logged and not sent, so both runners still
-  # live; the product's own sweep ends them and releases their claims.
-  pe "$HM" sweep-home >/dev/null 2>&1 || true
+  # live; the product's own sweep ends them and releases their claims. Its
+  # output is kept as comment lines and a failed sweep fails the case; then
+  # both runner groups must be gone within the same bound as the real path.
+  sweep_status=0
+  out=$(pe "$HM" sweep-home 2>&1) || sweep_status=$?
+  printf '%s\n' "$out" | sed 's/^/# log-only sweep-home: /'
+  [ "$sweep_status" -eq 0 ] \
+    || fail "log-only: the product sweep of the claim-only fixture home failed (exit $sweep_status)"
+  for sweep_group in "$sweep_pid_one" "$sweep_pid_two"; do
+    for _ in $(seq 1 50); do
+      { kill -0 "$sweep_group" || kill -0 -"$sweep_group"; } 2>/dev/null || break
+      sleep 0.2
+    done
+    { kill -0 "$sweep_group" || kill -0 -"$sweep_group"; } 2>/dev/null \
+      && fail "log-only: sweep fixture runner or group $sweep_group outlived the product sweep: $(
+        ps -e -o pid=,pgid=,args= | awk -v g="$sweep_group" '$1 == g || $2 == g' | tr '\n' ';')"
+  done
+  fm_test_signal_skipped "bounded home sweep preflights then retires every locally owned source"
 else
   for _ in $(seq 1 50); do
     kill -0 -"$sweep_pid_two" 2>/dev/null || break
