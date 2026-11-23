@@ -119,7 +119,10 @@ case "$*" in
     if [ -f "$FM_FAKE_STATE/server-runs" ]; then
       trap 'printf "terminated\n" > "$FM_FAKE_STATE/server-terminated"; exit 0' TERM
       i=0
-      while [ "$i" -lt $((${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120} * 10)) ]; do sleep 0.1; i=$((i + 1)); done
+      while [ ! -e "$FM_FAKE_STATE/server-stop" ] && [ "$i" -lt $((${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120} * 10)) ]; do
+        sleep 0.1
+        i=$((i + 1))
+      done
       exit 1
     fi
     [ ! -f "$FM_FAKE_STATE/server-killed" ] || kill -KILL "$$"
@@ -131,16 +134,31 @@ SH
 chmod +x "$FAKE/lsof" "$FAKE/launchctl" "$FAKE/herdr"
 cp "$FAKE/lsof" "$TMP_ROOT/lsof.fake"
 
+# Holder descriptors are 5 up to HOLDER_FD_MAX. Each holder process, and each
+# holder's parent shell, closes all of them before it starts, so the test shell
+# is the only writer left on every fifo: when the test exits, every holder sees
+# end of input and exits by itself, signalled or not.
+HOLDER_FD_MAX=29
+drop_holder_fds() {
+  exec 5>&- 6>&- 7>&- 8>&- 9>&- 10>&- 11>&- 12>&- 13>&- 14>&- 15>&- 16>&- 17>&- \
+    18>&- 19>&- 20>&- 21>&- 22>&- 23>&- 24>&- 25>&- 26>&- 27>&- 28>&- 29>&-
+}
+holder_fd_room() {
+  [ "$HOLDER_FD" -le "$HOLDER_FD_MAX" ] \
+    || fail "holder descriptor $HOLDER_FD is past HOLDER_FD_MAX=$HOLDER_FD_MAX; extend drop_holder_fds"
+}
+
 # hold <marker-env...> -> HOLDER_PID: a real non-platform process (jq blocked
 # on a fifo this test keeps open) whose environment is exactly the markers.
 hold() {
   local fifo="$TMP_ROOT/holder-$HOLDER_FD.fifo"
+  holder_fd_room
   rm -f "$fifo"
   mkfifo "$fifo"
   # Open read-write so this never blocks on the reader; the holder sees EOF
   # only when the descriptor closes at exit.
   eval "exec ${HOLDER_FD}<>\"\$fifo\""
-  env -i "$@" "$HOLDER_JQ" . "$fifo" &
+  ( drop_holder_fds; exec env -i "$@" "$HOLDER_JQ" . "$fifo" ) &
   HOLDER_PID=$!
   HOLDER_PIDS+=("$HOLDER_PID")
   HOLDER_FD=$((HOLDER_FD + 1))
@@ -151,10 +169,12 @@ hold() {
 hold_under() {
   local argv0=$1 fifo="$TMP_ROOT/holder-$HOLDER_FD.fifo" pidfile="$TMP_ROOT/holder-$HOLDER_FD.pid"
   shift
+  holder_fd_room
   rm -f "$fifo" "$pidfile"
   mkfifo "$fifo"
   eval "exec ${HOLDER_FD}<>\"\$fifo\""
-  ( export FM_HOLDER_JQ="$HOLDER_JQ" FM_HOLDER_FIFO="$fifo" FM_HOLDER_PIDFILE="$pidfile"
+  ( drop_holder_fds
+    export FM_HOLDER_JQ="$HOLDER_JQ" FM_HOLDER_FIFO="$fifo" FM_HOLDER_PIDFILE="$pidfile"
     exec -a "$argv0" bash -c 'env -i FM_HOLDER=1 "$FM_HOLDER_JQ" . "$FM_HOLDER_FIFO" & printf "%s\n" "$!" > "$FM_HOLDER_PIDFILE"; wait' "$@" ) &
   HOLDER_PIDS+=("$!")
   HOLDER_FD=$((HOLDER_FD + 1))
@@ -170,12 +190,14 @@ hold_under() {
 # launch agent's supervisor gives its session-leader server.
 hold_child() {
   local fifo="$TMP_ROOT/holder-$HOLDER_FD.fifo" pidfile="$TMP_ROOT/holder-$HOLDER_FD.pid"
+  holder_fd_room
   rm -f "$fifo" "$pidfile"
   mkfifo "$fifo"
   eval "exec ${HOLDER_FD}<>\"\$fifo\""
   # shellcheck disable=SC2016 # the inner bash expands its own arguments
-  env FM_HOLDER_JQ="$HOLDER_JQ" FM_HOLDER_FIFO="$fifo" FM_HOLDER_PIDFILE="$pidfile" \
-    bash -c 'env -i "$@" "$FM_HOLDER_JQ" . "$FM_HOLDER_FIFO" & printf "%s\n" "$!" > "$FM_HOLDER_PIDFILE"; wait' bash "$@" &
+  ( drop_holder_fds
+    exec env FM_HOLDER_JQ="$HOLDER_JQ" FM_HOLDER_FIFO="$fifo" FM_HOLDER_PIDFILE="$pidfile" \
+      bash -c 'env -i "$@" "$FM_HOLDER_JQ" . "$FM_HOLDER_FIFO" & printf "%s\n" "$!" > "$FM_HOLDER_PIDFILE"; wait' bash "$@" ) &
   HOLDER_PARENT_PID=$!
   HOLDER_PIDS+=("$HOLDER_PARENT_PID")
   HOLDER_FD=$((HOLDER_FD + 1))
@@ -344,13 +366,21 @@ assert_started "the guard did not start the long-running server"
 assert_session_leader_child "$agent_pid"
 server_pid=$(started_field pid)
 fm_test_signal TERM "$agent_pid"
-wait_exit "$agent_pid" "the launch agent sent TERM"
-expect_code 0 "$WAIT_RC" "the launch agent did not exit with the server's clean-shutdown status after a forwarded TERM"
-assert_present "$CASE_STATE/server-terminated" "the TERM sent to the launch agent never reached the server"
-i=0
-while kill -0 "$server_pid" 2>/dev/null && [ "$i" -lt 40 ]; do sleep 0.05; i=$((i + 1)); done
-kill -0 "$server_pid" 2>/dev/null && fail "the server (pid $server_pid) outlived the launch agent's TERM"
-pass "a termination signal to the launch agent is forwarded to the server, which stops"
+if fm_test_signal_dry_run; then
+  # Log-only: the TERM was logged and not sent, so end the server by its stop
+  # file and report the case skipped; its assertions need the delivered TERM.
+  : > "$CASE_STATE/server-stop"
+  wait_exit "$agent_pid" "the launch agent after its log-only server stop"
+  pass "skip: log-only run, the signal was logged and not sent: a termination signal to the launch agent is forwarded to the server, which stops"
+else
+  wait_exit "$agent_pid" "the launch agent sent TERM"
+  expect_code 0 "$WAIT_RC" "the launch agent did not exit with the server's clean-shutdown status after a forwarded TERM"
+  assert_present "$CASE_STATE/server-terminated" "the TERM sent to the launch agent never reached the server"
+  i=0
+  while kill -0 "$server_pid" 2>/dev/null && [ "$i" -lt 40 ]; do sleep 0.05; i=$((i + 1)); done
+  kill -0 "$server_pid" 2>/dev/null && fail "the server (pid $server_pid) outlived the launch agent's TERM"
+  pass "a termination signal to the launch agent is forwarded to the server, which stops"
+fi
 
 # --- without perl the guard refuses rather than start a non-leader server ---
 
