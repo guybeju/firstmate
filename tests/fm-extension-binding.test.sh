@@ -786,12 +786,16 @@ def run_case(kind):
             wait_for(invocation_owner)
             host_pid = invocation_owner()["host_pid"]
             if kind != "stalled":
+                # Each guarded send is its own process, so the two halves of a
+                # pair are apart in time. The host keeps the deadline and
+                # discounts only its own suspension, so it is stopped first and
+                # resumed last: in each gap the host is the side still stopped.
                 guarded("STOP", "--identity", host_pid)
                 guarded_group("STOP", group)
                 time.sleep(4 if kind in ("invoke", "suspended-stall") else 8)
                 if kind != "suspended-stall": release.touch()
-                guarded("CONT", "--identity", host_pid)
                 guarded_group("CONT", group)
+                guarded("CONT", "--identity", host_pid)
         output, error = process.communicate(timeout=6)
         if kind in ("stalled", "suspended-stall"):
             assert process.returncode != 0, "a genuinely stalled invocation succeeded"
@@ -811,10 +815,10 @@ def run_case(kind):
             if kind == "invoke": assert b"active runner completed" in output, output
         print("ok - real deadline " + kind, flush=True)
     finally:
-        if host_pid:
-            guarded("CONT", "--identity", host_pid)
         if group:
             guarded_group("CONT", group)
+        if host_pid:
+            guarded("CONT", "--identity", host_pid)
         if process and process.poll() is None:
             process.send_signal(signal.SIGCONT)
             process.terminate()
