@@ -2811,10 +2811,20 @@ sweep_pid_two=$(sed -n '2p' "$FM_PROCEVENT_CLAIM_ROOT/sweep-two.claim")
 # generation now observes the identity mismatch, self-retires, and releases its
 # claim - so the sweep would race that exit and see one source or two depending
 # on which won.
+# The guard signals only the members it can tie to this run, and a child the
+# runner forks while the group is listed escapes one pass, so the group is
+# signalled again until it is empty; a member that never ends fails by name.
 fm_test_signal_try KILL --members "$sweep_pid_two" || true
-for _ in $(seq 1 50); do kill -0 "$sweep_pid_two" 2>/dev/null || break; sleep 0.1; done
+for _ in $(seq 1 50); do
+  kill -0 -"$sweep_pid_two" 2>/dev/null || break
+  sleep 0.2
+  fm_test_signal_try KILL --members "$sweep_pid_two" || true
+done
 kill -0 "$sweep_pid_two" 2>/dev/null \
   && fail "the claim-only sweep fixture runner did not stop"
+kill -0 -"$sweep_pid_two" 2>/dev/null \
+  && fail "the claim-only sweep fixture group $sweep_pid_two outlived its KILL: $(
+    ps -e -o pid=,pgid=,args= | awk -v g="$sweep_pid_two" '$2 == g' | tr '\n' ';')"
 assert_present "$FM_PROCEVENT_CLAIM_ROOT/sweep-two.claim" \
   "a killed runner leaves its owned claim behind for the sweep"
 rm -f "$HM/state/procevent/sweep-two.source"
