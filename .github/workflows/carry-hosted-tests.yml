@@ -1,0 +1,149 @@
+name: Carry hosted tests (advisory)
+
+# The tests/*.test.sh portable lanes on a GitHub-hosted runner, for code that
+# should not be tested on the machine it was written on. Advisory: nothing
+# requires this check and it never blocks a merge.
+#
+# To start a run, push the commit to be tested as a branch named
+# `hosted-tests/<name>`, then delete that branch once the run has finished.
+# A push runs the workflow file of the pushed commit, so that commit must
+# contain this file: rebase or merge a branch onto carry first if it predates
+# it. No other push and no pull request starts it. `workflow_dispatch` is declared
+# but does not work on this fork today: GitHub only dispatches a workflow whose
+# file is on the default branch, and the fork's default branch `main` mirrors
+# upstream and does not carry this file.
+#
+# It runs the portable parallel shards and the portable serial shards of
+# ci.yml with the same bin/fm-test-run.sh lanes. Left out: the Herdr and
+# herdr-core lanes (they install those programs), the macOS job, the timing
+# aggregate and every artifact upload, and the Pi package, whose only install
+# path in ci.yml is an unpinned global npm install. Tests that need the real
+# Pi package print `skip:` here; the job summary lists every `skip:` line, from
+# a whole script or from one case inside it. A skipped test is not evidence.
+# A test that reports a missing tool with a passing line instead of `skip:`
+# is not listed.
+#
+# The fork's Actions settings allow only actions pinned to a full commit SHA,
+# so every `uses:` here carries one, with its release tag in the comment.
+on:
+  push:
+    branches: ['hosted-tests/**']
+  workflow_dispatch:
+
+# Read the repository and nothing else.
+permissions:
+  contents: read
+
+# A new push to the same hosted-tests branch cancels the older run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    # Explicit bash adds -o pipefail, so `fm-test-run.sh | tee log` fails with
+    # the runner.
+    shell: bash
+
+jobs:
+  tests:
+    name: Hosted ${{ matrix.lane }}
+    runs-on: ubuntu-24.04
+    # ci.yml's normal tier for these lanes.
+    timeout-minutes: 30
+    strategy:
+      # Every lane reports so one failure never hides another lane's result.
+      fail-fast: false
+      matrix:
+        # bin/fm-test-run.sh owns the shard count and refuses a serial lane
+        # whose "ofN" disagrees with it.
+        lane:
+          - portable-parallel-1
+          - portable-parallel-2
+          - portable-serial-1of11
+          - portable-serial-2of11
+          - portable-serial-3of11
+          - portable-serial-4of11
+          - portable-serial-5of11
+          - portable-serial-6of11
+          - portable-serial-7of11
+          - portable-serial-8of11
+          - portable-serial-9of11
+          - portable-serial-10of11
+          - portable-serial-11of11
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install tasks-axi from the CI lockfile
+        # The same locked install as carry-board-tests.yml. No package script
+        # runs.
+        run: |
+          set -eu
+          npm ci --ignore-scripts --prefix ci-tools/board-tests
+          echo "$GITHUB_WORKSPACE/ci-tools/board-tests/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Install pinned ShellCheck
+        run: |
+          set -eu
+          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Install pinned actionlint
+        run: |
+          set -eu
+          bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Show tools
+        run: |
+          set -eu
+          tasks-axi --version
+          shellcheck --version
+          actionlint --version
+          command -v tmux >/dev/null || {
+            echo "::error::tmux is required for the serial lanes' e2e tests"
+            exit 1
+          }
+          tmux -V
+      - name: Run the lane
+        env:
+          FM_LANE: ${{ matrix.lane }}
+        # The runner counts a skip as a pass, so the summary lists each
+        # `skip:` line under the script that printed it, and each failed
+        # script, beside the totals. Lanes run serially and stream every
+        # script's output, so the log holds those lines.
+        run: |
+          set -eu
+          log=$RUNNER_TEMP/fm-test.log
+          rc=0
+          bin/fm-test-run.sh --lane "$FM_LANE" \
+            --fail-on-gate-skip 'Pi extension typecheck prerequisite not found' \
+            2>&1 | tee "$log" || rc=$?
+          {
+            echo "## $FM_LANE"
+            echo
+            echo '```'
+            grep -E '^FM_TEST_SUMMARY ' "$log" || echo 'no FM_TEST_SUMMARY line'
+            echo '```'
+            echo
+            echo '### Failed scripts'
+            echo
+            grep -E '^FM_TEST_END .* exit=[1-9][0-9]* ' "$log" | sed 's/^/- /' || echo 'None.'
+            echo
+            echo '### Skip lines (NOT RUN)'
+            echo
+            awk '
+              /^FM_TEST_BEGIN / { script = $3; next }
+              /^[[:space:]]*(ok - )?skip:/ {
+                line = $0
+                sub(/^[[:space:]]+/, "", line)
+                print "- " script ": " line
+                found = 1
+              }
+              END { if (!found) print "None." }
+            ' "$log"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
