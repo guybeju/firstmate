@@ -27,6 +27,8 @@ JOB_LABEL=dev.firstmate.remote-job
 CASE_N=0
 DOCTOR_WORKER_PID=
 HOLDER_PIDS=()
+# The EXIT trap's loop variable; declared here because the trap is a string.
+holder=
 trap 'if [ -n "$DOCTOR_WORKER_PID" ]; then fm_test_signal_try TERM --identity "$DOCTOR_WORKER_PID" || true; fi; for holder in "${HOLDER_PIDS[@]+"${HOLDER_PIDS[@]}"}"; do fm_test_signal_try TERM --identity "$holder" || true; done; fm_test_cleanup || true' EXIT
 GUARD="$ROOT/bin/fm-remote-herdr-guard.sh"
 
