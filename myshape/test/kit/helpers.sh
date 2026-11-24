@@ -85,9 +85,19 @@ tb_code() {
 
 # --- board service fixtures ---------------------------------------------------
 
-# tb_free_port: print a TCP port nothing is listening on right now.
+# tb_free_port: print a TCP port nothing is listening on right now, never the
+# live board's default port 47819.
 tb_free_port() {
-  node -e 'const s = require("node:net").createServer(); s.listen(0, "127.0.0.1", () => { console.log(s.address().port); s.close(); });'
+  node -e '
+    const pick = () => {
+      const s = require("node:net").createServer();
+      s.listen(0, "127.0.0.1", () => {
+        const port = s.address().port;
+        s.close(() => (port === 47819 ? pick() : console.log(port)));
+      });
+    };
+    pick();
+  '
 }
 
 # tb_make_service_home <name>: a main home with its own board port.

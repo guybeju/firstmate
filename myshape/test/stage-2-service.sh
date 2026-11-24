@@ -54,14 +54,19 @@ test_starts_on_demand_and_stays_single() {
 }
 
 test_recovers_from_a_crash() {
-  local home pid
+  local home pid i
   home=$(tb_make_service_home crash)
   tb_run "$home" "$TOPIC" open >/dev/null
   tb_run "$home" "$TOPIC" create "Keep me" --goal "survive" --id keep >/dev/null
   pid=$(tb_board_pid "$home")
   fm_test_signal KILL --identity "$pid"
   fm_test_signal_skipped "a crashed board is restarted" && return 0
-  while kill -0 "$pid" 2>/dev/null; do sleep 0.1; done
+  i=0
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 100 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  ! kill -0 "$pid" 2>/dev/null || fail "the killed board must be gone within 10 s"
   assert_present "$home/state/myshape/board.sock" "a killed board leaves its socket file behind"
   printf 'garbage' > "$home/data/topics.json.tmp-99999"
   printf '{"src":"board","half' >> "$home/data/myshape/events.jsonl"
@@ -150,7 +155,7 @@ test_startup_failures_exit_69() {
   home=$(tb_make_service_home fail-port)
   tb_board_has_run "$home"
   port=$(cat "$home/config/myshape-port")
-  node -e 'require("node:net").createServer().listen(Number(process.argv[1]), "127.0.0.1"); setTimeout(() => {}, 60000);' "$port" &
+  node -e 'require("node:net").createServer().listen(Number(process.argv[1]), "127.0.0.1"); setTimeout(() => process.exit(0), 60000);' "$port" &
   holder=$!
   sleep 0.5
   rc=0
