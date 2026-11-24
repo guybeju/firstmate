@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Every topic operation myshape.sh sends to the board: what it does once, that
-# repeating it unchanged is harmless, and what it refuses. Firstmate's tag
-# against the topics these change is in fm-board/test/stage-2-topics-tag.sh.
+# repeating it unchanged is harmless, and what it refuses. Firstmate's tags
+# against the topics these change, and the topic of a task tagged through
+# Firstmate, are in fm-board/test/stage-2-topics-tag.sh.
 set -u
 
 # shellcheck source=myshape/test/lib.sh
@@ -207,10 +208,7 @@ JSON
   cat > "$home/data/topics-archive.json" <<'JSON'
 { "v": 1, "topics": { "turned-down": { "name": "No", "goal": "g", "status": "proposed", "archived_at": "2026-11-17T00:00:00Z" } } }
 JSON
-  mkdir -p "$home/data/task-9"
-  printf 'first 2026-11-18T01:30:00Z\n' > "$home/data/task-9/topic"
-  out=$(tb_run "$home" "$TOPIC" which task-9) || fail "which failed on a board with leftover proposals: $out"
-  assert_equals "First：" "$out" "a task tagged to a leftover proposal must now be under that topic"
+  tb_run "$home" "$TOPIC" open >/dev/null || fail "the board did not start on a file with leftover proposals"
   assert_equals "hot-old urgent|work first second|park" \
     "$(jq -r '[.queues.high, .queues.normal, .queues.later] | map(join(" ")) | join("|")' "$home/data/topics.json")" \
     "leftover proposals must land last in their queues, oldest first, leaving every other topic in place"
