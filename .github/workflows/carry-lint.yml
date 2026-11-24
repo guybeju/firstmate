@@ -4,7 +4,8 @@ name: Carry lint
 # only on main and are disabled on the fork, so this is the one automated
 # check carry has. It runs the same full source-aware lint as ci.yml's lint
 # job: bin/fm-lint.sh owns the lint definition, and this file only selects
-# its two canonical partitions, never the changed-file mode.
+# its two canonical partitions, never the changed-file mode. Lint 1 also
+# checks the board's vendored copy against the commit myshape.lock pins.
 #
 # The fork's Actions settings allow only actions pinned to a full commit SHA,
 # so every `uses:` here carries one, with its release tag in the comment.
@@ -38,6 +39,56 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
         with:
           persist-credentials: false
+      - name: Check the vendored board against guybeju/myshape
+        # Lint 1 only, so the rule set's two check names stay as they are. The
+        # checker is itself a vendored file, so plain git first confirms that
+        # HEAD's bin/fm-board-vendor.sh is the blob guybeju/myshape holds at the
+        # locked commit, which must be on main's first-parent chain; only then
+        # does the checker run. Everything fetched is only hashed and compared.
+        # The fetch takes no token: every git command on that side runs under
+        # env -i with a fixed short environment and no user git config.
+        if: matrix.partition == 1
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          repository=https://github.com/guybeju/myshape
+          git cat-file blob HEAD:myshape.lock > "$RUNNER_TEMP/myshape.lock"
+          commit=$(sed -n '2s/^commit //p' "$RUNNER_TEMP/myshape.lock")
+          case "$commit" in
+            *[!0123456789abcdef]*) commit='' ;;
+          esac
+          if [ "${#commit}" -ne 40 ] ||
+            ! printf 'repository %s\ncommit %s\n' "$repository" "$commit" |
+              cmp -s - "$RUNNER_TEMP/myshape.lock"; then
+            echo "::error::myshape.lock must be the two lines 'repository $repository'" \
+              "and 'commit <40 lowercase hex>'"
+            exit 1
+          fi
+          scratch=$(mktemp -d "$RUNNER_TEMP/myshape-pin.XXXXXX")
+          fetch_git() {
+            /usr/bin/env -i PATH=/usr/bin:/bin HOME="$scratch" LC_ALL=C \
+              GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
+              /usr/bin/git -C "$scratch" -c protocol.allow=never -c protocol.https.allow=always \
+              -c transfer.fsckObjects=true "$@"
+          }
+          fetch_git init -q --bare --initial-branch=fetched src.git
+          fetch_git --git-dir=src.git fetch --no-tags --quiet "$repository" \
+            refs/heads/main:refs/heads/main
+          fetch_git --git-dir=src.git rev-list --first-parent refs/heads/main \
+            > "$scratch/first-parent"
+          if ! grep -Fxq -- "$commit" "$scratch/first-parent"; then
+            echo "::error::the locked $commit is not on the first-parent chain of $repository main"
+            exit 1
+          fi
+          want=$(fetch_git --git-dir=src.git rev-parse --verify \
+            "$commit:adapters/firstmate/bin/fm-board-vendor.sh")
+          have=$(git rev-parse --verify HEAD:bin/fm-board-vendor.sh)
+          if [ "$want" != "$have" ]; then
+            echo "::error::bin/fm-board-vendor.sh is blob $have; guybeju/myshape@$commit has $want"
+            exit 1
+          fi
+          echo "bin/fm-board-vendor.sh is guybeju/myshape@$commit's blob $want"
+          bin/fm-board-vendor.sh --check
       - name: Install pinned ShellCheck
         run: |
           set -eu
