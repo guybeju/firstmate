@@ -14,7 +14,3 @@ config/
 .claude/settings.local.json
 
 .tools/
-
-# Leftovers (node_modules/, coverage/, .metrics/) of the board directory from before
-# its rename to myshape/; kept ignored until bin/fm-board.sh migrate-myshape has tidied every checkout.
-/topic-board/

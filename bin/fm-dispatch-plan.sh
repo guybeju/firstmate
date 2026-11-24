@@ -18,10 +18,7 @@
 #        Every other queued item is listed under 先不派, after 停著, with why:
 #        held by anything else (a captain hold, another hold), or waiting on a
 #        blocker that is unfinished or that neither the backlog nor its Done
-#        archive knows; upstream's own gates decide those. A hold whose reason
-#        still starts with the board's prefix from before the rename
-#        (topic-board：) is one of them, and order also leads with one line
-#        naming how many there are and bin/fm-board.sh migrate-myshape.
+#        archive knows; upstream's own gates decide those.
 #        An untagged item ranks under the topic its bare "topic: <id>" body
 #        line names; a tag wins.
 #        Where the queues come from:
@@ -92,10 +89,6 @@ ARCHIVE_FILE="$DATA/topics-archive.json"
 PLAN_STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}/dispatch-plan"
 COPY_FILE="$PLAN_STATE/queues.json"
 OWN_HOLD_PREFIX='看板佇列：'
-# The prefix the board's holds had before the rename to myshape. A hold that
-# still starts with it is not the board's to order any more; order only warns
-# until bin/fm-board.sh migrate-myshape has rewritten it.
-OLD_HOLD_PREFIX='topic-board：'
 COPY_MAX_BYTES=262144
 # queues-push sends an unchanged copy again once its last delivery is this old,
 # so the age the far side prints means "when the main home last reached it".
@@ -230,7 +223,6 @@ cmd_order() {
     todos=$DATA/myshape/todos.json
   fi
   printf '%s' "$snapshot" | jq -r --arg note "$ORDER_NOTE" --arg tags "$tags" --arg own "$OWN_HOLD_PREFIX" \
-    --arg old "$OLD_HOLD_PREFIX" --argjson sm "$sm" \
     --slurpfile live "$ORDER_TOPICS" --slurpfile gone "$ORDER_ARCHIVE" --slurpfile todos "$todos" '
     ($live[0] // null) as $doc
     | ($gone[0].topics // $doc.archived // {}) as $archived
@@ -261,7 +253,6 @@ cmd_order() {
            decision: ($r.kind == "captain"),
            own_hold: (($r.hold_reason // "") | startswith($own)),
            other_hold: ($r.hold_reason != null and ((($r.hold_reason // "") | startswith($own)) | not)),
-           old_hold: (($r.hold_reason // "") | startswith($old)),
            captain_hold: ($r.hold_kind == "captain"),
            waits: ($r.unresolved_blocker_ids // []),
            blocked: (($r.unresolved_blocker_ids // []) | length > 0),
@@ -278,8 +269,7 @@ cmd_order() {
     | ($items | map(select(.index as $i | any($placed[]; . == $i) | not))) as $unplaced
     | ([.backlog.records[] | select(.structured == true) | {key: .id, value: true}] | from_entries) as $known
     | def why:
-        [ (if .old_hold then "舊標記的 hold，先跑 bin/fm-board.sh migrate-myshape"
-           elif .other_hold and .captain_hold then "等使用者決定（captain hold）"
+        [ (if .other_hold and .captain_hold then "等使用者決定（captain hold）"
            elif .other_hold then "被看板以外的 hold 擋著"
            else empty end),
           (.waits | map(select($known[.] == true))
@@ -287,10 +277,7 @@ cmd_order() {
           (.waits | map(select($known[.] != true))
            | if length > 0 then "找不到它等的 \(join("、"))（不在 backlog，也不在封存檔）" else empty end) ]
         | join("；");
-      ([ .backlog.records[] | select(.state == "queued" and ((.hold_reason // "") | startswith($old))) ] | length) as $stale
-    | (if $stale > 0 and $sm == 0 then "有 \($stale) 個舊標記的 hold，先跑 bin/fm-board.sh migrate-myshape" else empty end),
       (if $note != "" then $note else empty end),
-      (if $stale > 0 and $sm == 1 then "有 \($stale) 個舊標記的 hold，先跑 bin/fm-board.sh migrate-myshape" else empty end),
       "可派：",
       ($ready[] | line
         + (if .own_hold then "\t← 還被看板的 hold 擋著，先照「該解除」解除" else "" end)

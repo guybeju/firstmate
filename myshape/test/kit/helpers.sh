@@ -18,6 +18,11 @@ if [ "${#tmpdir_default}" -gt 40 ]; then
 fi
 unset tmpdir_default
 
+# No board name from the caller's environment may point a board command at a
+# real home; Firstmate's tests/lib.sh does not clear these names, so the kit
+# does for both sides' suites.
+unset MYSHAPE_HOME MYSHAPE_ROOT_OVERRIDE MYSHAPE_DATA_OVERRIDE MYSHAPE_CONFIG_OVERRIDE MYSHAPE_STATE_OVERRIDE
+
 TOPIC="$ROOT/bin/myshape.sh"
 
 # tb_make_home <name>: create an empty main home under TMP_ROOT and print it.
@@ -69,11 +74,17 @@ JSON
 }
 
 # tb_run <home> <command...>: run a fork script against <home> with this
-# checkout as the code root.
+# checkout as the code root: the board's command under its own names
+# (MYSHAPE_HOME, MYSHAPE_ROOT_OVERRIDE), every other script under
+# Firstmate's (FM_HOME, FM_ROOT_OVERRIDE), so a Firstmate script that runs the
+# board hands it the home itself.
 tb_run() {
   local home=$1
   shift
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$@"
+  case "${1##*/}" in
+    myshape.sh) MYSHAPE_HOME="$home" MYSHAPE_ROOT_OVERRIDE="$ROOT" "$@" ;;
+    *) FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$@" ;;
+  esac
 }
 
 # tb_code <home> <command...>: run like tb_run, discard output, print the exit code.

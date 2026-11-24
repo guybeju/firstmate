@@ -67,7 +67,7 @@ cat > "$MAIN/data/secondmates.md" <<EOF
 EOF
 
 t() {
-  FM_HOME="$MAIN" FM_ROOT_OVERRIDE="$CODE_ROOT" "$CODE_ROOT/bin/myshape.sh" "$@"
+  MYSHAPE_HOME="$MAIN" MYSHAPE_ROOT_OVERRIDE="$CODE_ROOT" "$CODE_ROOT/bin/myshape.sh" "$@"
 }
 
 # b: firstmate's side of the board, for the tags a test needs.

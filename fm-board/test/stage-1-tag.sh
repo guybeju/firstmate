@@ -386,7 +386,7 @@ test_in_home_answers_passes_through() {
   # A private code root whose fm-captain-hold.sh records what it was given.
   root="$TMP_ROOT/answers-root"
   mkdir -p "$root/bin"
-  cp "$ROOT"/bin/fm-board.sh "$ROOT"/bin/fm-board-lib.sh "$ROOT"/bin/fm-board-migrate-lib.sh "$ROOT"/bin/fm-board-io-lib.sh "$ROOT"/bin/myshape-lib.sh \
+  cp "$ROOT"/bin/fm-board.sh "$ROOT"/bin/fm-board-lib.sh "$ROOT"/bin/fm-board-io-lib.sh "$ROOT"/bin/myshape-lib.sh \
     "$ROOT"/bin/fm-primary-scope-lib.sh "$ROOT"/bin/fm-secondmate-registry-lib.sh "$root/bin/"
   cat > "$root/bin/fm-captain-hold.sh" <<'SH'
 #!/usr/bin/env bash

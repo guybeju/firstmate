@@ -47,10 +47,19 @@
 # paths are relative paths under the code root's bin/ that git tracks and
 # that equal HEAD, and hands that list to the service: only those run without
 # a confirmation on the page. The code root is this command's own directory's
-# parent, or FM_ROOT_OVERRIDE; with an override whose physical path is not
-# that directory's, every program needs a confirmation. A board running with
-# another binding file than the one there now is replaced by the next
+# parent, or MYSHAPE_ROOT_OVERRIDE; with an override whose physical path is
+# not that directory's, every program needs a confirmation. A board running
+# with another binding file than the one there now is replaced by the next
 # command, like one running other code.
+#
+# The home is MYSHAPE_HOME, else MYSHAPE_ROOT_OVERRIDE, else the code root;
+# MYSHAPE_DATA_OVERRIDE, MYSHAPE_CONFIG_OVERRIDE and MYSHAPE_STATE_OVERRIDE
+# replace its data/, config/ and state/. An aggregator that starts the board
+# hands its own home on under these names. A caller that still sets FM_HOME or
+# FM_ROOT_OVERRIDE, the names this command read before, without the new name
+# and pointing somewhere other than what this command resolved (or somewhere
+# that cannot be entered), is refused with exit 2 and one line naming the new
+# name; the old value is never used.
 #
 # summary stores a one-to-three sentence milestone summary read from stdin (at
 # most 600 characters) and prints the line to start the chat reminder with:
@@ -101,14 +110,6 @@
 # retract takes the task's latest summary of that kind off the board when it
 # turned out to be wrong; stdin is the reason. The line stays in the file.
 #
-# split with tasks is not this command's: it exits 2 with one line naming the
-# command that has it, and writes nothing.
-#
-# Until a home is moved to this command's names, every subcommand there is
-# refused with exit 69 and nothing is written: a home that still has
-# state/topic-board, data/topic-board, or config/topic-board-port while the new
-# name beside it is missing is moved first, by the command the refusal names.
-#
 # Exit codes: 0 success (including an identical repeat), 1 refused or failed
 # with nothing written, 2 usage error, 3 outcome unknown (the request was sent
 # but no answer came back; repeat it once), 69 the board service is unavailable.
@@ -116,30 +117,30 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The code root, decided once here: this command's directory's parent, or
-# FM_ROOT_OVERRIDE. ROOT_TRACKED_EXEMPT is 1 when a program git tracks
+# MYSHAPE_ROOT_OVERRIDE. ROOT_TRACKED_EXEMPT is 1 when a program git tracks
 # unchanged under the root's bin/ may run without a confirmation: always
 # without an override; with one, only when its physical path (pwd -P) is
 # this command's own location's, and the code root is then that compared
 # path. An override that differs, or that cannot be entered or resolved,
 # keeps no such case.
 OWN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-FM_ROOT=$OWN_ROOT
+CODE_ROOT=$OWN_ROOT
 ROOT_TRACKED_EXEMPT=1
-if [ -n "${FM_ROOT_OVERRIDE:-}" ]; then
-  FM_ROOT=$FM_ROOT_OVERRIDE
+if [ -n "${MYSHAPE_ROOT_OVERRIDE:-}" ]; then
+  CODE_ROOT=$MYSHAPE_ROOT_OVERRIDE
   ROOT_TRACKED_EXEMPT=0
   if OWN_PHYSICAL=$(CDPATH='' cd -- "$OWN_ROOT" 2>/dev/null && pwd -P) &&
-    OVERRIDE_PHYSICAL=$(CDPATH='' cd -- "$FM_ROOT_OVERRIDE" 2>/dev/null && pwd -P) &&
+    OVERRIDE_PHYSICAL=$(CDPATH='' cd -- "$MYSHAPE_ROOT_OVERRIDE" 2>/dev/null && pwd -P) &&
     [ -n "$OWN_PHYSICAL" ] && [ "$OWN_PHYSICAL" = "$OVERRIDE_PHYSICAL" ]; then
-    FM_ROOT=$OWN_PHYSICAL
+    CODE_ROOT=$OWN_PHYSICAL
     ROOT_TRACKED_EXEMPT=1
   fi
 fi
-FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
-DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
-CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
-STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
-BOARD_DIST="$FM_ROOT/myshape/dist"
+BOARD_HOME="${MYSHAPE_HOME:-${MYSHAPE_ROOT_OVERRIDE:-$CODE_ROOT}}"
+DATA="${MYSHAPE_DATA_OVERRIDE:-$BOARD_HOME/data}"
+CONFIG="${MYSHAPE_CONFIG_OVERRIDE:-$BOARD_HOME/config}"
+STATE="${MYSHAPE_STATE_OVERRIDE:-$BOARD_HOME/state}"
+BOARD_DIST="$CODE_ROOT/myshape/dist"
 DEFAULT_PORT=47819
 EXIT_UNAVAILABLE=69
 TOPICS_FILE="$DATA/topics.json"
@@ -157,20 +158,18 @@ usage_error() {
   exit 2
 }
 
-# The board's paths from before the rename. A home holding one of them while
-# its new name is missing has not been moved yet; the board runs nowhere near
-# it, so that a stray command never starts a second, empty board beside the
-# old data.
-refuse_unmoved() {  # <old path> <new path>
-  if [ -e "$1" ] && [ ! -e "$2" ]; then
-    service_unavailable "這個 home 還有改名前的 $1" "先跑 bin/fm-board.sh migrate-myshape 搬到新名字"
-  fi
-}
-
-require_moved() {
-  refuse_unmoved "$STATE/topic-board" "$STATE/myshape"
-  refuse_unmoved "$DATA/topic-board" "$DATA/myshape"
-  refuse_unmoved "$CONFIG/topic-board-port" "$CONFIG/myshape-port"
+# The names this command read before it had its own (FM_HOME and
+# FM_ROOT_OVERRIDE). A caller that still sets one, without its new name, while
+# it points somewhere other than what this command resolved (or somewhere that
+# cannot be entered) is refused, so that it is never sent to another home
+# quietly. The old value is only compared, never used.
+refuse_old_name() {  # <old name> <old value> <new value> <new name> <resolved path>
+  local old_physical resolved_physical
+  [ -n "$2" ] && [ -z "$3" ] || return 0
+  old_physical=$(CDPATH='' cd -- "$2" 2>/dev/null && pwd -P) || old_physical=
+  resolved_physical=$(CDPATH='' cd -- "$5" 2>/dev/null && pwd -P) || resolved_physical=
+  [ -z "$old_physical" ] || [ "$old_physical" != "$resolved_physical" ] || return 0
+  usage_error "不讀 ${1} 了：它指的 ${2} 和這次用的 ${5} 不同；要指定請改設 ${4}"
 }
 
 # Every subcommand but open needs a home whose board has run: the service
@@ -352,8 +351,8 @@ binding_flags() {
   case "$lines" in *$'\n'*) rest=${lines#*$'\n'} ;; esac
   while IFS= read -r path; do
     [ -n "$path" ] || continue
-    if git --literal-pathspecs -C "$FM_ROOT" ls-files --error-unmatch -- "$path" >/dev/null 2>&1 &&
-      git --literal-pathspecs -C "$FM_ROOT" diff --quiet HEAD -- "$path" >/dev/null 2>&1; then
+    if git --literal-pathspecs -C "$CODE_ROOT" ls-files --error-unmatch -- "$path" >/dev/null 2>&1 &&
+      git --literal-pathspecs -C "$CODE_ROOT" diff --quiet HEAD -- "$path" >/dev/null 2>&1; then
       exempt=${exempt:+$exempt,}$path
     fi
   done <<< "$rest"
@@ -379,42 +378,21 @@ cmd_service() {
     service_unavailable "編譯結果不見了（${BOARD_DIST}）" "確認 checkout 完整"
   fi
   port=$(configured_port)
-  commit=$(git -C "$FM_ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown')
+  commit=$(git -C "$CODE_ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown')
   flags=$(binding_flags)
   binding=${flags%%$'\n'*}
   exempt=${flags#*$'\n'}
-  exec node "$BOARD_DIST/board-client.js" --home "$FM_HOME" --root "$FM_ROOT" --commit "$commit" \
-    --port "$port" --state "$STATE" --data "$DATA" --config "$CONFIG" --binding "$binding" \
-    --exempt "$exempt" -- "$@"
+  exec node "$BOARD_DIST/board-client.js" --home "$BOARD_HOME" --root "$CODE_ROOT" \
+    --commit "$commit" --port "$port" --state "$STATE" --data "$DATA" --config "$CONFIG" \
+    --binding "$binding" --exempt "$exempt" -- "$@"
 }
 
-# How many words of a split are not options or option values: the source
-# topic, the new name, and any task the caller wanted moved along.
-split_word_count() {
-  local count=0
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --goal | --id | --reason) shift ;;
-      --*) ;;
-      *) count=$((count + 1)) ;;
-    esac
-    [ "$#" -eq 0 ] || shift
-  done
-  printf '%s\n' "$count"
-}
-
-# The forms this command no longer has: one line naming the command that has
-# them now, exit 2, nothing written. None of them needs the board to exist.
-refuse_old_form() {  # <subcommand> <arguments...>
-  local sub=$1
-  shift
-  case "$sub" in
-    split)
-      [ "$(split_word_count "$@")" -le 2 ] ||
-        usage_error "split 只建議題；要一起搬 task，改用 bin/fm-board.sh split <議題 id> <新名稱> --goal <一行> <task…>"
-      ;;
+# The forms this command no longer has: one line naming what to use now, exit
+# 2, nothing written. None of them needs the board to exist.
+refuse_old_form() {  # <subcommand>
+  case "$1" in
     # The board confirms every topic it makes; rules from before that still name these.
-    propose | confirm) usage_error "沒有 ${sub} 了：議題一建立就已確認。新議題用 create <名稱> --goal <一行>" ;;
+    propose | confirm) usage_error "沒有 ${1} 了：議題一建立就已確認。新議題用 create <名稱> --goal <一行>" ;;
   esac
 }
 
@@ -422,7 +400,7 @@ main() {
   [ "$#" -gt 0 ] || usage_error "少了子命令"
   local sub=$1
   shift
-  refuse_old_form "$sub" "$@"
+  refuse_old_form "$sub"
   case "$sub" in
     -h | --help)
       usage
@@ -432,7 +410,9 @@ main() {
       goal | archive | reopen | summary | retract | which | find | status | stop | restart | reset-token) ;;
     *) usage_error "不認得的子命令：$sub" ;;
   esac
-  require_moved
+  refuse_old_name FM_HOME "${FM_HOME:-}" "${MYSHAPE_HOME:-}" MYSHAPE_HOME "$BOARD_HOME"
+  refuse_old_name FM_ROOT_OVERRIDE "${FM_ROOT_OVERRIDE:-}" "${MYSHAPE_ROOT_OVERRIDE:-}" \
+    MYSHAPE_ROOT_OVERRIDE "$CODE_ROOT"
   [ "$sub" = open ] || require_board
   case "$sub" in
     list) cmd_list "$@" ;;

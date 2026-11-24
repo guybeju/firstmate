@@ -26,7 +26,7 @@ tb_bind_home "$MAIN"
 
 cat > "$TMP_ROOT/topic" <<EOF
 #!/usr/bin/env bash
-FM_HOME="$MAIN" FM_ROOT_OVERRIDE="$CODE_ROOT" exec "$CODE_ROOT/bin/myshape.sh" "\$@"
+MYSHAPE_HOME="$MAIN" MYSHAPE_ROOT_OVERRIDE="$CODE_ROOT" exec "$CODE_ROOT/bin/myshape.sh" "\$@"
 EOF
 chmod +x "$TMP_ROOT/topic"
 export TB_TOPIC="$TMP_ROOT/topic"

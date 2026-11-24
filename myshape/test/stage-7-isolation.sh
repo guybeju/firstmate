@@ -54,15 +54,20 @@ scan() {
   done <<< "$(board_files)"
 }
 
-# The lines allowed to name a Firstmate file (the revised plan's B4 column):
-# the old-path refusal, which names Firstmate's move to the new names until
-# that move is gone, and the split line naming the command that moves tasks.
-# The service runs only the programs a home's binding file names, so the
-# board's code names none.
+# The lines allowed to name a Firstmate file: none (AT3.1's empty allow-list).
+# The service runs only the programs a home's binding file names, and the
+# command no longer points at any Firstmate command, so the board's code names
+# none. A line added here is one more that may.
 pinned() {
+  :
+}
+
+# The only code lines of the board's command that may name one of the names it
+# read before it had its own: its refusal of FM_HOME and FM_ROOT_OVERRIDE.
+old_name_lines() {
   cat <<'PINS'
-bin/myshape.sh	service_unavailable "這個 home 還有改名前的 $1" "先跑 bin/fm-board.sh migrate-myshape 搬到新名字"
-bin/myshape.sh	usage_error "split 只建議題；要一起搬 task，改用 bin/fm-board.sh split <議題 id> <新名稱> --goal <一行> <task…>"
+refuse_old_name FM_HOME "${FM_HOME:-}" "${MYSHAPE_HOME:-}" MYSHAPE_HOME "$BOARD_HOME"
+refuse_old_name FM_ROOT_OVERRIDE "${FM_ROOT_OVERRIDE:-}" "${MYSHAPE_ROOT_OVERRIDE:-}" \
 PINS
 }
 
@@ -78,6 +83,9 @@ test_the_scan_finds_only_pinned_lines() {
   assert_equals "" "$(cd "$ROOT" && grep -E '^[[:space:]]*(\.|source)[[:space:]]+["$]' bin/myshape-lib.sh || true)" \
     "myshape-lib.sh must source nothing"
   assert_equals "" "$(cd "$ROOT" && grep -rn 'FM_HOME' myshape/src || true)" "the board's code must not name FM_HOME"
+  assert_equals "$(old_name_lines)" \
+    "$(cd "$ROOT" && grep -h 'FM_' bin/myshape.sh bin/myshape-lib.sh | grep -vE '^[[:space:]]*#' | sed -E 's/^[[:space:]]+//' || true)" \
+    "the board's command may name the names it read before only where it refuses them"
   pass "the board tree names Firstmate files only on the pinned lines, and its command sources only its own library"
 }
 

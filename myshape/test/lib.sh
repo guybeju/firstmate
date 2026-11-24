@@ -7,10 +7,12 @@
 #
 # Sourcing it gives the suite:
 #   - a clean start: umask 022; none of the names the board's command takes its
-#     home and code root from (FM_HOME, FM_ROOT, FM_ROOT_OVERRIDE,
-#     FM_STATE_OVERRIDE, FM_DATA_OVERRIDE, FM_CONFIG_OVERRIDE) or the home the
-#     board hands its programs (MYSHAPE_HOME), so no board command reaches a
-#     real home; and git with no global or system configuration;
+#     home and code root from (MYSHAPE_HOME, MYSHAPE_ROOT_OVERRIDE,
+#     MYSHAPE_STATE_OVERRIDE, MYSHAPE_DATA_OVERRIDE, MYSHAPE_CONFIG_OVERRIDE),
+#     and none of the names it took them from before it had its own (FM_HOME,
+#     FM_ROOT, FM_ROOT_OVERRIDE, FM_STATE_OVERRIDE, FM_DATA_OVERRIDE,
+#     FM_CONFIG_OVERRIDE), so no board command reaches a real home; and git
+#     with no global or system configuration;
 #   - ROOT, the checkout this file is in;
 #   - fail and pass, and fm_test_run <case>...: a plan line 1..N, each case
 #     (which prints one "ok - " line through pass), then FM_TEST_COMPLETE;
@@ -39,6 +41,7 @@ umask 022
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
 unset FM_HOME FM_ROOT FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_CONFIG_OVERRIDE MYSHAPE_HOME
+unset MYSHAPE_ROOT_OVERRIDE MYSHAPE_STATE_OVERRIDE MYSHAPE_DATA_OVERRIDE MYSHAPE_CONFIG_OVERRIDE
 
 # shellcheck disable=SC2034 # ROOT is read by the sourcing suites.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

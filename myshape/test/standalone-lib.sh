@@ -4,9 +4,11 @@
 # (myshape/test/lib.sh; Firstmate's tests/lib.sh for
 # fm-board/test/stage-7-upgrade.sh) and kit/helpers.sh, once TMP_ROOT is set.
 # It runs the board from a board-only root (tb_make_board_root) with:
-#   - a clean environment: env -i with only HOME, PATH, LANG, TMPDIR, FM_HOME
-#     and the test's own timing variables, so no FM_*_OVERRIDE and no real
-#     FM_HOME the caller has can steer the board;
+#   - a clean environment: env -i with only HOME, PATH, LANG, TMPDIR, the home
+#     (as MYSHAPE_HOME, and as FM_HOME for board code from before the board
+#     had its own names, which fm-board/test/stage-7-upgrade.sh runs) and the
+#     test's own timing variables, so no override and no real home the caller
+#     has can steer the board;
 #   - a system-only PATH: a tripwire directory, /usr/bin, /bin, and the
 #     directories of node, jq and git when they live elsewhere;
 #   - tripwires named after every Firstmate script and library, from
@@ -164,6 +166,9 @@ SA_ENV=()
 
 # sa <home> <myshape.sh arguments...>: run the board-only root's command in a
 # clean environment. SA_ROOT is the root; SA_CMD_PATH, when set, replaces PATH.
+# The home goes under the board's own name and under FM_HOME too: the board's
+# command at an older commit read only that, and stage-7-upgrade.sh runs it
+# here; this one does not read it.
 sa() {
   local home=$1
   shift
@@ -171,8 +176,8 @@ sa() {
   case "${1:-}" in
     open | stop | restart) ! declare -F sig_product_target >/dev/null || sig_product_target "$home" "$1" ;;
   esac
-  env -i HOME="$TMP_ROOT/h" PATH="${SA_CMD_PATH:-$SA_PATH}" LANG=C.UTF-8 TMPDIR="$SA_TMPDIR" FM_HOME="$home" \
-    ${SA_ENV[@]+"${SA_ENV[@]}"} "$SA_ROOT/bin/myshape.sh" "$@"
+  env -i HOME="$TMP_ROOT/h" PATH="${SA_CMD_PATH:-$SA_PATH}" LANG=C.UTF-8 TMPDIR="$SA_TMPDIR" \
+    MYSHAPE_HOME="$home" FM_HOME="$home" ${SA_ENV[@]+"${SA_ENV[@]}"} "$SA_ROOT/bin/myshape.sh" "$@"
 }
 
 # sa_code <home> <arguments...>: run like sa, discard output, print the exit code.
@@ -269,7 +274,7 @@ sa_child_board() {
   local home=$1 i=0
   sa_assert_scratch "$home"
   mkdir -p "$home/state/myshape"
-  env -i HOME="$TMP_ROOT/h" PATH="$SA_PATH" LANG=C.UTF-8 TMPDIR="$SA_TMPDIR" FM_HOME="$home" \
+  env -i HOME="$TMP_ROOT/h" PATH="$SA_PATH" LANG=C.UTF-8 TMPDIR="$SA_TMPDIR" MYSHAPE_HOME="$home" \
     ${SA_ENV[@]+"${SA_ENV[@]}"} node "$SA_ROOT/myshape/dist/board-server.js" --home "$home" --root "$SA_ROOT" \
     --commit "$(git -C "$SA_ROOT" rev-parse HEAD)" --state "$home/state" --data "$home/data" \
     --config "$home/config" --binding "$(node "$SA_ROOT/myshape/dist/binding-cli.js" "$home/config/myshape-aggregator.json" | head -n 1)" \

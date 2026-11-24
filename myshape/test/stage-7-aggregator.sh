@@ -783,22 +783,23 @@ test_bind_a_tracked_program_needs_no_confirmation() {
   pass "a tracked program under bin/ runs without a confirmation, group-writable or not (AT9.5, AT4.6)"
 }
 
-# r9_over <override> <myshape.sh arguments...>: r9 with FM_ROOT_OVERRIDE set
-# in the starter's environment; R9_FROM, when set, is the root the command is
-# run from instead of R9.
+# r9_over <override> <myshape.sh arguments...>: r9 with MYSHAPE_ROOT_OVERRIDE
+# set in the starter's environment; R9_FROM, when set, is the root the command
+# is run from instead of R9, and R9_OVERRIDE_NAME the name set instead.
 r9_over() {
   local SA_ROOT=${R9_FROM:-$R9} override=$1 rc=0
   shift
-  SA_ENV=("${BASE_ENV[@]}" "FM_ROOT_OVERRIDE=$override")
+  SA_ENV=("${BASE_ENV[@]}" "${R9_OVERRIDE_NAME:-MYSHAPE_ROOT_OVERRIDE}=$override")
   sa "$BH" "$@" || rc=$?
   SA_ENV=("${BASE_ENV[@]}")
   return "$rc"
 }
 
-# security's FM_ROOT_OVERRIDE tightening: a tracked program needs no
-# confirmation only while the override's physical path is the command's own
-# location's; any other override, one that cannot be entered included, keeps
-# no such case.
+# security's override tightening: a tracked program needs no confirmation
+# only while the override's physical path is the command's own location's;
+# any other override, one that cannot be entered included, keeps no such case.
+# The name the command read before, FM_ROOT_OVERRIDE, is refused when it names
+# another place and is not used when it names the same one.
 test_bind_an_override_keeps_the_exemption_only_for_the_own_location() {
   local own other=$TMP_ROOT/root9-other/board link=$TMP_ROOT/root9-link rc=0 out
   own=$(cd "$R9" && pwd -P)
@@ -826,6 +827,17 @@ test_bind_an_override_keeps_the_exemption_only_for_the_own_location() {
   assert_equals 69 "$rc" "an override that cannot be entered must start no board"
   out=$(r9_over "$TMP_ROOT/no-such-root" status 2>&1) || true
   assert_contains "$out" "編譯結果不見了" "the refusal must say the board's build is not under that root"
+  rc=0
+  out=$(R9_OVERRIDE_NAME=FM_ROOT_OVERRIDE r9_over "$own" restart 2>&1) || rc=$?
+  assert_equals 0 "$rc" "the old override name naming the command's own location must not be refused: $out"
+  assert_equals "true|0" "$(agg_b '"\(.connected)|\(.confirm | length)"')" \
+    "the old override name must not be used: the board runs from the command's own root"
+  rc=0
+  out=$(R9_OVERRIDE_NAME=FM_ROOT_OVERRIDE r9_over "$other" restart 2>&1) || rc=$?
+  assert_equals 2 "$rc" "the old override name naming another checkout must be refused"
+  assert_contains "$out" "不讀 FM_ROOT_OVERRIDE 了：它指的 $other 和這次用的" "the refusal must name the old name and where it points"
+  assert_contains "$out" "要指定請改設 MYSHAPE_ROOT_OVERRIDE" "the refusal must name the board's own name"
+  assert_equals "true|0" "$(agg_b '"\(.connected)|\(.confirm | length)"')" "a refused command must leave the running board alone"
   chmod 775 "$R9/bin/stub-plain"
   r9 restart >/dev/null
   assert_equals "true|0" "$(agg_b '"\(.connected)|\(.confirm | length)"')" \
@@ -894,14 +906,16 @@ test_bind_a_confirmation_is_bound_to_the_bytes() {
 
 # AT9.3: every program gets the fixed environment, whatever the starter had.
 # The canaries are ones the board's own command does not read (it honors
-# FM_*_OVERRIDE for its paths, so the plan's FM_DATA_OVERRIDE would move the
-# board's data rather than test what reaches the program): FM_SSH_BIN and
-# TMUX are what firstmate's adapter would read, SSH_AUTH_SOCK the agent.
+# MYSHAPE_HOME and MYSHAPE_*_OVERRIDE for its paths, so one of those would move
+# the board rather than test what reaches the program): FM_HOME,
+# FM_DATA_OVERRIDE, FM_SSH_BIN and TMUX are what firstmate's adapter would
+# read, SSH_AUTH_SOCK the agent. FM_HOME rides with sa's MYSHAPE_HOME, so the
+# command does not refuse it.
 test_bind_a_fixed_environment() {
   local names expected id
   : > "$AGG_B/env-probe"
   expected=$(printf '%s\n' HOME LANG MYSHAPE_HOME PATH TMPDIR)
-  SA_ENV=("${BASE_ENV[@]}" TB_CANARY=leak FM_SSH_BIN=/decoy SSH_AUTH_SOCK=/decoy TMUX=/decoy MYSHAPE_HOME=/decoy)
+  SA_ENV=("${BASE_ENV[@]}" TB_CANARY=leak FM_SSH_BIN=/decoy SSH_AUTH_SOCK=/decoy TMUX=/decoy FM_HOME=/decoy FM_DATA_OVERRIDE=/decoy)
   SA_CMD_PATH="$SA_PATH::." r9 restart >/dev/null
   SA_ENV=("${BASE_ENV[@]}")
   for program in confirmed exempt; do
@@ -916,7 +930,7 @@ test_bind_a_fixed_environment() {
     done
     [ "$program" = exempt ] && break
     bind_to bin/stub-plain plain
-    SA_ENV=("${BASE_ENV[@]}" TB_CANARY=leak FM_SSH_BIN=/decoy SSH_AUTH_SOCK=/decoy TMUX=/decoy MYSHAPE_HOME=/decoy)
+    SA_ENV=("${BASE_ENV[@]}" TB_CANARY=leak FM_SSH_BIN=/decoy SSH_AUTH_SOCK=/decoy TMUX=/decoy FM_HOME=/decoy FM_DATA_OVERRIDE=/decoy)
     SA_CMD_PATH="$SA_PATH::." r9 open >/dev/null
     SA_ENV=("${BASE_ENV[@]}")
   done

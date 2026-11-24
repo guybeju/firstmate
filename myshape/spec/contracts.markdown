@@ -321,9 +321,10 @@ API 的路徑與 body 由第五段定；這裡只定兩件事：
 
 **相對路徑與 code root。**
 相對路徑以看板的 code root 為準，絕對路徑照寫。
-code root 是看板的指令 `bin/myshape.sh` 算出來的目錄：它自己所在目錄的上一層，或啟動它的環境裡的 `FM_ROOT_OVERRIDE`。
+code root 是看板的指令 `bin/myshape.sh` 算出來的目錄：它自己所在目錄的上一層，或啟動它的環境裡的 `MYSHAPE_ROOT_OVERRIDE`。
 看板放在 aggregator 的 checkout 裡時（例如 first mate），code root 就是那個 checkout。
 code root 只從這兩處來，不從設定檔，也不從 `data/`、`state/`、`config/` 底下的任何檔來。
+看板的 home 是啟動它的環境裡的 `MYSHAPE_HOME`，沒有就是 `MYSHAPE_ROOT_OVERRIDE`，再沒有就是 code root；`MYSHAPE_DATA_OVERRIDE`、`MYSHAPE_CONFIG_OVERRIDE`、`MYSHAPE_STATE_OVERRIDE` 換掉它的 `data/`、`config/`、`state/`；啟動看板的 aggregator 用這些名字把自己的 home 交過來（first mate 的做法在 [adapter](../../fm-board/spec/adapter.markdown) 第 9 節）。
 看板的 home、code root 的路徑與程式版本由啟動服務的 `myshape.sh` 當參數傳入；服務自己不執行 `git`、不猜路徑。
 
 **哪些程式不用確認。**
@@ -333,10 +334,10 @@ first mate 的 `bin/fm-board.sh` 是這一種。
 這和今天是同一個門檻：「追蹤、沒改過」不是「審過」，也不表示經過 pull request；本機的一個 commit 就過得了。
 服務啟動之後才改的追蹤檔照改過的內容執行，和今天一樣。
 設定檔在服務啟動之後改了（內容的 SHA-256 和 `myshape.sh` 查的時候不同），它寫的程式就不再算不用確認；下一個看板指令會換上新的服務並重新查。
-`FM_ROOT_OVERRIDE` 指向的目錄，實體路徑（`pwd -P`）和 `bin/myshape.sh` 自己所在目錄的上一層相同時，code root 就是那個比對過的路徑，「不用確認」照上面那樣看。
+`MYSHAPE_ROOT_OVERRIDE` 指向的目錄，實體路徑（`pwd -P`）和 `bin/myshape.sh` 自己所在目錄的上一層相同時，code root 就是那個比對過的路徑，「不用確認」照上面那樣看。
 指向別的目錄、進不去或解析不出實體路徑時，沒有程式不用確認：每一支都要在頁面上確認，群組能寫的照樣拒絕。
 這只在 `bin/myshape.sh` 決定 code root 的那一處判定一次，之後只用判定的結果；判定只看啟動它的環境與它自己的位置。
-它擋得住一個誤設或繼承來的 `FM_ROOT_OVERRIDE` 不經確認就把看板指到另一個 checkout，擋不住啟動看板的人把指令本身放在別處：經過另一個目錄裡的符號連結執行 `bin/myshape.sh`，那個目錄就算它自己的位置。
+它擋得住一個誤設或繼承來的 `MYSHAPE_ROOT_OVERRIDE` 不經確認就把看板指到另一個 checkout，擋不住啟動看板的人把指令本身放在別處：經過另一個目錄裡的符號連結執行 `bin/myshape.sh`，那個目錄就算它自己的位置。
 這和今天的門檻相同，不比這個更多。
 
 **其他每一支程式都要在頁面上確認。**
@@ -445,7 +446,8 @@ first mate 這一側的 `deliver` 每一種跑哪個指令、怎麼對應結果�
 | 69 | 看板服務不可用 |
 
 除了 `open` 與 `--help`，每個子命令在沒有 `state/myshape/token` 的 home（看板從來沒在那裡跑過）都回 1，stderr 是「這裡沒有看板（找不到 state/myshape/token）；要在這裡開看板先跑 myshape.sh open。」，什麼都不寫。
-移到 first mate 這一側的舊寫法（`tag`、`--in-home`、`setup`、帶 task 的 `split`、`install-rules`、`order`）回 2，stderr 一行指出新的指令（adapter 第 2 節）。
+移到 first mate 這一側的舊寫法（`tag`、`--in-home`、`setup`、`install-rules`、`order`）是不認得的子命令，帶 task 的 `split` 是 `split` 的用法錯，都回 2，什麼都不寫（新的指令見 adapter 第 2 節）。
+設了看板以前讀的 `FM_HOME` 或 `FM_ROOT_OVERRIDE`、沒設對應的 `MYSHAPE_HOME` 或 `MYSHAPE_ROOT_OVERRIDE`，而且它指的地方和這次用的 home 或 code root 實體路徑（`pwd -P`）不同、或進不去時，除了 `--help` 每個子命令都回 2，什麼都不寫，stderr 是「myshape.sh: 不讀 <舊名字> 了：它指的 <路徑> 和這次用的 <路徑> 不同；要指定請改設 <新名字>（myshape.sh --help 看用法）」；舊名字的值只拿來比對，從不採用。
 
 成功印一行 `ok <id> <做了什麼>`；`summary`、`which`、`find`、`list`、`status`、`open` 各有自己的輸出。錯誤在 stderr 印一行原因與修法。只有 `list` 有 `--json`。
 

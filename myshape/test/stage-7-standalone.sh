@@ -115,8 +115,10 @@ test_help_needs_nothing() {
 
 test_the_token_guard() {
   local out rc=0 decoy=$TMP_ROOT/decoy-overrides
+  local -a env=("${SA_ENV[@]}")
   mkdir -p "$decoy"
-  export FM_ROOT_OVERRIDE=$decoy FM_DATA_OVERRIDE=$decoy FM_STATE_OVERRIDE=$decoy FM_CONFIG_OVERRIDE=$decoy
+  export MYSHAPE_ROOT_OVERRIDE=$decoy MYSHAPE_DATA_OVERRIDE=$decoy \
+    MYSHAPE_STATE_OVERRIDE=$decoy MYSHAPE_CONFIG_OVERRIDE=$decoy
   out=$(t create "Alpha" --goal "first" --id a 2>&1) || rc=$?
   assert_equals 1 "$rc" "create before the first open must be refused"
   assert_equals "這裡沒有看板（找不到 state/myshape/token）；要在這裡開看板先跑 myshape.sh open。" "$out" \
@@ -128,8 +130,38 @@ test_the_token_guard() {
   assert_equals "ok a 已建立，排在「一般」最後" "$out" "create must report where the topic landed"
   jq -e '.topics.a.name == "Alpha"' "$MAIN/data/topics.json" >/dev/null || fail "the topic must be in the home's own file"
   assert_equals "" "$(ls -A "$decoy")" "override variables in the caller's environment must not steer the board"
-  unset FM_ROOT_OVERRIDE FM_DATA_OVERRIDE FM_STATE_OVERRIDE FM_CONFIG_OVERRIDE
-  pass "every subcommand but open waits for the board's token, and only the clean environment reaches the board"
+  unset MYSHAPE_ROOT_OVERRIDE MYSHAPE_DATA_OVERRIDE MYSHAPE_STATE_OVERRIDE MYSHAPE_CONFIG_OVERRIDE
+  # The names the command read before it had its own, inside the clean
+  # environment: the three directory ones are not read; FM_HOME and
+  # FM_ROOT_OVERRIDE naming another place are refused, naming the same place
+  # they are not.
+  SA_ENV=("${env[@]}" FM_DATA_OVERRIDE="$decoy" FM_STATE_OVERRIDE="$decoy" FM_CONFIG_OVERRIDE="$decoy")
+  out=$(t list --json) || fail "the old directory names must not stop a command: $out"
+  SA_ENV=("${env[@]}")
+  assert_equals a "$(printf '%s' "$out" | jq -r '.[].id')" "the old directory names must not move the board's state or data"
+  SA_ENV=("${env[@]}" MYSHAPE_HOME= FM_HOME="$decoy")
+  rc=0
+  out=$(t create "Gamma" --goal "third" --id c 2>&1) || rc=$?
+  SA_ENV=("${env[@]}")
+  assert_equals 2 "$rc" "FM_HOME naming another home, without MYSHAPE_HOME, must be refused"
+  assert_contains "$out" "要指定請改設 MYSHAPE_HOME" "the refusal must name the board's own name"
+  SA_ENV=("${env[@]}" FM_ROOT_OVERRIDE="$decoy")
+  rc=0
+  out=$(t create "Gamma" --goal "third" --id c 2>&1) || rc=$?
+  SA_ENV=("${env[@]}")
+  assert_equals 2 "$rc" "FM_ROOT_OVERRIDE naming another root, without MYSHAPE_ROOT_OVERRIDE, must be refused"
+  assert_contains "$out" "要指定請改設 MYSHAPE_ROOT_OVERRIDE" "the refusal must name the board's own name"
+  jq -e '.topics.c == null' "$MAIN/data/topics.json" >/dev/null || fail "a refused command must write nothing"
+  assert_equals "" "$(ls -A "$decoy")" "the old names must not steer the board"
+  # FM_HOME naming the very home the command resolves (here its own root,
+  # whose board never ran) is not refused: the token guard answers.
+  SA_ENV=("${env[@]}" MYSHAPE_HOME= FM_HOME="$SA_ROOT")
+  rc=0
+  out=$(t list 2>&1) || rc=$?
+  SA_ENV=("${env[@]}")
+  assert_equals 1 "$rc" "FM_HOME naming the home the command resolves must not be refused"
+  assert_contains "$out" "這裡沒有看板" "the command must go on to the token guard"
+  pass "every subcommand but open waits for the board's token, only the clean environment reaches the board, and an old name pointing elsewhere is refused"
 }
 
 test_open_and_the_running_service() {
@@ -232,14 +264,14 @@ test_the_http_side() {
   pass "the page's HTTP checks hold, and the board shows only its own data"
 }
 
-# split with tasks names Firstmate's command; the subcommands Firstmate took
-# over are not the board's at all.
+# A split that names tasks is a usage error of the board's split; the
+# subcommands Firstmate took over are not the board's at all.
 test_old_forms() {
   local form out rc
   rc=0
   out=$(t split a Part --goal g t1 2>&1) || rc=$?
   assert_equals 2 "$rc" "split with tasks must be a usage error"
-  assert_contains "$out" "改用 bin/fm-board.sh split" "split with tasks must name its new command"
+  assert_contains "$out" "split 的用法：myshape.sh split <from> <name> --goal <…>" "split with tasks must get the board's usage line"
   for form in "tag t1 a" "--in-home sm1 tag t1 a" "setup" "install-rules" "order"; do
     rc=0
     # shellcheck disable=SC2086 # each form is a list of words.
@@ -248,7 +280,7 @@ test_old_forms() {
     assert_contains "$out" "不認得的子命令" "'$form' must not be a subcommand of the board"
   done
   assert_absent "$MAIN/data/t1" "an old form must write no tag"
-  pass "split with tasks names its new command, the subcommands Firstmate took over are unknown, and nothing is written"
+  pass "split with tasks gets the board's usage line, the subcommands Firstmate took over are unknown, and nothing is written"
 }
 
 # new_writes <ids-json>: the writes the board shows that are not in <ids-json>.
