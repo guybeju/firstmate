@@ -62,6 +62,15 @@ pinned() {
   :
 }
 
+# The only code lines of the board's command that may name one of the names it
+# read before it had its own: its refusal of FM_HOME and FM_ROOT_OVERRIDE.
+old_name_lines() {
+  cat <<'PINS'
+refuse_old_name FM_HOME "${FM_HOME:-}" "${MYSHAPE_HOME:-}" MYSHAPE_HOME "$BOARD_HOME"
+refuse_old_name FM_ROOT_OVERRIDE "${FM_ROOT_OVERRIDE:-}" "${MYSHAPE_ROOT_OVERRIDE:-}" \
+PINS
+}
+
 test_the_scan_finds_only_pinned_lines() {
   local found new gone
   found=$(scan | LC_ALL=C sort)
@@ -74,6 +83,9 @@ test_the_scan_finds_only_pinned_lines() {
   assert_equals "" "$(cd "$ROOT" && grep -E '^[[:space:]]*(\.|source)[[:space:]]+["$]' bin/myshape-lib.sh || true)" \
     "myshape-lib.sh must source nothing"
   assert_equals "" "$(cd "$ROOT" && grep -rn 'FM_HOME' myshape/src || true)" "the board's code must not name FM_HOME"
+  assert_equals "$(old_name_lines)" \
+    "$(cd "$ROOT" && grep -h 'FM_' bin/myshape.sh bin/myshape-lib.sh | grep -vE '^[[:space:]]*#' | sed -E 's/^[[:space:]]+//' || true)" \
+    "the board's command may name the names it read before only where it refuses them"
   pass "the board tree names Firstmate files only on the pinned lines, and its command sources only its own library"
 }
 

@@ -35,7 +35,7 @@ topic_wrapper() {
   shift 3
   {
     printf '#!/bin/sh\n'
-    printf 'exec env -i HOME=%q PATH=%q LANG=C.UTF-8 TMPDIR=%q FM_HOME=%q' "$TMP_ROOT/h" "$SA_PATH" "$SA_TMPDIR" "$home"
+    printf 'exec env -i HOME=%q PATH=%q LANG=C.UTF-8 TMPDIR=%q MYSHAPE_HOME=%q' "$TMP_ROOT/h" "$SA_PATH" "$SA_TMPDIR" "$home"
     printf ' %q' "$@"
     printf ' %q "$@"\n' "$root/bin/myshape.sh"
   } > "$file"

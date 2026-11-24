@@ -265,6 +265,9 @@ first mate 這一側的第三到五段（`fm-board/test/stage-3-data.sh`、`stag
 
 - `bin/fm-session-start.sh`：fleet state 那一段的最後，只在拿到 session 鎖、不是 `--reemit` 時，呼叫 `bin/fm-topic-session-start.sh`，它的輸出原樣印進啟動摘要。這是看板在上游檔案裡唯一的呼叫點；合併上游時要留著這幾行。看板的測試靠真的 `fm-session-start.sh` 與 `fm-lock.sh`：拿得到鎖時跑、鎖被一個活著的 harness 程序拿著時是唯讀。測試：真的，`fm-board/test/stage-2-startup.sh` 全部。
 - `tests/lib.sh`：first mate 這一側的測試（`fm-board/test`、`dispatch-plan/test`）source 它，用 `fm_test_tmproot`、`fm_test_run`、`fm_test_cleanup`、`fm_git_init_commit`、`fm_write_meta`、`fm_fakebin`、`pass`、`fail`、`assert_equals`、`assert_contains`、`assert_not_contains`、`assert_grep`、`assert_present`、`assert_absent`、`expect_code` 與變數 `ROOT`。改到這些，這一側的每個測試腳本都受影響。看板自己的測試不用它，改 source 看板的 `myshape/test/lib.sh`，名稱與輸出相同。
-- 環境變數 `FM_HOME`、`FM_ROOT_OVERRIDE`、`FM_DATA_OVERRIDE`、`FM_CONFIG_OVERRIDE`、`FM_STATE_OVERRIDE`：看板的 Bash 指令照上游的慣例解析路徑。
+- 環境變數：看板的指令只讀它自己的名字（`MYSHAPE_HOME` 與三個目錄、一個 code root 的 `MYSHAPE_*_OVERRIDE`，contracts 第 7 節），以前讀的 `FM_HOME`、`FM_ROOT_OVERRIDE` 指到別處時拒絕（contracts 第 9 節）。
+  這一側執行 `bin/myshape.sh` 一律經過 `bin/fm-board-lib.sh` 的 `tb_board_env`：先拿掉環境裡已經有的看板名字，再把 `FM_HOME` 當成 `MYSHAPE_HOME`、有設的 `FM_ROOT_OVERRIDE`、`FM_DATA_OVERRIDE`、`FM_CONFIG_OVERRIDE`、`FM_STATE_OVERRIDE` 照原值換成對應的 `MYSHAPE_*` 交給它；今天的呼叫端是 session start（`bin/fm-topic-session-start.sh`）與 `fm-board.sh split`，之後新增的也一樣。
+  看板多讀一個名字時，那個函式要清掉的名字跟著加。
+  agent 照規則直接打的 `bin/myshape.sh` 不經這個函式：主 home 就是 clone 時，它自己的位置就是那個 home。
 - 自我更新：主 home 的 `config/self-update-source` 指向 `carry`。看板的服務在下一個議題指令發現程式的 commit 變了，就換掉自己；開著的頁面看到 `/api/state` 的 `code_commit` 和它載入時不同，就自己重新載入。
 - first mate 這一側的指令（`fm-board.sh`、`fm-dispatch-plan.sh`）依賴的框架介面，包括 `install-rules` 在 `data/captain.md`、`data/captain-shared.md` 裡維護的標記區塊，列在這一頁第 7 節。

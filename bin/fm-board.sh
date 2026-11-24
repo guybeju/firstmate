@@ -384,7 +384,8 @@ cmd_split() {
   # Each step below runs a command as its own process. Called as a function
   # behind "||", a step would run with errexit off and could carry on after a
   # failure.
-  plan=$("$TOPIC" "${request[@]}" --dry) || exit $?
+  tb_board_env
+  plan=$(env "${TB_BOARD_ENV[@]}" "$TOPIC" "${request[@]}" --dry) || exit $?
   source=$(tb_resolve_live_topic "$TOPICS_FILE" "${words[0]}")
   for spec in ${tasks[@]+"${tasks[@]}"}; do
     problem=$(split_task_problem "$spec" "$source" "$(split_new_id "$plan")")
@@ -396,7 +397,7 @@ cmd_split() {
   fi
   # The id comes from the split that was really made: another writer may have
   # taken the planned id since the check.
-  made=$("$TOPIC" "${request[@]}") || exit $?
+  made=$(env "${TB_BOARD_ENV[@]}" "$TOPIC" "${request[@]}") || exit $?
   printf '%s\n' "$made"
   new=$(split_new_id "$made")
   tb_valid_id "$new" || tb_die 1 "看不懂看板回的議題 id，沒有搬任何 task：$made"

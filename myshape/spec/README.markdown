@@ -66,7 +66,7 @@ first mate 這一側：fm-board.sh（feed、deliver、bind、tag、setup、帶 t
 - 開工前讀 clone 裡的 `CONTRIBUTING.md` 與 `.agents/skills/firstmate-coding-guidelines/SKILL.md`。
 - 每一段從 `carry` 開功能分支，PR 用 `gh pr create --repo guybeju/firstmate --base carry` 開回 fork。fork 的預設分支是 `main`，不寫 `--base` 會開錯。不對上游開 PR、issue、留言。
 - 合併由使用者點頭。`carry` 跟上游同步只用合併，不 rebase。
-- 測試不能碰運作中的主 home：每個測試用自己的暫存 `FM_HOME`。
+- 測試不能碰運作中的主 home：每個測試用自己的暫存 home（看板的指令是 `MYSHAPE_HOME`，first mate 這一側的指令是 `FM_HOME`）。
 - **上游的 CI 不會在這些 PR 上跑**（它只認 `main`）。驗收全靠各段列出的本機指令，結果貼進 PR。
 - 要平行跑好幾個 session 時，每個用那個 clone 的一個 linked worktree，一樣從外面的目錄開。六段有先後相依，通常不需要平行。
 

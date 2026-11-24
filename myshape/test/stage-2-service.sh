@@ -115,37 +115,37 @@ test_replaces_the_board_when_code_or_port_changes() {
   local home root pid
   home=$(tb_make_service_home replace)
   root=$(make_code_root replace-root)
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" open >/dev/null
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" create "V1" --goal "old code" >/dev/null
+  MYSHAPE_HOME="$home" MYSHAPE_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" open >/dev/null
+  MYSHAPE_HOME="$home" MYSHAPE_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" create "V1" --goal "old code" >/dev/null
   pid=$(tb_board_pid "$home")
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" status | grep -q "restart" &&
+  MYSHAPE_HOME="$home" MYSHAPE_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" status | grep -q "restart" &&
     fail "status must not ask for a restart while the board runs the checked-out code"
   git -C "$root" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m "new code"
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" status |
+  MYSHAPE_HOME="$home" MYSHAPE_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" status |
     grep -q "目前的程式是 $(git -C "$root" rev-parse HEAD)" ||
     fail "status must say the board runs older code than the checkout"
   assert_equals "$pid" "$(tb_board_pid "$home")" "status must not replace the board"
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" create "V2" --goal "new code" >/dev/null
+  MYSHAPE_HOME="$home" MYSHAPE_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" create "V2" --goal "new code" >/dev/null
   assert_not_equals "$pid" "$(tb_board_pid "$home")" "a new code commit must replace the running board"
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" status | grep -q "$(git -C "$root" rev-parse HEAD)" ||
+  MYSHAPE_HOME="$home" MYSHAPE_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" status | grep -q "$(git -C "$root" rev-parse HEAD)" ||
     fail "the replacement must report the new commit"
 
   pid=$(tb_board_pid "$home")
   tb_free_port > "$home/config/myshape-port"
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" create "V3" --goal "new port" >/dev/null
+  MYSHAPE_HOME="$home" MYSHAPE_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" create "V3" --goal "new port" >/dev/null
   assert_not_equals "$pid" "$(tb_board_pid "$home")" "a new port must replace the running board"
   assert_equals "$(cat "$home/config/myshape-port")" "$(cat "$home/state/myshape/port")" \
     "the replacement must listen on the configured port"
   assert_equals 1 "$(tb_board_count "$home")" "exactly one board must remain"
 
   pid=$(tb_board_pid "$home")
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" status >/dev/null
+  MYSHAPE_HOME="$home" MYSHAPE_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" status >/dev/null
   git -C "$root" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m "newer code"
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" status >/dev/null
+  MYSHAPE_HOME="$home" MYSHAPE_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" status >/dev/null
   assert_equals "$pid" "$(tb_board_pid "$home")" "status must never replace the board"
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" restart >/dev/null
+  MYSHAPE_HOME="$home" MYSHAPE_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" restart >/dev/null
   assert_not_equals "$pid" "$(tb_board_pid "$home")" "restart must replace the board"
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" stop >/dev/null
+  MYSHAPE_HOME="$home" MYSHAPE_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" stop >/dev/null
   pass "a code or port change replaces the board on the next command; status never does"
 }
 
@@ -175,7 +175,7 @@ test_startup_failures_exit_69() {
   mkdir -p "$root/bin"
   cp "$ROOT"/bin/myshape.sh "$ROOT"/bin/myshape-lib.sh "$root/bin/"
   rc=0
-  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" create "X" --goal "y" 2>&1) || rc=$?
+  out=$(MYSHAPE_HOME="$home" MYSHAPE_ROOT_OVERRIDE="$root" "$root/bin/myshape.sh" create "X" --goal "y" 2>&1) || rc=$?
   assert_equals 69 "$rc" "a missing build must exit 69"
   assert_equals "看板服務無法啟動：編譯結果不見了（$root/myshape/dist）。確認 checkout 完整。這次的要求沒有寫入。" "$out" \
     "the missing-build failure must say so, sending nobody to another tool"

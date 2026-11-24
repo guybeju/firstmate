@@ -43,12 +43,15 @@ PATH_CLEAN=$(dirname "$(command -v node)"):$(dirname "$(command -v jq)"):$(dirna
 
 # run <command> <arguments...>: one of the checkout's commands for the scratch
 # home (RUN_HOME, else the main one), in a clean environment; the code root is
-# the checkout's own location.
+# the checkout's own location. The board's command gets the home under its
+# own name, every other command under Firstmate's (RUN_ENV, when set, adds
+# words to the environment).
 run() {
-  local home=${RUN_HOME:-$MAIN}
+  local home=${RUN_HOME:-$MAIN} name=FM_HOME
   case "$1:${2:-}" in */myshape.sh:open | */myshape.sh:stop | */myshape.sh:restart) sig_product_target "$home" "$2" ;; esac
-  env -i HOME="$TMP_ROOT/h" PATH="$PATH_CLEAN" LANG=C.UTF-8 TMPDIR="$TMP_ROOT/tmp" FM_HOME="$home" \
-    MYSHAPE_TEST=1 MYSHAPE_READ_MS=600000 "$@"
+  case "$1" in */myshape.sh) name=MYSHAPE_HOME ;; esac
+  env -i HOME="$TMP_ROOT/h" PATH="$PATH_CLEAN" LANG=C.UTF-8 TMPDIR="$TMP_ROOT/tmp" "$name=$home" \
+    MYSHAPE_TEST=1 MYSHAPE_READ_MS=600000 ${RUN_ENV[@]+"${RUN_ENV[@]}"} "$@"
 }
 
 aggregator() {  # <jq filter>: the running board's aggregator block
@@ -105,6 +108,29 @@ test_the_hook_leaves_a_bound_board_alone() {
   assert_equals "看板服務：在跑" "$(run "$CODE/bin/fm-topic-session-start.sh")" "a bound, running board must be reported as running"
   assert_equals "$pid" "$(tb_board_pid "$MAIN")" "the hook must leave a bound board alone"
   pass "with the binding in place the hook leaves the running board alone"
+}
+
+# The hook hands the board Firstmate's directory overrides under the board's
+# names, and drops a board name the caller's environment already had. FM_HOME
+# is a decoy home with its own port and the three overrides name the main
+# home's directories, so the hook must find the main home's running board; a
+# stray MYSHAPE_ROOT_OVERRIDE names a directory with no board build, which
+# would make the board's command refuse to run if it got through.
+test_the_hook_hands_the_board_firstmates_overrides() {
+  local decoy pid out stray=$TMP_ROOT/stray-root
+  decoy=$(tb_make_service_home hook-decoy)
+  mkdir -p "$stray"
+  pid=$(tb_board_pid "$MAIN")
+  RUN_ENV=(FM_STATE_OVERRIDE="$MAIN/state" FM_CONFIG_OVERRIDE="$MAIN/config" FM_DATA_OVERRIDE="$MAIN/data"
+    MYSHAPE_ROOT_OVERRIDE="$stray")
+  out=$(RUN_HOME="$decoy" run "$CODE/bin/fm-topic-session-start.sh")
+  RUN_ENV=()
+  assert_equals "看板服務：在跑" "$out" "the hook must reach the main home's board through the overrides it hands on"
+  assert_equals "$pid" "$(tb_board_pid "$MAIN")" "the hook must leave the main home's board alone"
+  assert_equals 0 "$(tb_board_count "$decoy")" "no board may start for the decoy home"
+  assert_contains "$(run "$CODE/bin/myshape.sh" status)" "程式目錄：$CODE" \
+    "the board's code root must still be the command's own location"
+  pass "the hook hands the board Firstmate's overrides under the board's names, and no stray board name"
 }
 
 test_the_hook_starts_a_stopped_board_with_the_binding() {
@@ -295,7 +321,7 @@ test_nothing_is_left() {
 
 fm_test_run test_the_checkout_is_group_writable_and_clean test_setup_writes_the_binding \
   test_the_hook_binds_and_replaces_a_running_board test_the_hook_leaves_a_bound_board_alone \
-  test_the_hook_starts_a_stopped_board_with_the_binding test_the_hook_says_it_bound_a_board_that_did_not_answer \
+  test_the_hook_hands_the_board_firstmates_overrides test_the_hook_starts_a_stopped_board_with_the_binding test_the_hook_says_it_bound_a_board_that_did_not_answer \
   test_the_hook_says_it_bound_a_board_that_failed_to_start test_the_hook_says_nothing_of_a_binding_bind_did_not_write \
   test_the_hook_says_it_bound_a_real_board_that_failed_to_start test_no_binding_in_a_home_without_a_board \
   test_board_commands_write_a_missing_binding test_feed_and_deliver_never_write_the_binding \

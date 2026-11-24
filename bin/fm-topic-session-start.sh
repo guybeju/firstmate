@@ -36,6 +36,9 @@
 # open). A board that is not running, including one stopped on purpose with
 # myshape.sh stop, is started.
 #
+# It runs myshape.sh with this home and Firstmate's overrides under the board's
+# own names (tb_board_env in bin/fm-board-lib.sh).
+#
 # Costs: one myshape.sh status when the board is running, after one
 # fm-board.sh bind when the binding is missing. Otherwise also one
 # myshape.sh open, whose stdout carries the board's access token and is
@@ -65,6 +68,8 @@ BIND_WROTE_LINE='ok bind 看板的 aggregator 設定已寫：firstmate'
 . "$SCRIPT_DIR/fm-primary-scope-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
+# shellcheck source=bin/fm-board-lib.sh
+. "$SCRIPT_DIR/fm-board-lib.sh"
 
 # The one-line reason in open's stderr <text>, given its exit code <rc>.
 start_failure_reason() {  # <rc> <text>
@@ -100,18 +105,21 @@ report_open() {  # <rc> <err> <first> <bound>
 
 main() {
   local status_out first err rc=0 bound=0
+  local -a board
   fm_root_is_secondmate_home "$FM_HOME" && return 0
   [ -f "$STATE/myshape/token" ] || return 0
   if [ ! -e "$CONFIG/myshape-aggregator.json" ] && [ ! -L "$CONFIG/myshape-aggregator.json" ]; then
     [ "$("$SCRIPT_DIR/fm-board.sh" bind 2>/dev/null)" != "$BIND_WROTE_LINE" ] || bound=1
   fi
-  status_out=$(fm_run_timed "$STATUS_BOUND" "$SCRIPT_DIR/myshape.sh" status 2>/dev/null) || true
+  tb_board_env
+  board=(env "${TB_BOARD_ENV[@]}" "$SCRIPT_DIR/myshape.sh")
+  status_out=$(fm_run_timed "$STATUS_BOUND" "${board[@]}" status 2>/dev/null) || true
   IFS= read -r first <<< "$status_out" || true
   if [ "$first" = "$RUNNING_LINE" ] && [ "$bound" -eq 0 ]; then
     printf '%s\n' "$RUNNING_LINE"
     return 0
   fi
-  err=$(fm_run_timed "$START_BOUND" "$SCRIPT_DIR/myshape.sh" open 2>&1 >/dev/null) || rc=$?
+  err=$(fm_run_timed "$START_BOUND" "${board[@]}" open 2>&1 >/dev/null) || rc=$?
   report_open "$rc" "$err" "$first" "$bound"
 }
 

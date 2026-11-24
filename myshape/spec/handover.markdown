@@ -56,14 +56,15 @@ H=$(mktemp -d /tmp/tb-try.XXXXXX)
 mkdir -p "$H/state" "$H/data" "$H/config" "$H/projects"
 printf '## In flight\n\n## Queued\n\n## Done\n' > "$H/data/backlog.md"
 echo 47931 > "$H/config/myshape-port"          # 任何空著的埠，不要用 47819
-t() { FM_HOME="$H" FM_ROOT_OVERRIDE="$PWD" bin/myshape.sh "$@"; }
+t() { MYSHAPE_HOME="$H" MYSHAPE_ROOT_OVERRIDE="$PWD" bin/myshape.sh "$@"; }
 t open                                            # 第一次 open 才有看板；印出帶 token 的網址
 t create "試試看" --goal "一行目標" --id try         # 一建立就排在「一般」最後
 t stop                                            # 用完要停
 trash "$H"                                        # 再把暫時的 home 丟進垃圾桶
 ```
 
-`FM_ROOT_OVERRIDE` 指向 checkout，`FM_HOME` 指向暫時的 home。真的 home 不要拿來試。
+`MYSHAPE_ROOT_OVERRIDE` 指向 checkout，`MYSHAPE_HOME` 指向暫時的 home。真的 home 不要拿來試。
+只設以前的 `FM_HOME` 或 `FM_ROOT_OVERRIDE` 而且指到別處時，看板的指令回 2、什麼都不做，並說要改設哪個名字（contracts 第 9 節）。
 
 ## 2. 每個問題的狀態
 
@@ -174,7 +175,7 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
 行為上的：
 
 - 主 home 的 checkout 裡改了 `bin/fm-board.sh` 而沒提交，下一次看板啟動時它就不是「不用確認」的程式；這台 PC 的 checkout 群組能寫，要確認的程式會被拒絕，看板就接不上（寫入等著、不讀 home），直到那個改動提交或還原，再跑一個看板指令。
-- `FM_ROOT_OVERRIDE` 指向 `bin/myshape.sh` 自己的位置以外的目錄時，沒有程式不用確認（contracts 第 7 節）；它擋不住把指令本身放在別處啟動的人。
+- `MYSHAPE_ROOT_OVERRIDE` 指向 `bin/myshape.sh` 自己的位置以外的目錄時，沒有程式不用確認（contracts 第 7 節）；它擋不住把指令本身放在別處啟動的人。
 
 - 頁面上只能用拖的改順序：沒有鍵盤可用的移法，原生拖放在 Chrome 上也還沒驗（第 3 節）；這兩種情況改用 `bin/myshape.sh move`（C55）。
 - 看板認一個 home 的依據是 `state/myshape/token`：全新的 home 要先 `open` 才能 `create`；`open` 在 secondmate 的 home 也不會被拒絕，那裡會開出另一個看板（沒有規則叫 second mate 跑它）。

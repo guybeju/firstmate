@@ -41,7 +41,7 @@ EOF
 
 t() {
   case "${1:-}" in open | stop | restart) sig_product_target "$MAIN" "$1" ;; esac
-  FM_HOME="$MAIN" FM_ROOT_OVERRIDE="$CODE_ROOT" "$CODE_ROOT/bin/myshape.sh" "$@"
+  MYSHAPE_HOME="$MAIN" MYSHAPE_ROOT_OVERRIDE="$CODE_ROOT" "$CODE_ROOT/bin/myshape.sh" "$@"
 }
 
 view() {

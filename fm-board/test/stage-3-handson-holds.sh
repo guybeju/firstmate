@@ -76,11 +76,19 @@ tb_bind_home "$MAIN"
 tb_write_topics "$MAIN"
 
 # on <root> <command> <arguments...>: one of <root>'s commands for the main home.
+# The board's command gets the home under both names: the old root's reads
+# FM_HOME, this checkout's MYSHAPE_HOME.
 on() {
   local root=$1 command=$2
   shift 2
   case "$command:${1:-}" in myshape.sh:open | myshape.sh:stop | myshape.sh:restart) sig_product_target "$MAIN" "$1" ;; esac
-  FM_HOME="$MAIN" FM_ROOT_OVERRIDE="$root" "$root/bin/$command" "$@"
+  case "$command" in
+    myshape.sh)
+      FM_HOME="$MAIN" FM_ROOT_OVERRIDE="$root" MYSHAPE_HOME="$MAIN" MYSHAPE_ROOT_OVERRIDE="$root" \
+        "$root/bin/$command" "$@"
+      ;;
+    *) FM_HOME="$MAIN" FM_ROOT_OVERRIDE="$root" "$root/bin/$command" "$@" ;;
+  esac
 }
 
 view() {  # [jq filter]: the board's state after a read of every home

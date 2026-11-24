@@ -26,7 +26,7 @@ MAIN=$(tb_make_service_home main)
 tb_bind_home "$MAIN"
 
 t() {
-  FM_HOME="$MAIN" FM_ROOT_OVERRIDE="$CODE_ROOT" "$CODE_ROOT/bin/myshape.sh" "$@"
+  MYSHAPE_HOME="$MAIN" MYSHAPE_ROOT_OVERRIDE="$CODE_ROOT" "$CODE_ROOT/bin/myshape.sh" "$@"
 }
 
 t open >/dev/null || fail "the board did not start"
