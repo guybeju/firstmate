@@ -89,9 +89,12 @@ dry_log() {
 }
 
 # sig_leftovers: in a signal dry run, give processes the run left under
-# TMP_ROOT ten seconds to end by themselves, then log every one still there
-# with its ancestry: these are what the cleanup on exit would signal. Outside
-# a dry run it does nothing.
+# TMP_ROOT ten seconds to end by themselves, then log every one still there:
+# these are what the cleanup on exit would signal. Under the board's library
+# (TB_TEST_ROOTS set) each is logged with the guard's --identity verdict, the
+# form that cleanup uses; under Firstmate's tests/lib.sh, whose own cleanup
+# and guard decide and log them, each gets one plain line. Outside a dry run
+# it does nothing.
 sig_leftovers() {
   local pids pid i=0
   signal_dry_run || return 0
@@ -106,7 +109,11 @@ sig_leftovers() {
     return 0
   fi
   for pid in $pids; do
-    "$SIGNAL_CHECK" "$$" "$FM_TEST_SIGNAL_LOG" "leftover the cleanup on exit would signal" --identity "$pid" >/dev/null
+    if [ -n "${TB_TEST_ROOTS:-}" ]; then
+      "$SIGNAL_CHECK" "$$" "$FM_TEST_SIGNAL_LOG" "leftover the cleanup on exit would signal" --identity "$pid" >/dev/null
+    else
+      dry_log "leftover pid $pid ($(ps -ww -o args= -p "$pid" 2>/dev/null || true)): tests/lib.sh's cleanup decides it, through tests/signal-guard.sh"
+    fi
   done
 }
 

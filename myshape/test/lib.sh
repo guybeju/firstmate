@@ -123,7 +123,7 @@ fm_git_init_commit() {
 
 # The run's temp directory, fixed here so that every root of the run lies
 # below it: TMPDIR as a physical path, or /tmp when TMPDIR is unset, not a
-# directory, inside a git checkout, or longer than 40 characters. That last
+# directory, holds a .git entry itself, or is longer than 40 characters. That last
 # rule is kit/helpers.sh's (a board's socket path must stay short), applied
 # here first so the base does not change after the kit is sourced.
 tb_lib_tmpdir=${TMPDIR:-}

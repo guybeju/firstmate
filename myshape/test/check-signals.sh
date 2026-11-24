@@ -4,10 +4,12 @@
 # their text lives in these files. No file is exempt. Comment lines are not
 # checked (shell "#" lines; in .mjs and .js files also "//", "/*" and "*").
 #   - no line may combine a signal with a pid found by walking up the process
-#     tree ($PPID or ps -o ppid): a wrapper that execs, or a parent that dies
-#     first, moves that pid one level up, and on a desktop the parent of an
-#     orphan is the user's service manager, so signalling it ends the login;
-#   - no line may use the pattern-based signal commands (p-, -all);
+#     tree ($PPID, a ppid field or getppid, or /proc/<pid>/stat): a wrapper
+#     that execs, or a parent that dies first, moves that pid one level up,
+#     and on a desktop the parent of an orphan is the user's service manager,
+#     so signalling it ends the login;
+#   - no line may use the pattern-based or group signal commands (p-, -all,
+#     s-, snice, -pg);
 #   - the only shell signal command is the one send line of the guard,
 #     myshape/test/signal-guard.sh; the only other shell form allowed is the
 #     probe that sends nothing, the signal command with -0 and one quoted
@@ -28,8 +30,9 @@ TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$TEST_DIR/../.." && pwd)"
 [ "$#" -eq 0 ] || { echo "usage: myshape/test/check-signals.sh (it takes no arguments)" >&2; exit 2; }
 signal='kill'
-ancestor='PPID|ps -o ppid'
-banned="p${signal}|${signal}all"
+nice='nice'
+ancestor='PPID|ppid|getppid|/proc/[^ ]*/stat'
+banned="p${signal}|${signal}all|s${signal}|s${nice}|${signal}pg"
 guard_file="$TEST_DIR/signal-guard.sh"
 guard_line="  ${signal} -s \"\$1\" \"\$2\" 2>/dev/null || sent_rc=3"
 browser_file="$TEST_DIR/kit/browser.mjs"
