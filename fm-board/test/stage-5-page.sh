@@ -5,8 +5,8 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tests/lib.sh"
-# shellcheck source=myshape/test/helpers.sh
-. "$ROOT/myshape/test/helpers.sh"
+# shellcheck source=fm-board/test/helpers.sh
+. "$ROOT/fm-board/test/helpers.sh"
 
 for tool in jq node firefox; do
   command -v "$tool" >/dev/null 2>&1 || { echo "skip: $tool not found"; exit 0; }
@@ -110,7 +110,7 @@ printf 'PR 開好了，等你看。' | "$TB_TOPIC" summary ship-a ready - >/dev/
 test_the_captains_path() {
   local url out
   url=$("$TB_TOPIC" open)
-  out=$(node "$ROOT/myshape/test/browser.mjs" "$url" "$ROOT/fm-board/test/stage-5-page.mjs" 2>&1) ||
+  out=$(node "$ROOT/myshape/test/kit/browser.mjs" "$url" "$ROOT/fm-board/test/stage-5-page.mjs" 2>&1) ||
     fail "the browser walk-through failed: $out"
   grep -q 'stdin=call-1	合併	合併	release' "$TB_LOG" || fail "the answer chosen in the page did not reach the hold"
   grep -q 'stdin=［議題：Billing X（billing）］\\n先做這個' "$TB_LOG" || fail "the message typed in the page did not reach firstmate"
@@ -130,7 +130,7 @@ test_a_killed_run_leaves_no_profile_behind() {
   local url pid tries dead stale
   url=$("$TB_TOPIC" open)
   printf 'export default () => new Promise(() => {});\n' > "$TMP_ROOT/hang.mjs"
-  node "$ROOT/myshape/test/browser.mjs" "$url" "$TMP_ROOT/hang.mjs" >/dev/null 2>&1 &
+  node "$ROOT/myshape/test/kit/browser.mjs" "$url" "$TMP_ROOT/hang.mjs" >/dev/null 2>&1 &
   pid=$!
   for tries in $(seq 1 50); do
     [ -n "$(profiles_of "$pid")" ] && break
@@ -148,7 +148,7 @@ test_a_killed_run_leaves_no_profile_behind() {
   stale="$HOME/tb-firefox-tmp-$dead-stale"
   mkdir "$stale"
   printf 'export default () => {};\n' > "$TMP_ROOT/noop.mjs"
-  node "$ROOT/myshape/test/browser.mjs" "$url" "$TMP_ROOT/noop.mjs" >/dev/null 2>&1 ||
+  node "$ROOT/myshape/test/kit/browser.mjs" "$url" "$TMP_ROOT/noop.mjs" >/dev/null 2>&1 ||
     { rmdir "$stale" 2>/dev/null; fail "the follow-up run failed"; }
   [ -e "$stale" ] && { rmdir "$stale"; fail "the next run must sweep a dead run's profile"; }
   pass "a killed browser run leaves no profile in the home directory"

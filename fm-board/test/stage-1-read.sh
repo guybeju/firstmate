@@ -4,8 +4,8 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tests/lib.sh"
-# shellcheck source=myshape/test/helpers.sh
-. "$ROOT/myshape/test/helpers.sh"
+# shellcheck source=fm-board/test/helpers.sh
+. "$ROOT/fm-board/test/helpers.sh"
 
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 TMP_ROOT=$(fm_test_tmproot myshape-stage-1-read)
@@ -233,11 +233,9 @@ test_a_spawn_seeded_worker_is_unstarted() {
 # unbound variable. Linux cannot show that failure, so the shape is checked.
 # The board's own two scripts have the same check in myshape/test/stage-1-topic.sh.
 test_variables_are_braced_before_wide_characters() {
-  local script hits
-  for script in fm-topic-board-read.sh; do
-    hits=$(LC_ALL=C grep -nE '\$[A-Za-z_][A-Za-z0-9_]*[^ -~]' "$ROOT/bin/$script" || true)
-    assert_equals "" "$hits" "$script: write \${name} when a non-ASCII character follows the variable"
-  done
+  local hits
+  hits=$(LC_ALL=C grep -nE '\$[A-Za-z_][A-Za-z0-9_]*[^ -~]' "$ROOT/bin/fm-topic-board-read.sh" || true)
+  assert_equals "" "$hits" "fm-topic-board-read.sh: write \${name} when a non-ASCII character follows the variable"
   pass "no variable is directly followed by a non-ASCII character"
 }
 

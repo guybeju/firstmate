@@ -4,10 +4,10 @@
 # against the topics these change is in fm-board/test/stage-2-topics-tag.sh.
 set -u
 
-# shellcheck source=tests/lib.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tests/lib.sh"
-# shellcheck source=myshape/test/helpers.sh
-. "$ROOT/myshape/test/helpers.sh"
+# shellcheck source=myshape/test/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+# shellcheck source=myshape/test/kit/helpers.sh
+. "$ROOT/myshape/test/kit/helpers.sh"
 
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 command -v node >/dev/null 2>&1 || { echo "skip: node not found"; exit 0; }

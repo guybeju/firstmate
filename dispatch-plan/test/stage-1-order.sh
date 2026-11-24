@@ -5,8 +5,8 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tests/lib.sh"
-# shellcheck source=myshape/test/helpers.sh
-. "$ROOT/myshape/test/helpers.sh"
+# shellcheck source=myshape/test/kit/helpers.sh
+. "$ROOT/myshape/test/kit/helpers.sh"
 
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 TMP_ROOT=$(fm_test_tmproot dispatch-plan-stage-1-order)

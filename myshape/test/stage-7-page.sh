@@ -8,14 +8,12 @@
 # shellcheck disable=SC2016 # jq filters are literal text.
 set -u
 
-# shellcheck source=tests/lib.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tests/lib.sh"
-# shellcheck source=myshape/test/helpers.sh
-. "$ROOT/myshape/test/helpers.sh"
+# shellcheck source=myshape/test/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+# shellcheck source=myshape/test/kit/helpers.sh
+. "$ROOT/myshape/test/kit/helpers.sh"
 # shellcheck source=myshape/test/standalone-lib.sh
 . "$ROOT/myshape/test/standalone-lib.sh"
-# shellcheck source=myshape/test/signal-lib.sh
-. "$ROOT/myshape/test/signal-lib.sh"
 
 for tool in jq node curl git firefox; do
   command -v "$tool" >/dev/null 2>&1 || { echo "skip: $tool not found"; exit 0; }
@@ -86,7 +84,7 @@ SH
   sa "$home" create "之後" --goal "g" --id later-one --queue later >/dev/null
   printf '建好了。\n' | sa "$home" summary j1 ready - >/dev/null
   out=$(TB_TOPIC="$TMP_ROOT/topic" TB_AGG="$agg" TB_PROGRAM="$program" TB_RECOMMIT="$TMP_ROOT/recommit" TB_PAGE_MODE=connected \
-    node "$ROOT/myshape/test/browser.mjs" "$(sa "$home" open)" "$ROOT/myshape/test/stage-7-page.mjs" 2>&1) || rc=$?
+    node "$ROOT/myshape/test/kit/browser.mjs" "$(sa "$home" open)" "$ROOT/myshape/test/stage-7-page.mjs" 2>&1) || rc=$?
   assert_equals 0 "$rc" "the browser walk with an aggregator failed: $out"
   sa "$home" stop >/dev/null
   sa_check_decoys "$home"
@@ -104,7 +102,7 @@ test_the_page_with_nothing_connected() {
   sa "$home" create "一" --goal "g" --id one >/dev/null
   sa "$home" create "二" --goal "g" --id two --queue later >/dev/null
   out=$(TB_TOPIC="$TMP_ROOT/topic-alone" TB_PAGE_MODE=alone \
-    node "$ROOT/myshape/test/browser.mjs" "$(sa "$home" open)" "$ROOT/myshape/test/stage-7-page.mjs" 2>&1) || rc=$?
+    node "$ROOT/myshape/test/kit/browser.mjs" "$(sa "$home" open)" "$ROOT/myshape/test/stage-7-page.mjs" 2>&1) || rc=$?
   assert_equals 0 "$rc" "the browser walk with nothing connected failed: $out"
   sa "$home" stop >/dev/null
   pass "with nothing connected the page shows one plain note and no red mark (AT10.6)"

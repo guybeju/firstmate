@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The hardened environment every stage-7 script runs the board in (AT0 of the
-# board-interface test plan). Sourced after tests/lib.sh and helpers.sh, once
-# TMP_ROOT is set. It runs the board from a board-only root (tb_make_board_root)
-# with:
+# board-interface test plan). Sourced after the test library
+# (myshape/test/lib.sh; Firstmate's tests/lib.sh for
+# fm-board/test/stage-7-upgrade.sh) and kit/helpers.sh, once TMP_ROOT is set.
+# It runs the board from a board-only root (tb_make_board_root) with:
 #   - a clean environment: env -i with only HOME, PATH, LANG, TMPDIR, FM_HOME
 #     and the test's own timing variables, so no FM_*_OVERRIDE and no real
 #     FM_HOME the caller has can steer the board;

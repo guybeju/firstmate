@@ -6,8 +6,8 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tests/lib.sh"
-# shellcheck source=myshape/test/helpers.sh
-. "$ROOT/myshape/test/helpers.sh"
+# shellcheck source=fm-board/test/helpers.sh
+. "$ROOT/fm-board/test/helpers.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-board-stage-8-old-name)
 OLD="$ROOT/bin/fm-topic.sh"
