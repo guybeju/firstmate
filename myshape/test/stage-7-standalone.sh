@@ -232,14 +232,14 @@ test_the_http_side() {
   pass "the page's HTTP checks hold, and the board shows only its own data"
 }
 
-# split with tasks names Firstmate's command; the subcommands Firstmate took
-# over are not the board's at all.
+# A split that names tasks is a usage error of the board's split; the
+# subcommands Firstmate took over are not the board's at all.
 test_old_forms() {
   local form out rc
   rc=0
   out=$(t split a Part --goal g t1 2>&1) || rc=$?
   assert_equals 2 "$rc" "split with tasks must be a usage error"
-  assert_contains "$out" "改用 bin/fm-board.sh split" "split with tasks must name its new command"
+  assert_contains "$out" "split 的用法：myshape.sh split <from> <name> --goal <…>" "split with tasks must get the board's usage line"
   for form in "tag t1 a" "--in-home sm1 tag t1 a" "setup" "install-rules" "order"; do
     rc=0
     # shellcheck disable=SC2086 # each form is a list of words.
@@ -248,7 +248,7 @@ test_old_forms() {
     assert_contains "$out" "不認得的子命令" "'$form' must not be a subcommand of the board"
   done
   assert_absent "$MAIN/data/t1" "an old form must write no tag"
-  pass "split with tasks names its new command, the subcommands Firstmate took over are unknown, and nothing is written"
+  pass "split with tasks gets the board's usage line, the subcommands Firstmate took over are unknown, and nothing is written"
 }
 
 # new_writes <ids-json>: the writes the board shows that are not in <ids-json>.

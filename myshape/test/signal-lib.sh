@@ -14,9 +14,9 @@ TB_SIGNAL_LIB_SOURCED=1
 # per call to FM_TEST_SIGNAL_LOG (an absolute path), so the targets can be read
 # before a real run; the assertions that need a killed run are skipped, and
 # every shim and migration ends by itself.
-# FM_TEST_SIGNAL_DRY_RUN=unfixed: the same; fm-board/test/stage-8-migrate.sh
-# also logs the target its shim chose before the fix there. Nothing is
-# signalled in either mode. With FM_TEST_SIGNAL_LOG set outside log-only mode
+# FM_TEST_SIGNAL_DRY_RUN=unfixed: the same, accepted as tests/lib.sh accepts
+# it, for a run that rebuilds a case from before a fix. Nothing is signalled
+# in either mode. With FM_TEST_SIGNAL_LOG set outside log-only mode
 # the guard records each call and sends.
 case "${FM_TEST_SIGNAL_DRY_RUN:-}" in
   '' | 1 | unfixed) ;;

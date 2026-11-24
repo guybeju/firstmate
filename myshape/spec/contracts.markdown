@@ -445,7 +445,7 @@ first mate 這一側的 `deliver` 每一種跑哪個指令、怎麼對應結果�
 | 69 | 看板服務不可用 |
 
 除了 `open` 與 `--help`，每個子命令在沒有 `state/myshape/token` 的 home（看板從來沒在那裡跑過）都回 1，stderr 是「這裡沒有看板（找不到 state/myshape/token）；要在這裡開看板先跑 myshape.sh open。」，什麼都不寫。
-移到 first mate 這一側的舊寫法（`tag`、`--in-home`、`setup`、帶 task 的 `split`、`install-rules`、`order`）回 2，stderr 一行指出新的指令（adapter 第 2 節）。
+移到 first mate 這一側的舊寫法（`tag`、`--in-home`、`setup`、`install-rules`、`order`）是不認得的子命令，帶 task 的 `split` 是 `split` 的用法錯，都回 2，什麼都不寫（新的指令見 adapter 第 2 節）。
 
 成功印一行 `ok <id> <做了什麼>`；`summary`、`which`、`find`、`list`、`status`、`open` 各有自己的輸出。錯誤在 stderr 印一行原因與修法。只有 `list` 有 `--json`。
 

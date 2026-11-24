@@ -54,16 +54,12 @@ scan() {
   done <<< "$(board_files)"
 }
 
-# The lines allowed to name a Firstmate file (the revised plan's B4 column):
-# the old-path refusal, which names Firstmate's move to the new names until
-# that move is gone, and the split line naming the command that moves tasks.
-# The service runs only the programs a home's binding file names, so the
-# board's code names none.
+# The lines allowed to name a Firstmate file: none (AT3.1's empty allow-list).
+# The service runs only the programs a home's binding file names, and the
+# command no longer points at any Firstmate command, so the board's code names
+# none. A line added here is one more that may.
 pinned() {
-  cat <<'PINS'
-bin/myshape.sh	service_unavailable "這個 home 還有改名前的 $1" "先跑 bin/fm-board.sh migrate-myshape 搬到新名字"
-bin/myshape.sh	usage_error "split 只建議題；要一起搬 task，改用 bin/fm-board.sh split <議題 id> <新名稱> --goal <一行> <task…>"
-PINS
+  :
 }
 
 test_the_scan_finds_only_pinned_lines() {

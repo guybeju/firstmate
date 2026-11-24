@@ -44,7 +44,8 @@ NEW=$TMP_ROOT/new-root
 tb_make_fake_root "$NEW"
 
 # old_root <dir>: a fake root like NEW whose every script and whose board build
-# are OLD_BASE's own files; the stand-ins and the fm-board.sh wrapper stay.
+# are OLD_BASE's own files, also the ones this checkout no longer has; the
+# stand-ins and the fm-board.sh wrapper stay.
 old_root() {
   local dir=$1 source=$TMP_ROOT/old-source path name
   tb_make_fake_root "$dir" >/dev/null
@@ -57,6 +58,10 @@ old_root() {
     [ -f "$source/bin/$name" ] || continue
     rm "$path"
     cp -p "$source/bin/$name" "$path"
+  done
+  for path in "$source"/bin/*; do
+    name=${path##*/}
+    [ -e "$dir/bin/$name" ] || cp -p "$path" "$dir/bin/$name"
   done
   rm "$dir/myshape/dist"
   cp -R "$source/myshape/dist" "$source/myshape/public" "$source/myshape/package.json" "$dir/myshape/"

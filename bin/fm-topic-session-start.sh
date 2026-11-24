@@ -25,10 +25,7 @@
 # The service writes that token the first time it starts successfully and
 # never deletes it (stop keeps it), while fm-board.sh setup and install-rules
 # and a start that failed leave none, so the token marks a main home whose
-# board has run. A main home that still has it under the board's old name,
-# state/topic-board/token, has not been moved to the new names yet: it gets
-# the 無法啟動 line naming bin/fm-board.sh migrate-myshape, and nothing is
-# started.
+# board has run.
 #
 # In such a home without config/myshape-aggregator.json, it first writes the
 # board's binding to firstmate (bin/fm-board.sh bind), so a home set up before
@@ -104,11 +101,7 @@ report_open() {  # <rc> <err> <first> <bound>
 main() {
   local status_out first err rc=0 bound=0
   fm_root_is_secondmate_home "$FM_HOME" && return 0
-  if [ ! -f "$STATE/myshape/token" ]; then
-    [ ! -f "$STATE/topic-board/token" ] ||
-      printf '%s\n' '看板服務：無法啟動：還沒搬到新名字，跑 bin/fm-board.sh migrate-myshape'
-    return 0
-  fi
+  [ -f "$STATE/myshape/token" ] || return 0
   if [ ! -e "$CONFIG/myshape-aggregator.json" ] && [ ! -L "$CONFIG/myshape-aggregator.json" ]; then
     [ "$("$SCRIPT_DIR/fm-board.sh" bind 2>/dev/null)" != "$BIND_WROTE_LINE" ] || bound=1
   fi

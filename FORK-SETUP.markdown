@@ -212,18 +212,8 @@ bin/fm-board.sh install-rules
 - **fork 有新版**（看板或 fork 的修正進了 `carry`）：在主 home 跑 `/updatefirstmate`。
   下一個看板指令發現服務的程式版本或設定檔不同，會自動換掉舊服務（開 session 時的檢查只在替這個 home 補寫設定檔時換，其他時候只回報 `看板服務：在跑`）；`status` 出現「目前的程式是 …；下一個指令或 restart 會換成新版」時，也可以直接 `bin/myshape.sh restart`。
   **確認**：`status` 的 `程式版本：` 等於 `git -C <clone> rev-parse HEAD`。
-- **看板改名成 myshape 的那一次更新**（只有一次）：看板的程式、指令與檔案從 `topic-board`、`fm-topic.sh` 改名成 `myshape`、`myshape.sh`。
-  有看板資料的 home 一更新到這一版，看板的每個指令都回 69，說這個 home 還有改名前的檔；還開著的舊服務也不再給頁面，直到那個 home 跑過 `bin/fm-board.sh migrate-myshape`。
-  所以更新和搬家要在同一次做完：使用者明講之後，`/updatefirstmate`，再跑
-  ```
-  bin/fm-board.sh migrate-myshape --check
-  bin/fm-board.sh migrate-myshape
-  ```
-  它停掉舊服務，把 `state/topic-board`、`data/topic-board`、`config/topic-board-port` 搬到新名字，核對搬過去的每個檔，換掉兩個規則檔裡舊標記的區塊（不用另外跑 `install-rules`），把看板自己下的 hold 的原因改成新的開頭 `看板佇列：`，清掉 checkout 裡改名前留下的 `topic-board/`，最後重新打開看板並印出網址；然後重開 session。
-  **確認**：最後一行是 `已搬完`，前面有 `S6：… 個檔的校驗碼和搬之前相同` 與 `… 都和搬之前相同`；`bin/fm-board.sh migrate-myshape --check` 印 `已搬完`；`bin/fm-board.sh rules` 印 `規則：captain.md 和範本相同（v11）；captain-shared.md 和範本相同（v5）`；`bin/myshape.sh status` 是 `看板服務：在跑`，`程式版本：` 等於 `git -C <clone> rev-parse HEAD`。
-  **不對時**：照它印的那一行處理後原樣再跑一次；中途停掉也一樣，再跑一次會接著做完。
-  有 second mate 時，每個 second mate 的 home 也跑一次（遠端的是 `bin/fm-on.sh <id> fm-board.sh migrate-myshape`）：那裡沒有看板的檔，只清那個 code root；共用的規則檔照平常由主 home 傳過去。
-  還沒重開的 session 照舊規則跑 `bin/fm-topic.sh` 時，那支舊名字什麼都不做，只回改用哪個指令與使用者還要跑什麼。
+- **看板改名成 myshape 的那一次更新**：已經過去了，每個跟著 `carry` 的 home 都搬完，搬家的指令與改名前的名字的處理也拿掉了。
+  還有一個停在改名前的名字的 home 時，要先更新到中間的一個 commit、在那裡搬家，再更新到最新，步驟在 [rollout「之後怎麼更新」](fm-board/spec/rollout.markdown)。
 - **看板改由設定檔接上 first mate 的那一次更新**（只有一次）：更新之前就設好的主 home 沒有 `config/myshape-aggregator.json`。
   更新後第一次開 session、或第一個 `bin/fm-board.sh tag`、`split`（first mate 派工與歸併時會跑）先到的那一個替它寫好；開 session 時換掉在跑的看板，印 `看板服務：已接上 firstmate，換上新的看板`，指令則在 stderr 印一行「看板的 aggregator 設定原本不在，已寫好：firstmate…」。不用手動做什麼。
   在那之前，舊的看板服務照舊執行 `bin/fm-board.sh`，要送出的照常送出。
@@ -252,7 +242,7 @@ bin/fm-board.sh install-rules
   它用的 pnpm 與 `tasks-axi` 鎖在只給 CI 用的 `ci-tools/board-tests/`。
 - **退回較舊的版本或退回上游**：沒有定好的步驟。
   退版之前先備份 `data/topics.json`，舊版存檔時會丟掉後來才加的欄位（rollout「之後怎麼更新」）。
-  要退回看板改名成 myshape 之前的程式，先在每個跑過 `migrate-myshape` 的 home 跑 `bin/fm-board.sh migrate-myshape --undo`，再退程式：舊的程式只認舊的名字。
+  要退回看板改名成 myshape 之前的程式，要先退到改名之後、拿掉搬家指令之前的一個 commit，在那裡把每個搬過的 home 搬回舊名字，再往前退：舊的程式只認舊的名字；步驟在 [rollout「之後怎麼更新」](fm-board/spec/rollout.markdown)。
   要退回看板經 `bin/fm-board.sh feed` 與 `deliver` 讀寫之前的程式，先跑 `bin/myshape.sh stop`，把 `state/myshape/audit.jsonl` 移到別處，再退程式：舊的程式讀不懂這一版寫的寫入紀錄，頁面上的寫入歷史會從空的開始。
   退回看板自己存「要你動手」的項目之前的程式時，看板上的項目不會顯示，只剩 backlog 裡還開著的舊 hold；`data/myshape/todos.json` 留著，回到新版時項目又會出現。
   不想讓看板執行任何程式時，在 `config/myshape-aggregator.json` 放一個空檔（`: > config/myshape-aggregator.json`）再跑 `bin/myshape.sh restart`：看板照常顯示與存檔，要送出的等著；只刪掉那個檔不夠，下一次開 session 或下一個 `bin/fm-board.sh tag`、`split` 會把它寫回來，而它們從不換掉已經在那裡的檔。要接回去，刪掉空檔、跑 `bin/fm-board.sh bind`，再 restart，等著的各送一次。

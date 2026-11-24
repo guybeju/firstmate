@@ -217,22 +217,6 @@ test_main_home_without_the_board_gets_nothing() {
   pass "a main home whose board never ran gets no board line and no board"
 }
 
-# A home still under the board's old names, as it is after the code update and
-# before Firstmate moves it: the digest names the move and nothing starts.
-test_unmoved_home_gets_the_migration_line() {
-  local home out
-  home=$(used_home unmoved)
-  mv "$home/state/myshape" "$home/state/topic-board"
-  cp "$home/config/myshape-port" "$home/config/topic-board-port"
-  out=$(session_start "$home")
-  assert_contains "$out" "NEXT STEP" "the digest must complete"
-  assert_equals "看板服務：無法啟動：還沒搬到新名字，跑 bin/fm-board.sh migrate-myshape" "$(board_lines "$out")" \
-    "a home under the old names must get exactly the migration line"
-  assert_equals 0 "$(tb_board_count "$home")" "a home under the old names must not start a board"
-  assert_absent "$home/state/myshape" "nothing may be created under the new name"
-  pass "a home still under the old names gets one line naming the move, and no board"
-}
-
 test_read_only_session_gets_nothing() {
   local home out holder
   home=$(used_home readonly)
@@ -262,6 +246,6 @@ test_reemit_gets_nothing() {
 
 fm_test_run test_reports_a_running_board_without_touching_it test_starts_a_stopped_board \
   test_restarts_a_board_that_does_not_answer test_reports_why_a_board_could_not_start test_reduces_a_multi_line_reason_to_one_line \
-  test_secondmate_home_gets_nothing test_unmoved_home_gets_the_migration_line \
+  test_secondmate_home_gets_nothing \
   test_main_home_without_the_board_gets_nothing test_read_only_session_gets_nothing \
   test_reemit_gets_nothing

@@ -181,30 +181,6 @@ test_ranks_an_untagged_item_by_its_topic_line() {
   pass "order ranks an untagged item by its topic line, and a tag wins"
 }
 
-# A hold the board made before the rename to myshape still starts with
-# topic-board：; it is the board's no longer, so order warns and lists it nowhere.
-test_warns_about_holds_from_before_the_rename() {
-  local home out
-  home=$(tb_make_home order-old-marker)
-  tb_write_topics "$home"
-  write_backlog "$home"
-  write_tags "$home"
-  out=$(tb_run "$home" "$PLAN" order)
-  assert_not_contains "$out" "舊標記" "no warning while every board hold has the new prefix"
-  sed -i.bak 's/(hold: 看板佇列：議題 parked/(hold: topic-board：議題 parked/; s/(hold: 看板佇列：議題 billing/(hold: topic-board：議題 billing/' \
-    "$home/data/backlog.md"
-  out=$(tb_run "$home" "$PLAN" order)
-  assert_equals "有 2 個舊標記的 hold，先跑 bin/fm-board.sh migrate-myshape" "$(printf '%s\n' "$out" | head -n 1)" \
-    "order must lead with the count of old-prefix holds and the command"
-  assert_equals "" "$(section "$out" "停著：")" "an old-prefix hold is not the board's to park"
-  assert_equals "" "$(section "$out" "該解除：")" "an old-prefix hold is not the board's to release"
-  assert_not_contains "$(section "$out" "可派：")" "r1" "an old-prefix hold must not become dispatchable"
-  assert_equals "l2 r1 o1 b1 c1 " "$(section "$out" "先不派：")" "an old-prefix hold must be listed under 先不派"
-  assert_contains "$out" "$(printf 'r1\t帳務重構\t高\t← 舊標記的 hold，先跑 bin/fm-board.sh migrate-myshape')" \
-    "an old-prefix hold must name the migration command"
-  pass "order warns about holds from before the rename and leaves them held"
-}
-
 # every_listed <output>: each task id listed under any section, one per line, sorted and unique.
 every_listed() {
   printf '%s\n' "$1" | awk '/^  / { sub(/^  /, ""); split($0, cols, "\t"); print cols[1] }' | sort -u
@@ -302,5 +278,5 @@ test_falls_open_when_the_snapshot_fails() {
 
 fm_test_run test_sections test_lists_hands_on_items_waiting_for_a_check \
   test_falls_open_without_a_usable_topic_file test_ranks_an_untagged_item_by_its_topic_line \
-  test_warns_about_holds_from_before_the_rename test_resolves_archived_blockers_and_lists_every_item \
+  test_resolves_archived_blockers_and_lists_every_item \
   test_falls_open_when_the_snapshot_fails

@@ -101,14 +101,6 @@
 # retract takes the task's latest summary of that kind off the board when it
 # turned out to be wrong; stdin is the reason. The line stays in the file.
 #
-# split with tasks is not this command's: it exits 2 with one line naming the
-# command that has it, and writes nothing.
-#
-# Until a home is moved to this command's names, every subcommand there is
-# refused with exit 69 and nothing is written: a home that still has
-# state/topic-board, data/topic-board, or config/topic-board-port while the new
-# name beside it is missing is moved first, by the command the refusal names.
-#
 # Exit codes: 0 success (including an identical repeat), 1 refused or failed
 # with nothing written, 2 usage error, 3 outcome unknown (the request was sent
 # but no answer came back; repeat it once), 69 the board service is unavailable.
@@ -155,22 +147,6 @@ usage() {
 usage_error() {
   printf '%s\n' "myshape.sh: $*（myshape.sh --help 看用法）" >&2
   exit 2
-}
-
-# The board's paths from before the rename. A home holding one of them while
-# its new name is missing has not been moved yet; the board runs nowhere near
-# it, so that a stray command never starts a second, empty board beside the
-# old data.
-refuse_unmoved() {  # <old path> <new path>
-  if [ -e "$1" ] && [ ! -e "$2" ]; then
-    service_unavailable "這個 home 還有改名前的 $1" "先跑 bin/fm-board.sh migrate-myshape 搬到新名字"
-  fi
-}
-
-require_moved() {
-  refuse_unmoved "$STATE/topic-board" "$STATE/myshape"
-  refuse_unmoved "$DATA/topic-board" "$DATA/myshape"
-  refuse_unmoved "$CONFIG/topic-board-port" "$CONFIG/myshape-port"
 }
 
 # Every subcommand but open needs a home whose board has run: the service
@@ -388,33 +364,12 @@ cmd_service() {
     --exempt "$exempt" -- "$@"
 }
 
-# How many words of a split are not options or option values: the source
-# topic, the new name, and any task the caller wanted moved along.
-split_word_count() {
-  local count=0
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --goal | --id | --reason) shift ;;
-      --*) ;;
-      *) count=$((count + 1)) ;;
-    esac
-    [ "$#" -eq 0 ] || shift
-  done
-  printf '%s\n' "$count"
-}
-
-# The forms this command no longer has: one line naming the command that has
-# them now, exit 2, nothing written. None of them needs the board to exist.
-refuse_old_form() {  # <subcommand> <arguments...>
-  local sub=$1
-  shift
-  case "$sub" in
-    split)
-      [ "$(split_word_count "$@")" -le 2 ] ||
-        usage_error "split 只建議題；要一起搬 task，改用 bin/fm-board.sh split <議題 id> <新名稱> --goal <一行> <task…>"
-      ;;
+# The forms this command no longer has: one line naming what to use now, exit
+# 2, nothing written. None of them needs the board to exist.
+refuse_old_form() {  # <subcommand>
+  case "$1" in
     # The board confirms every topic it makes; rules from before that still name these.
-    propose | confirm) usage_error "沒有 ${sub} 了：議題一建立就已確認。新議題用 create <名稱> --goal <一行>" ;;
+    propose | confirm) usage_error "沒有 ${1} 了：議題一建立就已確認。新議題用 create <名稱> --goal <一行>" ;;
   esac
 }
 
@@ -422,7 +377,7 @@ main() {
   [ "$#" -gt 0 ] || usage_error "少了子命令"
   local sub=$1
   shift
-  refuse_old_form "$sub" "$@"
+  refuse_old_form "$sub"
   case "$sub" in
     -h | --help)
       usage
@@ -432,7 +387,6 @@ main() {
       goal | archive | reopen | summary | retract | which | find | status | stop | restart | reset-token) ;;
     *) usage_error "不認得的子命令：$sub" ;;
   esac
-  require_moved
   [ "$sub" = open ] || require_board
   case "$sub" in
     list) cmd_list "$@" ;;

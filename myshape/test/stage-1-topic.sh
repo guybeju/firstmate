@@ -67,24 +67,22 @@ test_refused_where_no_board_has_run() {
   pass "every subcommand but open is refused where no board has run, and writes nothing"
 }
 
-# split with tasks moved out of this command; its old form names the command
-# that has it. The subcommands Firstmate's own commands took over are not this
-# command's at all: an agent with rules from before the rename calls them under
-# the old command name, whose stand-in answers them (fm-board/test).
-test_old_forms_name_the_new_command() {
-  local home out rc form expected sub
+# A split that names tasks is not this command's, and neither are the
+# subcommands Firstmate's own commands took over. Here, where no board has run,
+# a split with tasks meets the token guard (where one has, the board's own
+# usage check refuses it: stage-7-standalone.sh); nothing is written either way.
+test_old_forms_are_refused() {
+  local home out rc form sub
   home=$(tb_make_home old-forms)
   tb_write_topics "$home"
-  while IFS='|' read -r form expected; do
+  for form in "split billing Part --goal g task-1" "split billing Part --goal g --id p --reason r sm1/task-1"; do
     rc=0
     # shellcheck disable=SC2086 # each form is a list of words.
     out=$(tb_run "$home" "$TOPIC" $form 2>&1) || rc=$?
-    assert_equals 2 "$rc" "the old form '$form' must be a usage error"
-    assert_equals "myshape.sh: ${expected}（myshape.sh --help 看用法）" "$out" "the old form '$form' must name its new command"
-  done <<'EOF'
-split billing Part --goal g task-1|split 只建議題；要一起搬 task，改用 bin/fm-board.sh split <議題 id> <新名稱> --goal <一行> <task…>
-split billing Part --goal g --id p --reason r sm1/task-1|split 只建議題；要一起搬 task，改用 bin/fm-board.sh split <議題 id> <新名稱> --goal <一行> <task…>
-EOF
+    assert_equals 1 "$rc" "the old form '$form' must be refused where no board has run"
+    assert_equals "這裡沒有看板（找不到 state/myshape/token）；要在這裡開看板先跑 myshape.sh open。" "$out" \
+      "the old form '$form' must meet the token guard"
+  done
   for sub in tag setup install-rules order --in-home; do
     rc=0
     out=$(tb_run "$home" "$TOPIC" "$sub" x 2>&1) || rc=$?
@@ -95,7 +93,7 @@ EOF
   assert_absent "$home/config/fleet-ledger" "an old setup must not open the ledger"
   assert_absent "$home/data/captain.md" "an old install-rules must write no rules"
   assert_absent "$home/state/myshape" "an old form must not start a board"
-  pass "split with tasks names its new command, and Firstmate's subcommands are not this command's"
+  pass "split with tasks is refused, and Firstmate's subcommands are not this command's"
 }
 
 # bash 3.2 (the /bin/bash of macOS) reads the bytes of a non-ASCII character
@@ -189,5 +187,5 @@ test_usage() {
 }
 
 fm_test_run test_list test_list_without_jq test_refused_where_no_board_has_run \
-  test_old_forms_name_the_new_command test_variables_are_braced_before_wide_characters test_usage \
+  test_old_forms_are_refused test_variables_are_braced_before_wide_characters test_usage \
   test_every_write_reaches_the_board

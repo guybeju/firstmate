@@ -7,10 +7,8 @@
 # first the base's board files under their old names, whose service makes the
 # data and is left running with a message in flight; then this working tree's
 # board files committed on top. The test plays Firstmate's part with three
-# plain mv lines, the old names to the new ones. Before them every subcommand
-# of the new command refuses with exit 69 naming the move, ahead of the token
-# guard, and writes nothing; after them the next command replaces the old
-# service and finds every record the old code made.
+# plain mv lines, the old names to the new ones; after them the next command
+# replaces the old service and finds every record the old code made.
 #
 # The feed and action contracts, B1 to B2 (AT5.1, AT5.3 and AT5.6): the B1
 # board, given stand-ins for the Firstmate programs it ran, settles a relay,
@@ -225,8 +223,8 @@ tb_board_pid_in() {
   cat "$1/pid" 2>/dev/null || true
 }
 
-test_the_new_code_refuses_until_the_move() {
-  local path new_commit sub rc out
+test_the_new_code_lands_beside_the_old_board() {
+  local path new_commit
   for path in $BASE_BOARD_FILES; do
     rm -rf "${SA_ROOT:?}/$path"
   done
@@ -242,17 +240,7 @@ test_the_new_code_refuses_until_the_move() {
   NEW_COMMIT=$new_commit
   printf '0\n' > "$TMP_ROOT/inbox-exit"
   ps -p "$OLD_PID" >/dev/null 2>&1 || fail "the old board must still be running when the change lands"
-  for sub in open list status stop restart reset-token create find which todo summary merge move; do
-    rc=0
-    out=$(sa "$MAIN" "$sub" 2>&1 </dev/null) || rc=$?
-    assert_equals 69 "$rc" "$sub must refuse with 69 before the move"
-    assert_equals "看板服務無法啟動：這個 home 還有改名前的 $MAIN/state/topic-board。先跑 bin/fm-board.sh migrate-myshape 搬到新名字。這次的要求沒有寫入。" \
-      "$out" "$sub must name the move, ahead of the token guard"
-  done
-  assert_absent "$MAIN/state/myshape" "a refused command must write nothing"
-  assert_absent "$MAIN/data/myshape" "a refused command must write nothing"
-  ps -p "$OLD_PID" >/dev/null 2>&1 || fail "a refused command must leave the old board alone"
-  pass "before the move every subcommand of the new command refuses with 69, names the move, and writes nothing"
+  pass "the new code lands in the root while the old board keeps running"
 }
 
 test_the_next_command_after_the_move_replaces_the_board() {
@@ -981,7 +969,7 @@ write_state_of() {  # <write-id>
   api_state --arg id "$1" '.writes[] | select(.id == $id) | .state'
 }
 
-fm_test_run test_the_old_board_makes_its_data test_the_new_code_refuses_until_the_move \
+fm_test_run test_the_old_board_makes_its_data test_the_new_code_lands_beside_the_old_board \
   test_the_next_command_after_the_move_replaces_the_board test_the_note_in_flight_arrives_once test_the_new_side_reaches_no_firstmate_file \
   test_b2_the_b1_board_leaves_writes_settled_and_in_flight test_b2_the_next_command_replaces_the_board \
   test_b2_unfinished_writes_resume_or_show_once test_b2_the_new_side_reaches_no_firstmate_file \

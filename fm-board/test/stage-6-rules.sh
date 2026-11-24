@@ -15,8 +15,6 @@ TMP_ROOT=$(fm_test_tmproot fm-board-s6)
 RULES="$ROOT/fm-board/rules"
 BEGIN='<!-- myshape:begin'
 END='<!-- myshape:end -->'
-OLD_BEGIN='<!-- topic-board:begin'
-OLD_END='<!-- topic-board:end -->'
 
 install() {  # <home>
   tb_run "$1" "$BOARD" install-rules
@@ -130,86 +128,6 @@ test_second_run_changes_nothing() {
   pass "install-rules is idempotent and status compares the block's content"
 }
 
-# A home whose rules were installed under the board's old marker (main v9,
-# shared v3, or the older v8 and v2) gets the new blocks in the same place, not
-# a second block beside the old one.
-# shellcheck disable=SC2016 # the backticks in the planted lines are Markdown code spans.
-plant_old_blocks() {  # <home> <main version> <shared version>
-  {
-    printf '# 前面\n\n'
-    printf '%s %s（由 fm-board.sh install-rules 維護，要改請改範本） -->\n' "$OLD_BEGIN" "$2"
-    printf -- '- 新工作先用 `fm-topic.sh list` 找它的議題 id\n%s\n' "$OLD_END"
-    printf '\n# 後面\n'
-  } > "$1/data/captain.md"
-  {
-    cat "$RULES/captain-shared.header.md.tmpl"
-    printf '%s %s（由 fm-board.sh install-rules 維護，要改請改範本） -->\n' "$OLD_BEGIN" "$3"
-    printf -- '- 建立 backlog 項目時就跑 `bin/fm-board.sh tag <task-id> <議題 id>`\n%s\n' "$OLD_END"
-  } > "$1/data/captain-shared.md"
-}
-
-test_replaces_old_marker_blocks_in_place() {
-  local home out versions
-  for versions in "v9 v3" "v8 v2"; do
-    home=$(tb_make_home "old-marker-${versions% *}")
-    plant_old_blocks "$home" "${versions% *}" "${versions#* }"
-    assert_equals "規則：captain.md 舊標記（${versions% *}）；captain-shared.md 舊標記（${versions#* }）" "$(rules_line "$home")" \
-      "rules must report blocks with the old marker as such, never as 未裝"
-    out=$(install "$home") || fail "install-rules failed on old-marker blocks: $out"
-    assert_contains "$out" "captain.md：已更新（舊標記 ${versions% *} → v11），原檔備份在" "the main block must be updated from the old marker"
-    assert_contains "$out" "captain-shared.md：已更新（舊標記 ${versions#* } → v5），原檔備份在" "the shared block must be updated from the old marker"
-    assert_equals "$(printf '# 前面\n\n'; cat "$RULES/captain.block.md.tmpl"; printf '\n# 後面\n')" "$(cat "$home/data/captain.md")" \
-      "the old main block must be replaced in place"
-    assert_equals "$(cat "$RULES/captain-shared.header.md.tmpl" "$RULES/captain-shared.block.md.tmpl")" "$(cat "$home/data/captain-shared.md")" \
-      "the old shared block must be replaced in place"
-    assert_equals 0 "$(cat "$home/data/captain.md" "$home/data/captain-shared.md" | grep -c '<!-- topic-board:')" \
-      "no old marker may be left"
-    assert_equals "規則：captain.md 和範本相同（v11）；captain-shared.md 和範本相同（v5）" "$(rules_line "$home")" \
-      "rules must report the upgraded blocks as current"
-    assert_equals 2 "$(find "$home/state/fm-board/rules-backup" -type f | wc -l | tr -d ' ')" "each file must be backed up once"
-  done
-  pass "blocks with the board's old marker are replaced in place, from v9 and v3 as from v8 and v2"
-}
-
-# A file holding a block under each marker keeps only the new one.
-test_drops_an_old_block_beside_a_new_one() {
-  local home out where
-  for where in old-first new-first; do
-    home=$(tb_make_home "both-$where")
-    {
-      printf '# 前面\n'
-      [ "$where" = new-first ] || printf '%s v9 -->\n舊的規則\n%s\n' "$OLD_BEGIN" "$OLD_END"
-      printf '# 中間\n'
-      printf '%s v11 -->\n新的規則\n%s\n' "$BEGIN" "$END"
-      printf '# 再中間\n'
-      [ "$where" = old-first ] || printf '%s v9 -->\n舊的規則\n%s\n' "$OLD_BEGIN" "$OLD_END"
-      printf '# 後面\n'
-    } > "$home/data/captain.md"
-    assert_contains "$(rules_line "$home")" "captain.md 和範本不同（v11），另有舊標記（v9）" "status must report both blocks ($where)"
-    out=$(install "$home") || fail "install-rules failed with both markers ($where): $out"
-    assert_contains "$out" "captain.md：已更新（v11），舊標記的區塊也拿掉了，原檔備份在" "the removal must be reported ($where)"
-    assert_equals "$(printf '# 前面\n# 中間\n'; cat "$RULES/captain.block.md.tmpl"; printf '# 再中間\n# 後面\n')" \
-      "$(cat "$home/data/captain.md")" "only the new block may remain, in its place ($where)"
-    assert_contains "$(rules_line "$home")" "captain.md 和範本相同（v11）" "status must then report one current block ($where)"
-  done
-  pass "a file with a block under each marker keeps only the new block, in its place"
-}
-
-# A broken old marker is refused like a broken new one.
-test_refuses_a_broken_old_marker() {
-  local home out rc before
-  home=$(tb_make_home broken-old)
-  printf '%s v9 -->\n規則\n%s v11 -->\n新\n%s\n' "$OLD_BEGIN" "$BEGIN" "$END" > "$home/data/captain.md"
-  before=$(cat "$home/data/captain.md")
-  rc=0
-  out=$(install "$home" 2>&1) || rc=$?
-  assert_equals 1 "$rc" "install-rules must fail on an unpaired old marker"
-  assert_contains "$out" "captain.md：標記不成對" "install-rules must explain the unpaired old marker"
-  assert_equals "$before" "$(cat "$home/data/captain.md")" "the file must be left alone"
-  assert_contains "$(rules_line "$home")" "captain.md 標記不完整" "status must report the unpaired old marker"
-  pass "an unpaired old marker leaves the file untouched and is reported"
-}
-
 # A curation pass or an editor may reshape the marker lines without removing them.
 test_finds_reshaped_markers() {
   local home out variant
@@ -301,5 +219,4 @@ test_templates() {
 fm_test_run test_creates_both_files test_keeps_everything_outside_the_block test_replaces_an_old_block_in_place \
   test_updates_the_previous_version_in_place \
   test_second_run_changes_nothing test_finds_reshaped_markers test_refuses_unpaired_markers test_refuses_a_shared_file_with_a_bad_header \
-  test_main_home_only test_templates test_replaces_old_marker_blocks_in_place test_drops_an_old_block_beside_a_new_one \
-  test_refuses_a_broken_old_marker
+  test_main_home_only test_templates
