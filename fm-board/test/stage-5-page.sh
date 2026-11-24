@@ -110,7 +110,7 @@ printf 'PR 開好了，等你看。' | "$TB_TOPIC" summary ship-a ready - >/dev/
 test_the_captains_path() {
   local url out
   url=$("$TB_TOPIC" open)
-  out=$(node "$ROOT/myshape/test/browser.mjs" "$url" "$ROOT/myshape/test/stage-5-page.mjs" 2>&1) ||
+  out=$(node "$ROOT/myshape/test/browser.mjs" "$url" "$ROOT/fm-board/test/stage-5-page.mjs" 2>&1) ||
     fail "the browser walk-through failed: $out"
   grep -q 'stdin=call-1	合併	合併	release' "$TB_LOG" || fail "the answer chosen in the page did not reach the hold"
   grep -q 'stdin=［議題：Billing X（billing）］\\n先做這個' "$TB_LOG" || fail "the message typed in the page did not reach firstmate"

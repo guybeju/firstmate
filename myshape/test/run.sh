@@ -2,17 +2,18 @@
 # Runs the myshape test scripts for the given stages (all stages when none
 # are named). Each script is myshape/test/stage-<n>-*.sh and exits non-zero
 # on its first failed assertion. The scripts run under the bash that runs this
-# file, so `/bin/bash run.sh` checks them against that bash. Stage 6, the rules
-# and the setup guide, moved with the rules to fm-board/test/run.sh; stage 7
-# runs the board alone, from a copy holding only its own files. The two static
-# checks (signals, state writers) run first, whatever stages are named.
+# file, so `/bin/bash run.sh` checks them against that bash. Stages 3 to 5,
+# which run the board with Firstmate's own adapter, and stage 6, the rules and
+# the setup guide, moved to fm-board/test/run.sh; stage 7 runs the board
+# alone, from a copy holding only its own files. The two static checks
+# (signals, state writers) run first, whatever stages are named.
 #
 # Usage: myshape/test/run.sh [stage-number...]
 set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ "$#" -eq 0 ]; then
-  set -- 1 2 3 4 5 7
+  set -- 1 2 7
 fi
 
 "${BASH:-bash}" "$TEST_DIR/check-signals.sh"
@@ -20,13 +21,13 @@ fi
 ran=0
 for stage in "$@"; do
   case "$stage" in
-    [1-57]) ;;
-    6)
-      echo "run.sh: stage 6 moved to fm-board/test/run.sh" >&2
+    [127]) ;;
+    [3-6])
+      echo "run.sh: stage $stage moved to fm-board/test/run.sh" >&2
       exit 2
       ;;
     *)
-      echo "run.sh: unknown stage '$stage' (expected 1-5 or 7)" >&2
+      echo "run.sh: unknown stage '$stage' (expected 1, 2 or 7)" >&2
       exit 2
       ;;
   esac
