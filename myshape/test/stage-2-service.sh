@@ -4,10 +4,10 @@
 # a code or port change, and the startup failures that exit 69.
 set -u
 
-# shellcheck source=tests/lib.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tests/lib.sh"
-# shellcheck source=myshape/test/helpers.sh
-. "$ROOT/myshape/test/helpers.sh"
+# shellcheck source=myshape/test/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+# shellcheck source=myshape/test/kit/helpers.sh
+. "$ROOT/myshape/test/kit/helpers.sh"
 
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 command -v node >/dev/null 2>&1 || { echo "skip: node not found"; exit 0; }
@@ -54,19 +54,24 @@ test_starts_on_demand_and_stays_single() {
 }
 
 test_recovers_from_a_crash() {
-  local home pid
+  local home pid i
   home=$(tb_make_service_home crash)
   tb_run "$home" "$TOPIC" open >/dev/null
   tb_run "$home" "$TOPIC" create "Keep me" --goal "survive" --id keep >/dev/null
   pid=$(tb_board_pid "$home")
   fm_test_signal KILL --identity "$pid"
   fm_test_signal_skipped "a crashed board is restarted" && return 0
-  while kill -0 "$pid" 2>/dev/null; do sleep 0.1; done
+  i=0
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 100 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  ! kill -0 "$pid" 2>/dev/null || fail "the killed board must be gone within 10 s"
   assert_present "$home/state/myshape/board.sock" "a killed board leaves its socket file behind"
   printf 'garbage' > "$home/data/topics.json.tmp-99999"
   printf '{"src":"board","half' >> "$home/data/myshape/events.jsonl"
   jq -e '.topics.keep.status == "confirmed"' "$home/data/topics.json" >/dev/null ||
-    fail "topics.json must be complete JSON after a kill -9"
+    fail "topics.json must be complete JSON after a hard kill"
 
   tb_run "$home" "$TOPIC" rename keep "Still here" >/dev/null || fail "the next command must restart a crashed board"
   assert_not_equals "$pid" "$(tb_board_pid "$home")" "a new board must have replaced the killed one"
@@ -150,12 +155,12 @@ test_startup_failures_exit_69() {
   home=$(tb_make_service_home fail-port)
   tb_board_has_run "$home"
   port=$(cat "$home/config/myshape-port")
-  node -e 'require("node:net").createServer().listen(Number(process.argv[1]), "127.0.0.1"); setTimeout(() => {}, 60000);' "$port" &
+  node -e 'require("node:net").createServer().listen(Number(process.argv[1]), "127.0.0.1"); setTimeout(() => process.exit(0), 60000);' "$port" &
   holder=$!
   sleep 0.5
   rc=0
   out=$(tb_run "$home" "$TOPIC" create "Blocked" --goal "port taken" 2>&1) || rc=$?
-  kill "$holder"
+  fm_test_signal TERM "$holder"
   assert_equals 69 "$rc" "a port held by another program must exit 69"
   assert_equals "看板服務無法啟動：埠 $port 被別的程式佔用。在 config/myshape-port 寫另一個埠號。這次的要求沒有寫入。" "$out" \
     "the port failure must be the one documented line"

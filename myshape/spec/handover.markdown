@@ -2,7 +2,7 @@
 
 第 2、3 節是當時的紀錄，用的是改名（[open-issues](open-issues.markdown) C57）之前的名字 `topic-board` 與 `fm-topic`；新舊名字的對照在 C57。
 
-看板由一個獨立的 session 做到這裡，之後的維護移交給 fleet。這一頁給接手的人：怎麼跑測試、每個問題的狀態、哪些事還沒驗、已知的限制。看板只經 home 的 `config/myshape-aggregator.json` 寫的兩支程式碰到另一邊，first mate 的是 `bin/fm-board.sh feed` 與 `deliver`（[contracts](contracts.markdown) 第 4、7、11 節）；first mate 那支程式依賴框架的哪些指令與輸出，在 [adapter](../../fm-board/spec/adapter.markdown) 第 7 節。
+看板由一個獨立的 session 做到這裡，之後的維護移交給 fleet。這一頁給接手的人：怎麼跑看板自己的測試、每個問題的狀態、哪些事還沒驗、已知的限制；first mate 這一側的測試與 fleet 接手之後的分工在 first mate 這一側的 [handover](../../fm-board/spec/handover.markdown)。看板只經 home 的 `config/myshape-aggregator.json` 寫的兩支程式碰到另一邊，first mate 的是 `bin/fm-board.sh feed` 與 `deliver`（[contracts](contracts.markdown) 第 4、7 節，[adapter](../../fm-board/spec/adapter.markdown) 第 9 節）；first mate 那支程式依賴框架的哪些指令與輸出，在 [adapter](../../fm-board/spec/adapter.markdown) 第 7 節。
 
 狀態以 `carry` 上這個檔所在的 commit 為準。標「回報」的結果是主 first mate 在真的 home 或 Mac 上跑完告訴這個 session 的，這個 session 沒有自己重跑。
 
@@ -17,39 +17,34 @@
 | `bash`（3.2 以上）、`git`、`jq`、`curl` | 全部 | 少了 `jq` 的腳本印 `skip:` 後結束，算通過 |
 | `node` 22 以上 | 第二段起 | 那些腳本印 `skip:` 後結束 |
 | `pnpm` | 單元測試、型別、lint、格式、重編 `dist/`，以及 `check-dist.sh` 要的 TypeScript | 只影響這一列的指令；`check-dist.sh` 沒有它時印 `skip:`、什麼都沒比就算通過，所以先跑下面的 `pnpm install` |
-| `shellcheck` | 下面兩行 `shellcheck -x` | 改用 `bash bin/fm-lint.sh <檔>`：它要上游釘住的版本，缺了會說用 `bin/fm-install-shellcheck.sh <目錄>` 裝 |
+| `shellcheck` | 下面那一行 `shellcheck -x` | 改用 `bash bin/fm-lint.sh <檔>`：它要上游釘住的版本，缺了會說用 `bin/fm-install-shellcheck.sh <目錄>` 裝 |
 | `trash` | 手動試完丟掉暫時的 home（下一小節） | 確認那個路徑是 `mktemp` 給的暫時目錄之後，用檔案管理員或 `rm -r "$H"` 刪掉 |
-| `firefox`（在 `PATH` 上） | `stage-5-page.sh`，用真的瀏覽器走一遍頁面 | 印 `skip: firefox not found` 後結束 |
+| `firefox`（在 `PATH` 上） | `stage-7-page.sh`，用真的瀏覽器走一遍頁面 | 印 `skip: firefox not found` 後結束 |
 | `curl`、`ps`、`sha256sum` | 第七段：看板從只有它自己的檔的副本跑，另一邊是 `myshape/test/stub-aggregator/` 的替身 aggregator | 少了 `jq`、`node`、`curl`、`git`（`stage-7-aggregator.sh` 另加 `sha256sum`）時印 `skip:` 後結束 |
-| `tasks-axi` | `stage-4-writes.sh` 裡對真的 hold 工具的那一個測試 | 那一個測試印 `ok - skip: tasks-axi not found` |
 
 指令（工作目錄是 checkout 的根目錄）：
 
 ```
 (cd myshape && pnpm install --frozen-lockfile)   # 只有第一次；check-dist.sh、單元測試與型別都要它
-myshape/test/run.sh            # 第一到五段與第七段，十四個腳本
-myshape/test/run.sh 1          # 只跑第一段；可以列多個數字（第六段搬到 fm-board/test）
-fm-board/test/run.sh               # first mate 這一側：feed、deliver、tag、setup、--in-home、帶 task 的 split、舊的要你動手、規則、安裝說明
-dispatch-plan/test/run.sh          # first mate 這一側：order
-bash myshape/test/stage-4-writes.sh   # 單跑一個腳本
+myshape/test/run.sh            # 第一、二段與第七段，七個腳本
+myshape/test/run.sh 1          # 只跑第一段；可以列多個數字（第三到六段搬到 fm-board/test）
+bash myshape/test/stage-2-topics.sh   # 單跑一個腳本
 bash myshape/test/check-dist.sh       # dist/ 是不是 src/ 編出來的
-bin/fm-doc-audience-check.sh              # 上游的檢查；新增的檔不能違反
 (cd myshape && pnpm test)             # vitest 單元測試
 (cd myshape && pnpm run typecheck && pnpm run lint && pnpm run format:check)
 (cd myshape && pnpm run build)        # 改了 src/ 之後重編 dist/，結果要一起提交
-shellcheck -x bin/myshape.sh bin/myshape-lib.sh bin/fm-topic-board-read.sh bin/fm-topic-session-start.sh myshape/test/*.sh myshape/test/stub-aggregator/*
-shellcheck -x bin/fm-board.sh bin/fm-board-lib.sh bin/fm-board-io-lib.sh bin/fm-board-migrate-lib.sh bin/fm-topic.sh bin/fm-dispatch-plan.sh fm-board/test/*.sh dispatch-plan/test/*.sh
+shellcheck -x bin/myshape.sh bin/myshape-lib.sh myshape/test/*.sh myshape/test/kit/*.sh myshape/test/stub-aggregator/*
 ```
 
 - 每個腳本在第一個失敗的檢查印 `not ok - …` 並以非 0 結束；全過時 `run.sh` 的最後一行是 `# myshape tests passed (<n> scripts)`。
 - `run.sh` 用啟動它的那個 bash 跑每個腳本，但腳本裡呼叫的 `bin/myshape*.sh` 是照自己第一行的 `#!/usr/bin/env bash` 找 bash。要在 macOS 上驗 bash 3.2，兩邊都要是 3.2：`PATH="/bin:$PATH" /bin/bash myshape/test/run.sh`。正式環境裡遠端的 home 用哪個 bash，同樣取決於當時 `PATH` 上第一個是哪一個。
 - 測試用的環境變數由各腳本自己設：`MYSHAPE_TEST=1` 打開只給測試用的 socket 操作，`MYSHAPE_READ_MS` 等縮短輪詢與重試的間隔。不用事先設任何變數。
-- 會停掉或重啟看板的第七段腳本只經 `myshape/test/signal-lib.sh` 的 `kill_own_child` 送訊號，只送給腳本自己用 `&` 啟動、記下 `$!` 的子程序；`myshape/test/check-signals.sh` 檢查第七段、它的函式庫、替身 aggregator 與 `fm-board/test` 沒有別的送訊號的寫法。`FM_TEST_SIGNAL_DRY_RUN=1 FM_TEST_SIGNAL_LOG=<絕對路徑>` 讓這些腳本什麼都不送，只記下每一次會送給誰。
-- 第二段的 `stage-2-service.sh` 與 `stage-2-startup.sh` 對看板 pid 檔記的程序、或替身 harness 的子程序送訊號時，經 `tests/lib.sh` 的 `fm_test_signal`：守門 helper `tests/signal-guard.sh` 送出前先確認那個程序屬於這次的測試（命令列有這次的暫存根目錄、環境裡有這次的記號，或祖先鏈走得回測試腳本）。
-- `tests/check-signals.sh` 檢查整個測試目錄（含 `myshape/test`、`fm-board/test`、`dispatch-plan/test`）沒有繞過守門 helper、對算出來的目標送訊號的寫法；`bin/fm-lint.sh` 每一次都跑它。
-- 暫存目錄：macOS 預設的暫存目錄很深，會讓 socket 路徑超過 103 位元組的上限。`helpers.sh` 在預設暫存目錄的路徑超過 40 個字元時改用 `/tmp`。
-- 範圍：這台 Linux 要十四個腳本與 `fm-board/test`、`dispatch-plan/test` 全過。遠端的 home 只跑 `bin/fm-topic-board-read.sh` 與 `bin/fm-board.sh`（`tag`、`setup`，與一次性的 `migrate-myshape`），不跑服務也不開頁面，所以在 Mac 上要過的是第一段與 `fm-board/test/stage-1-tag.sh`。頁面程式在使用者開看板的那台機器的瀏覽器裡執行。
-- ShellCheck 會對 `tests/lib.sh` 的 source 報 SC1091，可以忽略；其他的要是零。
+- 看板的測試 source 看板自己的測試函式庫 `myshape/test/lib.sh`，不用上游的 `tests/lib.sh`，所以只有看板自己的檔也跑得起來。驅動真的看板的那些 fixture 是測試套件 `myshape/test/kit/`（`helpers.sh` 與 `browser.mjs`），看板自己與 aggregator 的測試都用它。
+- `myshape/vendor-files` 一行一個路徑：第一個空行之前是看板的執行期（`tb_make_board_root` 照它建只有看板的副本），之後是 aggregator 要和執行期一起留著的檔（契約範例、測試套件與它們用到的檔）。
+- 看板的測試只經一個守門 helper `myshape/test/signal-guard.sh` 送訊號：`myshape/test/signal-lib.sh` 的 `kill_own_child` 與 `myshape/test/lib.sh` 的 `fm_test_signal` 都經它送，結束時的清理也是。它只接受送訊號的 shell 自己的子程序（活著的父程序就是那個 shell），或命令列有這次測試建立、帶記號的暫存根目錄的程序。
+- `myshape/test/check-signals.sh` 檢查整個 `myshape/test`：唯一的送訊號指令是守門 helper 的那一行，其他只能是送 0 的探測；JavaScript 只有瀏覽器驅動程式對自己子程序的那一行與送 0 的探測。`FM_TEST_SIGNAL_DRY_RUN=1 FM_TEST_SIGNAL_LOG=<絕對路徑>` 讓這些腳本什麼都不送，只記下每一次會送給誰。在 fork 裡，上游的 `tests/check-signals.sh` 另外檢查每一個測試目錄，`bin/fm-lint.sh` 每一次都跑它。
+- 暫存目錄：macOS 預設的暫存目錄很深，會讓 socket 路徑超過 103 位元組的上限。`myshape/test/lib.sh` 與測試套件的 `helpers.sh` 在預設暫存目錄的路徑超過 40 個字元時改用 `/tmp`。
+- 範圍：這台 Linux 要七個腳本、`check-dist.sh` 與單元測試全過；first mate 這一側的範圍在那一側的 handover 第 1 節。頁面程式在使用者開看板的那台機器的瀏覽器裡執行。
 
 ### 在暫時的 home 手動試
 
@@ -122,7 +117,7 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
 | 項目 | 結果 |
 | --- | --- |
 | 全套測試在 macOS 上，兩種 bash | commit `faa7a8f6`，不設 `TMPDIR`。`PATH` 預設（bash 5.3.20）與 `PATH="/bin:$PATH"`（每一層都是 3.2.57）結果相同：第一段 23 項、第二段 13、第三段 14、第四段 14、第五段 8 加上 `skip: firefox not found`、第六段 9，沒有失敗。工具是 BSD 的 `cut`、`awk`、`sed`、`grep`，`jq`，node 26.13.1，curl 8.7.1。最後的 commit 要再跑一次 |
-| 上線 R-1、R-2、R-3、R-6 | 細節在 [rollout](rollout.markdown) |
+| 上線 R-1、R-2、R-3、R-6 | 細節在 [rollout](../../fm-board/spec/rollout.markdown) |
 | 上線 R-5 | 這個 session：每個 PR 的 base 都是 fork 的 `carry` |
 | 主 home 每輪抓遠端摘要的成本（1-1）；遠端 lane 的延遲（1-6） | `bin/fm-on.sh macmate fm-topic-board-read.sh 0 -` 三次：4.5、4.1、5.8 秒，exit 0，輸出 359 位元組（那個 home 沒有 task）。沒有逾時。前面排著長工作時的延遲沒有量 |
 | 遠端 job 讀得到 pane（1-7） | Mac 的 home 裡有一個 scout 在跑時，`bin/fm-on.sh macmate fm-crew-state.sh <task>` 回 `state: working · source: pane · harness busy (claude-hook)` |
@@ -166,7 +161,7 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
 
 ## 4. 已知限制
 
-各段與 [rollout](rollout.markdown) 另有各自的限制；這裡是跨段、接手的人最需要知道的。
+各段與 [rollout](../../fm-board/spec/rollout.markdown) 另有各自的限制；這裡是跨段、接手的人最需要知道的。
 
 測試蓋不到的：
 
@@ -199,7 +194,7 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
 - 沒有議題的「要你動手」項目（看板存項目之前搬上來、原本就沒有議題的）關掉之後列在首頁的「沒有議題」（C61）；`todo.marks_carried` 與較早的看板寫的 `todo.forgotten`、`todo.settled` 也沒有議題，只在檔裡，頁面上沒有地方列它們。
 - `find` 平常每個議題只印最近八筆來歷（`--all` 印全部）；移動與改目標記在來歷裡，但只有 `--all` 才印，所以不會把合併、拆分擠掉；來歷不記建立議題；`split` 不帶 task 會建一個空議題，新名稱可以和來源相同。
 - `install-rules` 會換掉結束標記之後同一行的文字（有備份）；別處有一行以標記開頭時拒絕安裝（C37）。
-- 程式退回沒有 `history` 或 `todos` 欄位的舊版時，下一次存檔會丟掉這兩個欄位（見 [rollout](rollout.markdown)）；退回看板自己存項目之前的版本時，看板上的項目不會顯示（`data/myshape/todos.json` 留著，回到新版又會出現）。
+- 程式退回沒有 `history` 或 `todos` 欄位的舊版時，下一次存檔會丟掉這兩個欄位（見 [rollout](../../fm-board/spec/rollout.markdown)）；退回看板自己存項目之前的版本時，看板上的項目不會顯示（`data/myshape/todos.json` 留著，回到新版又會出現）。
 - first mate 自己直接做、沒有派 worker 的項目，在關掉之前會被 `order` 列在「可派」。
 - 經 secondmate 轉達的訊息，看板在送到 secondmate 時就記成已送達。secondmate 之後回報轉不出去，頁面不會改，使用者只會從 first mate 在聊天裡的回報知道。
 - 排隊中的項目沒有議題標記時用內文的 `topic:` 那一行（C51）；內文沒有那一行的轉交項目，在 secondmate 派工之前仍顯示成沒標議題。
@@ -221,14 +216,6 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
 
 ## 5. 交接之後誰做什麼
 
-- 使用者 2026-11-17 決定：做看板的這個 session 到完工線就停，之後不再從它推送看板的修改。看板的修改與 PR 走 fleet 的流程，和 fork 上其他的修改一樣由使用者經主 first mate 決定要不要合併。
-- 第 3 節「還開著」的項目與第 4 節「延後、之後要補的」由 fleet 接手。
+fleet 怎麼接手、上游的合併、規則範本的版本，與每次修改都要對照的安裝說明，在 first mate 這一側的 [handover](../../fm-board/spec/handover.markdown) 第 2 節。看板自己的：
 
-- 上游的新版合併進 `carry`：fleet 負責，見 [rollout](rollout.markdown)「之後怎麼更新」。
-- 看板的檔案是 `myshape/**` 與 `bin/myshape*.sh`，另外在上游的 `bin/fm-session-start.sh` 裡有一個呼叫點（contracts 第 11.3 節），`bin/fm-captain-hold.sh` 裡有兩處（contracts 第 2 節）。改到 [adapter](../../fm-board/spec/adapter.markdown) 第 7 節列的任何一支框架指令時，跑那一列寫的測試。
-- first mate 這一側接看板的檔是 `bin/fm-board.sh`、`bin/fm-board-lib.sh`、`bin/fm-board-io-lib.sh`、`bin/fm-board-migrate-lib.sh`、改名前的名字留下的提示 `bin/fm-topic.sh`（C57）、`bin/fm-dispatch-plan.sh`、`fm-board/**` 與 `dispatch-plan/**`（[adapter](../../fm-board/spec/adapter.markdown)）；改它們走同樣的流程，這一節的規則也適用。
-- 規則範本改了要升版本號（`fm-board/rules/captain.block.md.tmpl` 第一行），`fm-board/test/stage-6-rules.sh` 裡的版本與 token 上限跟著改，真的 home 由使用者明講之後重跑 `bin/fm-board.sh install-rules`。
 - `dist/` 要和 `src/` 一起提交；`dist/` 有變，執行中的看板要重啟才生效，`public/` 的 CSS 不用。
-- 看板每次修改（程式、指令、規則範本、需要的工具）都要在同一個修改裡對照新機器的安裝說明 [FORK-SETUP](../../FORK-SETUP.markdown)，改掉不一致的地方。
-  PR 說明要寫出那一頁查過了、改了什麼。
-  `fm-board/test/check-guide.sh`（`fm-board/test/run.sh` 會跑）只檢查那一頁引用的名稱存在、寫的規則範本版本正確；步驟的順序、每一步的輸出、平台與需要的工具要讀過才知道，清單在那一頁的最後一節。

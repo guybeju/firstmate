@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Shared fixtures for the dispatch-plan tests. Sourced after tests/lib.sh and
-# myshape/test/helpers.sh, and after TMP_ROOT is set.
+# the board's test kit (myshape/test/kit/helpers.sh), and after TMP_ROOT is set.
 # shellcheck disable=SC2034 # PLAN is read by the sourcing tests.
 
 PLAN="$ROOT/bin/fm-dispatch-plan.sh"

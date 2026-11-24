@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
-# Shared fixtures for the myshape tests. Sourced after tests/lib.sh.
+# The board's test kit: the fixtures that drive a real board from a test -
+# scratch homes, the board's own data files, starting and stopping its
+# service, its socket and port, and a board-only root - for the board's own
+# suites and for an aggregator's suites that test against the board.
+# Sourced after a test library that defines fail, fm_test_cleanup and ROOT
+# (myshape/test/lib.sh in the board's own suites; Firstmate's tests/lib.sh on
+# its side, through fm-board/test/helpers.sh), and every helper needs TMP_ROOT.
 # shellcheck disable=SC2034 # the path globals are read by the sourcing tests.
 
 # The board refuses a socket path longer than the platform allows (103 bytes
 # on macOS), and macOS's default temp directory is deep enough to exceed it.
-# Scratch homes go under /tmp when the default base is that long.
+# Scratch homes go under /tmp when the default base is that long
+# (myshape/test/lib.sh applies the same rule before it picks its scratch base).
 tmpdir_default=${TMPDIR:-}
 if [ "${#tmpdir_default}" -gt 40 ]; then
   export TMPDIR=/tmp
@@ -12,8 +19,6 @@ fi
 unset tmpdir_default
 
 TOPIC="$ROOT/bin/myshape.sh"
-BOARD_READ="$ROOT/bin/fm-topic-board-read.sh"
-BOARD="$ROOT/bin/fm-board.sh"
 
 # tb_make_home <name>: create an empty main home under TMP_ROOT and print it.
 tb_make_home() {
@@ -78,36 +83,21 @@ tb_code() {
   printf '%s\n' "$rc"
 }
 
-# tb_write_registry <main-home> <local-secondmate-home>: register one local
-# secondmate (sm1) and one remote secondmate (far1).
-tb_write_registry() {
-  cat > "$1/data/secondmates.md" <<EOF
-# Secondmates
-- sm1 - Local helper (home: $2; scope: sample work; projects: alpha; added 2026-11-01)
-- far1 - Remote helper (host: farbox; root: /srv/fm; home: /srv/fm-home; scope: remote work; projects: beta; added 2026-11-01)
-EOF
-}
-
-# tb_seed_unstarted <code-root> <task>: make <code-root>'s snapshot report <task>
-# the way upstream does for a harness that has not taken its first turn since
-# spawn (the busy record is still fm-spawn's seed). A real one needs a live pane.
-tb_seed_unstarted() {
-  rm -f "$1/bin/fm-fleet-snapshot.sh"
-  cat > "$1/bin/fm-fleet-snapshot.sh" <<SH
-#!/usr/bin/env bash
-set -euo pipefail
-"$ROOT/bin/fm-fleet-snapshot.sh" "\$@" | jq -c --arg task "$2" '
-  (.tasks[] | select(.id == \$task) | .current_state) =
-    {state: "working", source: "pane", detail: "harness busy (fm-spawn)", freshness: "fresh"}'
-SH
-  chmod +x "$1/bin/fm-fleet-snapshot.sh"
-}
-
 # --- board service fixtures ---------------------------------------------------
 
-# tb_free_port: print a TCP port nothing is listening on right now.
+# tb_free_port: print a TCP port nothing is listening on right now, never the
+# live board's default port 47819.
 tb_free_port() {
-  node -e 'const s = require("node:net").createServer(); s.listen(0, "127.0.0.1", () => { console.log(s.address().port); s.close(); });'
+  node -e '
+    const pick = () => {
+      const s = require("node:net").createServer();
+      s.listen(0, "127.0.0.1", () => {
+        const port = s.address().port;
+        s.close(() => (port === 47819 ? pick() : console.log(port)));
+      });
+    };
+    pick();
+  '
 }
 
 # tb_make_service_home <name>: a main home with its own board port.
@@ -212,123 +202,6 @@ tb_op() {
   ' "$1/state/myshape/board.sock" "$2" "$args"
 }
 
-# tb_make_fake_root <dir>: a private code root with this checkout's scripts and
-# build, its own git history, stand-ins for the four scripts the board writes
-# through (fm-inbox.sh, fm-send.sh, fm-captain-hold.sh, fm-on.sh), and the
-# committed bin/fm-board.sh wrapper of tb_fake_aggregator. A home's board runs
-# it once the home is bound (tb_bind_home).
-#
-# Each stand-in appends "cmd=<key>\targv=<a|b|...>\thome=<FM_HOME>\tstdin=<text>"
-# to $TB_LOG, then follows the next step in $TB_PLAY/<key> when there is one. A
-# step is "<exit code or sleepN>\t<stdout>". "Remote" home <id> is the local
-# directory $TB_REMOTES/<id>.
-tb_make_fake_root() {
-  local fake=$1 name
-  fm_git_init_commit "$fake"
-  mkdir -p "$fake/bin" "$fake/myshape"
-  ln -s "$ROOT"/bin/* "$fake/bin/"
-  ln -s "$ROOT/myshape/dist" "$fake/myshape/dist"
-  rm "$fake/bin/fm-on.sh" "$fake/bin/fm-inbox.sh" "$fake/bin/fm-send.sh" "$fake/bin/fm-captain-hold.sh"
-  cat > "$fake/bin/tb-fake-lib.sh" <<'SH'
-tb_fake() {  # <play key> <stdin> <argv...>
-  local key=$1 input=$2 step code out play
-  shift 2
-  {
-    printf 'cmd=%s\targv=' "$key"
-    printf '%s|' "$@"
-    printf '\thome=%s\tstdin=%s\n' "${FM_HOME:-}" "${input//$'\n'/\\n}"
-  } >> "$TB_LOG"
-  play="$TB_PLAY/$key"
-  [ -s "$play" ] || return 0
-  IFS= read -r step < "$play"
-  tail -n +2 "$play" > "$play.next"
-  mv "$play.next" "$play"
-  code=${step%%$'\t'*}
-  out=${step#*$'\t'}
-  [ "$out" = "$step" ] || printf '%s\n' "$out"
-  case "$code" in
-    sleep*)
-      printf 'start %s\n' "$key" >> "$TB_LOG"
-      sleep "${code#sleep}"
-      printf 'end %s\n' "$key" >> "$TB_LOG"
-      code=0
-      ;;
-  esac
-  exit "$code"
-}
-SH
-  for name in fm-inbox.sh fm-send.sh; do
-    cat > "$fake/bin/$name" <<'SH'
-#!/usr/bin/env bash
-set -u
-. "$(dirname "$0")/tb-fake-lib.sh"
-tb_fake "$(basename "$0")" "$(cat)" "$@"
-exit 0
-SH
-  done
-  cat > "$fake/bin/fm-captain-hold.sh" <<'SH'
-#!/usr/bin/env bash
-set -u
-. "$(dirname "$0")/tb-fake-lib.sh"
-input=$(cat)
-tb_fake fm-captain-hold.sh "$input" "$@"
-printf 'closed: %s\n' "${input%%$'\t'*}"
-SH
-  cat > "$fake/bin/fm-on.sh" <<'SH'
-#!/usr/bin/env bash
-set -u
-. "$(dirname "$0")/tb-fake-lib.sh"
-[ "$1" != --stdin ] || shift
-id=$1
-script=$2
-shift 2
-case "$script" in
-  fm-remote-file.sh) exit 1 ;;
-  fm-topic-board-read.sh) FM_HOME="$TB_REMOTES/$id" exec "$(dirname "$0")/$script" "$@" ;;
-esac
-input=$(cat)
-tb_fake "fm-on.sh.$script" "$input" "$id" "$@"
-case "$script" in
-  fm-board.sh) FM_HOME="$TB_REMOTES/$id" exec "$(dirname "$0")/$script" "$@" ;;
-  fm-captain-hold.sh) printf 'closed: %s\n' "${input%%$'\t'*}" ;;
-esac
-SH
-  chmod +x "$fake"/bin/fm-on.sh "$fake"/bin/fm-inbox.sh "$fake"/bin/fm-send.sh "$fake"/bin/fm-captain-hold.sh
-  tb_fake_aggregator "$fake"
-}
-
-# The settings the stand-ins and the reader take from the environment of the
-# test that made the root. The board hands its programs a fixed, short
-# environment (contracts section 7), so they reach bin/fm-board.sh through
-# <root>/tb-fake.env instead.
-TB_FAKE_ENV_NAMES="TB_LOG TB_PLAY TB_REMOTES FM_SNAPSHOT_NOW"
-
-# tb_fake_aggregator <fake-root>: make that root's bin/fm-board.sh the program the
-# board's binding names: a committed wrapper (git tracks it unchanged, so it
-# runs without a confirmation) that loads <root>/tb-fake.env and runs this
-# checkout's fm-board.sh from <root>/bin, beside the stand-ins. Run it after
-# the test exported the settings of TB_FAKE_ENV_NAMES it needs.
-tb_fake_aggregator() {
-  local fake=$1 name value
-  : > "$fake/tb-fake.env"
-  for name in $TB_FAKE_ENV_NAMES; do
-    if value=$(printenv "$name"); then
-      printf 'export %s=%q\n' "$name" "$value" >> "$fake/tb-fake.env"
-    fi
-  done
-  rm -f "$fake/bin/fm-board.sh"
-  ln -s "$ROOT/bin/fm-board.sh" "$fake/bin/fm-board-real.sh"
-  cat > "$fake/bin/fm-board.sh" <<'SH'
-#!/usr/bin/env bash
-# shellcheck source=/dev/null
-. "$(dirname "$0")/../tb-fake.env"
-exec "$(dirname "$0")/fm-board-real.sh" "$@"
-SH
-  chmod 755 "$fake/bin/fm-board.sh"
-  git -C "$fake" add bin/fm-board.sh
-  git -C "$fake" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm "fake aggregator"
-}
-
 # tb_bind_home <home>: bind the home's board to firstmate's programs, the way
 # bin/fm-board.sh bind does.
 tb_bind_home() {
@@ -339,10 +212,18 @@ tb_bind_home() {
 
 # --- board-only root ------------------------------------------------------------
 
-# The files a board-only root holds: the board's command and library, its
-# build, its page, and package.json (an install has it, and an older node 22
-# needs it to load dist/ as modules).
-TB_BOARD_FILES="bin/myshape.sh bin/myshape-lib.sh myshape/dist myshape/public myshape/package.json"
+# The files a board-only root holds: the runtime part of myshape/vendor-files,
+# every line before its first empty one (the board's command and library, its
+# build, its page, and package.json, which an install has and an older node 22
+# needs to load dist/ as modules). Read with the shell's own read, so sourcing
+# this file runs no program.
+TB_BOARD_FILES=
+while IFS= read -r tb_path; do
+  [ -n "$tb_path" ] || break
+  TB_BOARD_FILES="${TB_BOARD_FILES:+$TB_BOARD_FILES }$tb_path"
+done < "$ROOT/myshape/vendor-files"
+unset tb_path
+[ -n "$TB_BOARD_FILES" ] || fail "myshape/vendor-files lists no runtime file"
 
 # tb_make_board_root <dir> [<rev> [<files>]]: a copy, not symlinks, of exactly
 # the board's files (TB_BOARD_FILES, or the space-separated <files>), from this

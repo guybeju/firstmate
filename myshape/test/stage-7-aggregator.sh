@@ -14,14 +14,12 @@
 # shellcheck disable=SC2016 # jq filters are literal text.
 set -u
 
-# shellcheck source=tests/lib.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tests/lib.sh"
-# shellcheck source=myshape/test/helpers.sh
-. "$ROOT/myshape/test/helpers.sh"
+# shellcheck source=myshape/test/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+# shellcheck source=myshape/test/kit/helpers.sh
+. "$ROOT/myshape/test/kit/helpers.sh"
 # shellcheck source=myshape/test/standalone-lib.sh
 . "$ROOT/myshape/test/standalone-lib.sh"
-# shellcheck source=myshape/test/signal-lib.sh
-. "$ROOT/myshape/test/signal-lib.sh"
 
 for tool in jq node curl git sha256sum; do
   command -v "$tool" >/dev/null 2>&1 || { echo "skip: $tool not found"; exit 0; }

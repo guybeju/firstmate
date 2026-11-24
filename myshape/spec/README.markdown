@@ -15,7 +15,7 @@
 | [stage-4-writes](stage-4-writes.markdown) | 第四段：寫入、稽核紀錄、重試 |
 | [stage-5-browser](stage-5-browser.markdown) | 第五段：瀏覽器通道與頁面 |
 | [stage-6-rules](stage-6-rules.markdown) | 第六段：`install-rules` 與規則範本 |
-| [rollout](rollout.markdown) | 上線的前提與步驟 |
+| [rollout](../../fm-board/spec/rollout.markdown) | 上線的前提與步驟（fork 這一側的，放在 `fm-board/spec/`） |
 | [verification](verification.markdown) | 哪些事實測過、哪些只讀過原始碼、哪些還沒驗 |
 | [handover](handover.markdown) | 交接：怎麼跑測試、每個問題的狀態、還沒驗的事、已知限制 |
 | [open-issues](open-issues.markdown) | 各票矛盾或漏接的地方與建議 |
