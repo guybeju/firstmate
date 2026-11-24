@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Every topic operation myshape.sh sends to the board: what it does once, that
-# repeating it unchanged is harmless, and what it refuses.
+# repeating it unchanged is harmless, and what it refuses. Firstmate's tag
+# against the topics these change is in fm-board/test/stage-2-topics-tag.sh.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -159,8 +160,6 @@ test_merge() {
   t merge my.id-1 billing-rework >/dev/null
   assert_equals "billing-rework" "$(queue high)" "a merged topic must leave its queue"
   assert_contains "$(t rename side "Billing")" "ok billing-rework " "an old id must act on the topic it was merged into"
-  tb_run "$HOME_DIR" "$BOARD" tag task-1 side >/dev/null
-  assert_equals billing-rework "$(cut -d' ' -f1 "$HOME_DIR/data/task-1/topic")" "tag must follow the merged id"
   expect_code 1 "$(code create "Reuse" --goal "g" --id side)" "reusing a merged id"
   expect_code 1 "$(code merge billing-rework billing-rework)" "merging a topic into itself"
   expect_code 1 "$(code merge nope t1)" "merging an unknown topic"
@@ -226,7 +225,6 @@ JSON
     fail "firstmate, which may still be waiting to hear, must be told what was confirmed"
   assert_contains "$(tb_run "$home" "$TOPIC" list)" "$(printf 'first\tconfirmed\tnormal\t2\tFirst')" \
     "list must show the confirmed proposal in its queue"
-  tb_run "$home" "$BOARD" tag task-10 urgent >/dev/null || fail "a confirmed proposal must take tags"
   tb_run "$home" "$TOPIC" restart >/dev/null
   tb_run "$home" "$TOPIC" find First >/dev/null
   assert_equals 4 "$(grep -c '"kind":"topic.confirmed"' "$home/data/myshape/events.jsonl")" \

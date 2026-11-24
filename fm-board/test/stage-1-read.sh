@@ -228,7 +228,20 @@ test_a_spawn_seeded_worker_is_unstarted() {
   pass "a worker whose harness never took its first turn is reported as unstarted"
 }
 
+# bash 3.2 (the /bin/bash of macOS) reads the bytes of a non-ASCII character
+# that directly follows "$name" as part of the name, and then fails on an
+# unbound variable. Linux cannot show that failure, so the shape is checked.
+# The board's own two scripts have the same check in myshape/test/stage-1-topic.sh.
+test_variables_are_braced_before_wide_characters() {
+  local script hits
+  for script in fm-topic-board-read.sh; do
+    hits=$(LC_ALL=C grep -nE '\$[A-Za-z_][A-Za-z0-9_]*[^ -~]' "$ROOT/bin/$script" || true)
+    assert_equals "" "$hits" "$script: write \${name} when a non-ASCII character follows the variable"
+  done
+  pass "no variable is directly followed by a non-ASCII character"
+}
+
 fm_test_run test_first_read_reports_the_whole_home test_ledger_delta_and_continuity \
   test_a_very_large_ledger_can_be_read test_large_ledger_is_read_in_bounded_pieces \
   test_secondmates_and_in_home test_usage_and_failure \
-  test_a_spawn_seeded_worker_is_unstarted
+  test_a_spawn_seeded_worker_is_unstarted test_variables_are_braced_before_wide_characters

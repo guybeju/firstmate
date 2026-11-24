@@ -101,9 +101,10 @@ EOF
 # bash 3.2 (the /bin/bash of macOS) reads the bytes of a non-ASCII character
 # that directly follows "$name" as part of the name, and then fails on an
 # unbound variable. Linux cannot show that failure, so the shape is checked.
+# Firstmate's reader has the same check in fm-board/test/stage-1-read.sh.
 test_variables_are_braced_before_wide_characters() {
   local script hits
-  for script in myshape.sh myshape-lib.sh fm-topic-board-read.sh; do
+  for script in myshape.sh myshape-lib.sh; do
     hits=$(LC_ALL=C grep -nE '\$[A-Za-z_][A-Za-z0-9_]*[^ -~]' "$ROOT/bin/$script" || true)
     assert_equals "" "$hits" "$script: write \${name} when a non-ASCII character follows the variable"
   done
