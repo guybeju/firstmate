@@ -46,7 +46,7 @@ supervisor_count() { fixture_pids supervisors | wc -l | tr -d '[:space:]'; }
 
 cleanup() {
   local pid
-  for pid in $(fixture_pids all); do kill -KILL "$pid" 2>/dev/null || true; done
+  for pid in $(fixture_pids all); do fm_test_signal_try KILL --identity "$pid" || true; done
   fm_test_cleanup
 }
 trap cleanup EXIT
@@ -208,7 +208,7 @@ ensure_worker() {
 
 stop_fixture_worker() {
   local pid
-  for pid in $(fixture_pids all); do kill -KILL "$pid" 2>/dev/null || true; done
+  for pid in $(fixture_pids all); do fm_test_signal_try KILL --identity "$pid" || true; done
   for pid in $(fixture_pids all); do wait_gone "$pid" || fail "fixture worker $pid would not stop"; done
   rm -rf -- "$STATE_ROOT"
 }
@@ -218,7 +218,7 @@ test_dead_owner_with_stale_ready_gets_one_replacement() {
   stop_fixture_worker
   ensure_worker
   old=$(cat "$LOCK/pid")
-  for pid in $(fixture_pids all); do kill -KILL "$pid" 2>/dev/null || true; done
+  for pid in $(fixture_pids all); do fm_test_signal_try KILL --identity "$pid" || true; done
   for pid in $(fixture_pids all); do wait_gone "$pid" || fail "fixture worker $pid would not stop"; done
   [ -d "$LOCK" ] || fail "an unclean exit did not retain the worker lock"
   touch -t 200001010000 "$STATE_ROOT/worker.ready" "$LOCK"

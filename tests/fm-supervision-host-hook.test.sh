@@ -500,7 +500,7 @@ test_successor_left_at_the_turn_survives_the_hook_process_group_teardown() {
   [ "$(cat "$home/offer-count" 2>/dev/null)" -ge 2 ] || fail "fixture: the close was not accepted before it turned main-only"
   assert_rewoke_main "$home" "at-turn teardown"
   watcher=$(cat "$home/state/.watch.lock/pid")
-  kill -TERM -- "-$(cat "$home/hook.pgid")" 2>/dev/null || true
+  fm_test_signal TERM --members "$(cat "$home/hook.pgid")"
   sleep 2
   kill -0 "$watcher" 2>/dev/null || fail "at-turn teardown: the successor watcher (pid $watcher) did not survive the hook's process group teardown"
   stop_home_processes "$home"
@@ -589,7 +589,7 @@ test_pass_through_successor_survives_the_hook_process_group_teardown() {
   assert_rewoke_main "$home" "group teardown (pass-through)"
   watcher=$(cat "$home/state/.watch.lock/pid")
   pgid=$(cat "$home/hook.pgid")
-  kill -TERM -- "-$pgid" 2>/dev/null || true
+  fm_test_signal TERM --members "$pgid"
   sleep 2
   kill -0 "$watcher" 2>/dev/null || fail "group teardown: the successor watcher (pid $watcher) did not survive the hook's process group teardown"
   [ "$(cat "$home/state/.watch.lock/pid" 2>/dev/null)" = "$watcher" ] || fail "group teardown: the watcher lock moved"
@@ -634,7 +634,8 @@ test_a_park_stopped_mid_take_over_leaves_the_take_over_to_the_next_park() {
     . "$1"
     fm_lock_acquire_wait "$2" || exit 1
     : > "$3"
-    while [ ! -e "$4" ]; do sleep 0.1; done
+    i=0
+    while [ ! -e "$4" ] && [ "$i" -lt $((${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120} * 10)) ]; do sleep 0.1; i=$((i + 1)); done
     fm_lock_release "$2"
   ' _ "$ROOT/bin/fm-wake-lib.sh" "$home/state/.watcher-down.lock" "$home/marker-lock-held" "$home/marker-lock-release" &
   holder=$!
@@ -645,7 +646,7 @@ test_a_park_stopped_mid_take_over_leaves_the_take_over_to_the_next_park() {
   host=$(awk -F '\t' '$1 == "host" { print $2; exit }' "$home/state/.supervision-host")
   sleep 1
   kill -0 "$LEFT_WATCHER" 2>/dev/null || fail "fixture: the take-over stopped the left watcher before the park was stopped"
-  kill -TERM "$host" 2>/dev/null || fail "fixture: the park host $host was not running"
+  fm_test_signal_try TERM --identity "$host" || fail "fixture: the park host $host was not running: $FM_TEST_SIGNAL_VERDICT"
   wait_until 150 sh -c '! kill -0 "$1" 2>/dev/null' _ "$host" || fail "fixture: the park host did not stop"
   : > "$home/marker-lock-release"
   wait "$holder" 2>/dev/null || true

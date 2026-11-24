@@ -76,27 +76,27 @@ extension_test_cleanup() {
   [ -z "$registry_race_pid" ] || kill -TERM "$registry_race_pid" 2>/dev/null || true
   [ -z "$leaf_race_pid" ] || kill -TERM "$leaf_race_pid" 2>/dev/null || true
   [ -z "$owner_retire_pid" ] || kill -TERM "$owner_retire_pid" 2>/dev/null || true
-  [ -z "$owner_worker_pid" ] || kill -CONT "$owner_worker_pid" 2>/dev/null || true
-  [ -z "$owner_worker_pid" ] || kill -KILL "$owner_worker_pid" 2>/dev/null || true
+  [ -z "$owner_worker_pid" ] || fm_test_signal_try CONT --env-path FM_HOME "$owner_worker_pid" || printf '# fm-extension-binding cleanup: %s\n' "$FM_TEST_SIGNAL_VERDICT" >&2
+  [ -z "$owner_worker_pid" ] || fm_test_signal_try KILL --env-path FM_HOME "$owner_worker_pid" || printf '# fm-extension-binding cleanup: %s\n' "$FM_TEST_SIGNAL_VERDICT" >&2
   [ -z "$owner_register_pid" ] || kill -TERM "$owner_register_pid" 2>/dev/null || true
-  [ -z "$signal_worker_pid" ] || kill -CONT "$signal_worker_pid" 2>/dev/null || true
-  [ -z "$signal_worker_pid" ] || kill -KILL "$signal_worker_pid" 2>/dev/null || true
+  [ -z "$signal_worker_pid" ] || fm_test_signal_try CONT --identity "$signal_worker_pid" || true
+  [ -z "$signal_worker_pid" ] || fm_test_signal_try KILL --identity "$signal_worker_pid" || true
   [ -z "$signal_retire_pid" ] || kill -TERM "$signal_retire_pid" 2>/dev/null || true
   [ -z "$active_runner_release" ] || touch "$active_runner_release" 2>/dev/null || true
   [ -z "$active_runner_pid" ] || kill -TERM "$active_runner_pid" 2>/dev/null || true
   [ -z "$remote_active_release" ] || touch "$remote_active_release" 2>/dev/null || true
-  [ -z "$unrelated_daemon_pid" ] || kill -KILL "$unrelated_daemon_pid" 2>/dev/null || true
+  [ -z "$unrelated_daemon_pid" ] || fm_test_signal_try KILL --identity "$unrelated_daemon_pid" || printf '# fm-extension-binding cleanup: %s\n' "$FM_TEST_SIGNAL_VERDICT" >&2
   [ -z "$unrelated_launcher_pid" ] || kill -KILL "$unrelated_launcher_pid" 2>/dev/null || true
   [ -z "$signal_cleanup_host_pid" ] || kill -KILL "$signal_cleanup_host_pid" 2>/dev/null || true
-  [ -z "$signal_cleanup_group_pid" ] || kill -KILL -"$signal_cleanup_group_pid" 2>/dev/null || true
+  [ -z "$signal_cleanup_group_pid" ] || fm_test_signal_try KILL --members "$signal_cleanup_group_pid" || true
   [ -z "$crash_cleanup_host_pid" ] || kill -KILL "$crash_cleanup_host_pid" 2>/dev/null || true
-  [ -z "$crash_cleanup_group_pid" ] || kill -KILL -"$crash_cleanup_group_pid" 2>/dev/null || true
+  [ -z "$crash_cleanup_group_pid" ] || fm_test_signal_try KILL --members "$crash_cleanup_group_pid" || true
   [ -z "$crash_cleanup_release" ] || touch "$crash_cleanup_release" 2>/dev/null || true
   [ -z "$crash_silent_start_pid" ] || kill -TERM "$crash_silent_start_pid" 2>/dev/null || true
-  [ -z "$crash_silent_runner_pid" ] || kill -TERM -"$crash_silent_runner_pid" 2>/dev/null || true
+  [ -z "$crash_silent_runner_pid" ] || fm_test_signal_try TERM --members "$crash_silent_runner_pid" || true
   [ -z "$override_crash_start_pid" ] || kill -TERM "$override_crash_start_pid" 2>/dev/null || true
-  [ -z "$override_crash_runner_pid" ] || kill -TERM -"$override_crash_runner_pid" 2>/dev/null || true
-  [ -z "$handshake_orphan_pid" ] || kill -KILL "$handshake_orphan_pid" 2>/dev/null || true
+  [ -z "$override_crash_runner_pid" ] || fm_test_signal_try TERM --members "$override_crash_runner_pid" || true
+  [ -z "$handshake_orphan_pid" ] || fm_test_signal_try KILL --identity "$handshake_orphan_pid" || printf '# fm-extension-binding cleanup: %s\n' "$FM_TEST_SIGNAL_VERDICT" >&2
   [ -z "$order_release" ] || touch "$order_release" 2>/dev/null || true
   [ -z "$order_register_pid" ] || kill -KILL "$order_register_pid" 2>/dev/null || true
   [ -z "$order_reconcile_pid" ] || kill -TERM "$order_reconcile_pid" 2>/dev/null || true
@@ -186,6 +186,20 @@ def success(result, **extra):
 def write_exclusive(path, content):
     with open(path, "x", encoding="utf-8") as output: output.write(content)
 
+# Every blocking branch ends by itself after FM_TEST_STUB_MAX_BLOCK_SECONDS
+# (tests/lib.sh's ceiling), without answering, so no run leaves it behind.
+BLOCK_SECONDS = float(os.environ.get("FM_TEST_STUB_MAX_BLOCK_SECONDS", "120"))
+
+def wait_for_release(path):
+    deadline = time.monotonic() + BLOCK_SECONDS
+    while not os.path.exists(path):
+        if time.monotonic() >= deadline: sys.exit(75)
+        time.sleep(.01)
+
+def block_until_ended():
+    time.sleep(BLOCK_SECONDS)
+    sys.exit(75)
+
 def stubborn_child():
     return subprocess.Popen([sys.executable, "-c", "import signal,time;signal.signal(signal.SIGTERM, signal.SIG_IGN);time.sleep(300)"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -195,7 +209,7 @@ if verb == "handshake":
         try: write_exclusive(marker, f"{os.getpid()}\n")
         except FileExistsError: pass
         else:
-            while not os.path.exists(release): time.sleep(.01)
+            wait_for_release(release)
     if fixed == "handshake-wrong-id": raw(handshake(request_id="sha256:" + "0" * 64))
     elif fixed == "handshake-unknown": raw(handshake(authority="merge"))
     elif fixed == "handshake-duplicate": raw(json.dumps(handshake()).replace('"request_id": ', f'"request_id":"{request["request_id"]}","request_id": ', 1))
@@ -225,7 +239,7 @@ elif mode == "error-injection": raw({"schema":"firstmate.extension-response.v1",
 elif mode == "oversize": raw("x" * 70000)
 elif mode == "stderr-oversize":
     sys.stderr.write("e" * 9000); sys.stderr.flush()
-    while True: time.sleep(1)
+    block_until_ended()
 elif mode in ("timeout", "leak", "foreground-leak"):
     os.makedirs(state, exist_ok=True)
     child = stubborn_child()
@@ -233,13 +247,13 @@ elif mode in ("timeout", "leak", "foreground-leak"):
     with open(os.path.join(state, name), "w", encoding="utf-8") as output: output.write(f"{child.pid}\n")
     if mode == "timeout":
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        while True: time.sleep(1)
+        block_until_ended()
     if mode == "leak": time.sleep(.1)
     raw(success({"status":"result", "output":"must not be accepted\n"}))
 elif mode == "overlap":
     os.makedirs(state, exist_ok=True)
     with open(os.path.join(state, "overlap-ready"), "w", encoding="utf-8") as output: output.write("ready\n")
-    while not os.path.exists(os.path.join(state, "overlap-release")): time.sleep(.01)
+    wait_for_release(os.path.join(state, "overlap-release"))
     raw(success({"status":"result", "output":"overlap complete\n"}))
 elif mode in ("replay", "replay-no-result"):
     os.makedirs(state, exist_ok=True)
@@ -259,7 +273,7 @@ elif mode == "host-error-output" and request["operation"] == "source.poll":
 elif mode.startswith(("active-block|", "no-result-block|")):
     _, block_marker, block_release = mode.split("|", 2)
     write_exclusive(block_marker, f"{os.getpid()}\n")
-    while not os.path.exists(block_release): time.sleep(.01)
+    wait_for_release(block_release)
     raw(success({"status":"no-result", "output":""} if mode.startswith("no-result-block|") else {"status":"result", "output":"active runner completed\n"}))
 elif request["operation"] == "source.poll": raw(success({"status":"no-result" if mode == "no-result" else "result", "output":"" if mode == "no-result" else f"external evidence: {mode}\n"}))
 elif request["operation"] == "result.classify": raw(success({"classification":"external-ready"}))
@@ -271,7 +285,7 @@ elif request["operation"] == "result.silent":
     elif content.startswith("external evidence: silent-block|"):
         _, block_marker, block_release = content.rstrip("\n").split("|", 2)
         write_exclusive(block_marker, f"{os.getpid()}\n")
-        while not os.path.exists(block_release): time.sleep(.01)
+        wait_for_release(block_release)
         raw(success({"value":True}))
     else: raw(success({"value":content == "external evidence: silent-result\n"}))
 else: sys.exit(6)
@@ -394,7 +408,7 @@ terminate_section_lanes() {
     section_child_pid=$(sed -n '1p' "${section_results[$index]}.pid" 2>/dev/null || true)
     case "$section_child_pid" in
       ''|*[!0-9]*) ;;
-      *) kill -TERM "$section_child_pid" 2>/dev/null || true ;;
+      *) fm_test_signal_try TERM --identity "$section_child_pid" || true ;;
     esac
     kill -TERM "$section_pid" 2>/dev/null || true
   done
@@ -404,10 +418,22 @@ terminate_section_lanes() {
     section_child_pid=$(sed -n '1p' "${section_results[$index]}.pid" 2>/dev/null || true)
     case "$section_child_pid" in
       ''|*[!0-9]*) ;;
-      *) terminate_section_lane_child "$section_child_pid" ;;
+      *) end_recorded_section_child "$section_child_pid" ;;
     esac
     wait "$section_pid" 2>/dev/null || true
   done
+}
+
+# end_recorded_section_child <pid read from a lane's pid file>: the coordinator
+# already sent TERM through the guard; a section child still running after 1 s
+# gets KILL through the guard too. Only a lane signals its own child directly.
+end_recorded_section_child() {
+  local section_child_pid=$1 cleanup_attempt
+  for ((cleanup_attempt = 0; cleanup_attempt < 20; cleanup_attempt++)); do
+    kill -0 "$section_child_pid" 2>/dev/null || return 0
+    sleep 0.05
+  done
+  fm_test_signal_try KILL --identity "$section_child_pid" || true
 }
 
 terminate_section_lane_child() {
@@ -672,6 +698,17 @@ def wait_for(predicate):
         time.sleep(.025)
     raise AssertionError("deadline fixture did not reach its control boundary")
 
+# Every computed signal here goes through the test's guarded helper (signal
+# policy P-010), run directly so this program is its caller.
+def guarded(signal_name, form, pid):
+    return subprocess.run([os.environ["FM_TEST_SIGNAL_GUARD"], "--send", "extension-deadline",
+                           signal_name, form, str(pid)], stdout=subprocess.DEVNULL, check=False).returncode
+
+def guarded_group(signal_name, group):
+    # A group whose leader is gone is signalled member by member.
+    if guarded(signal_name, "--group", group) != 0:
+        guarded(signal_name, "--members", group)
+
 def run_case(kind):
     case = temporary / ("deadline-" + kind)
     case.mkdir()
@@ -695,7 +732,7 @@ def run_case(kind):
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             group = process.pid
             wait_for(ready.exists)
-            os.killpg(group, signal.SIGSTOP)
+            guarded_group("STOP", group)
             time.sleep(8)
             owner.write_text(json.dumps(dict(schema="firstmate.extension-invocation-owner.v1",
                 token=token, phase="group", host_pid=os.getpid(), host_identity="fixture",
@@ -703,7 +740,7 @@ def run_case(kind):
                 extension_id="org.example.sleep", binding_digest="sha256:" + "b" * 64,
                 request_id="sha256:" + "c" * 64, source_id=None, operation="source.poll")))
             release.write_text(json.dumps(dict(schema="firstmate.extension-invocation-release.v1", token=token)))
-            os.killpg(group, signal.SIGCONT)
+            guarded_group("CONT", group)
         else:
             local_package = case / "package"
             shutil.copytree(package, local_package)
@@ -749,12 +786,16 @@ def run_case(kind):
             wait_for(invocation_owner)
             host_pid = invocation_owner()["host_pid"]
             if kind != "stalled":
-                os.kill(host_pid, signal.SIGSTOP)
-                os.killpg(group, signal.SIGSTOP)
+                # Each guarded send is its own process, so the two halves of a
+                # pair are apart in time. The host keeps the deadline and
+                # discounts only its own suspension, so it is stopped first and
+                # resumed last: in each gap the host is the side still stopped.
+                guarded("STOP", "--identity", host_pid)
+                guarded_group("STOP", group)
                 time.sleep(4 if kind in ("invoke", "suspended-stall") else 8)
                 if kind != "suspended-stall": release.touch()
-                os.kill(host_pid, signal.SIGCONT)
-                os.killpg(group, signal.SIGCONT)
+                guarded_group("CONT", group)
+                guarded("CONT", "--identity", host_pid)
         output, error = process.communicate(timeout=6)
         if kind in ("stalled", "suspended-stall"):
             assert process.returncode != 0, "a genuinely stalled invocation succeeded"
@@ -774,20 +815,17 @@ def run_case(kind):
             if kind == "invoke": assert b"active runner completed" in output, output
         print("ok - real deadline " + kind, flush=True)
     finally:
-        if host_pid:
-            try: os.kill(host_pid, signal.SIGCONT)
-            except ProcessLookupError: pass
         if group:
-            try: os.killpg(group, signal.SIGCONT)
-            except ProcessLookupError: pass
+            guarded_group("CONT", group)
+        if host_pid:
+            guarded("CONT", "--identity", host_pid)
         if process and process.poll() is None:
             process.send_signal(signal.SIGCONT)
             process.terminate()
             try: process.wait(timeout=4)
             except subprocess.TimeoutExpired: process.kill(); process.wait()
         if group:
-            try: os.killpg(group, signal.SIGKILL)
-            except ProcessLookupError: pass
+            guarded_group("KILL", group)
 
 with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
     futures = [executor.submit(run_case, kind) for kind in ("invoke", "handshake", "launch", "startup", "stalled", "suspended-stall")]
@@ -1170,7 +1208,9 @@ assert_contains "$(cat "$overlap_out")" "overlap complete" "overlap fixture did 
 kill -0 "$unrelated_daemon_pid" 2>/dev/null || fail "extension cleanup terminated an unrelated same-user daemon"
 wait "$unrelated_launcher_pid"
 unrelated_launcher_pid=
-kill -KILL "$unrelated_daemon_pid" 2>/dev/null || true
+# The stand-in shares nothing with the run by design, so once its launcher is
+# gone the guard finds no evidence and sends nothing; it ends after its 300 s.
+fm_test_signal_try KILL --identity "$unrelated_daemon_pid" || true
 unrelated_daemon_pid=
 pass "process cleanup never adopts a proven-unrelated same-user process"
 fi
@@ -1427,7 +1467,7 @@ for _ in $(seq 1 400); do
 done
 if kill -0 "$crash_silent_start_pid" 2>/dev/null; then
   kill -TERM "$crash_silent_start_pid" 2>/dev/null || true
-  [ -z "$crash_silent_runner_pid" ] || kill -TERM -"$crash_silent_runner_pid" 2>/dev/null || true
+  [ -z "$crash_silent_runner_pid" ] || fm_test_signal_try TERM --members "$crash_silent_runner_pid" || true
   wait "$crash_silent_start_pid" 2>/dev/null || true
   crash_silent_start_pid=
   crash_silent_runner_pid=
@@ -1630,7 +1670,7 @@ owner_worker_pid=
 for _ in $(seq 1 400); do
   if [ -e "$owner_lock/pid" ]; then
     candidate=$(cat "$owner_lock/pid" 2>/dev/null || true)
-    if [ -n "$candidate" ] && kill -STOP "$candidate" 2>/dev/null; then
+    if [ -n "$candidate" ] && fm_test_signal_try STOP --identity "$candidate"; then
       owner_worker_pid=$candidate
       break
     fi
@@ -1646,7 +1686,8 @@ FM_HOME="$H_LOCK_OWNER" "$PROCEVENT" register-extension ext-lock-owner owner-sou
 owner_register_pid=$!
 sleep 0.2
 kill -0 "$owner_register_pid" 2>/dev/null || fail "wrapper death released a live retirement worker's lifecycle lock"
-kill -KILL "$owner_worker_pid" 2>/dev/null || true
+fm_test_signal_try KILL --env-path FM_HOME "$owner_worker_pid" \
+  || fail "the orphaned retirement worker could not be ended through the guard's environment evidence (P-010 supplement 4): $FM_TEST_SIGNAL_VERDICT"
 wait "$owner_worker_pid" 2>/dev/null || true
 owner_worker_pid=
 owner_register_rc=0
@@ -1671,7 +1712,7 @@ signal_worker_pid=
 for _ in $(seq 1 400); do
   if [ -e "$signal_lock/pid" ]; then
     candidate=$(cat "$signal_lock/pid" 2>/dev/null || true)
-    if [ -n "$candidate" ] && kill -STOP "$candidate" 2>/dev/null; then
+    if [ -n "$candidate" ] && fm_test_signal_try STOP --identity "$candidate"; then
       signal_worker_pid=$candidate
       break
     fi
@@ -1679,8 +1720,8 @@ for _ in $(seq 1 400); do
   sleep 0.005
 done
 [ -n "$signal_worker_pid" ] || fail "signal retirement worker never acquired its lifecycle lock"
-kill -TERM "$signal_worker_pid" 2>/dev/null || fail "cannot signal retirement worker"
-kill -CONT "$signal_worker_pid" 2>/dev/null || fail "cannot resume signalled retirement worker"
+fm_test_signal_try TERM --identity "$signal_worker_pid" || fail "cannot signal retirement worker: $FM_TEST_SIGNAL_VERDICT"
+fm_test_signal_try CONT --identity "$signal_worker_pid" || fail "cannot resume signalled retirement worker: $FM_TEST_SIGNAL_VERDICT"
 for _ in $(seq 1 400); do
   kill -0 "$signal_worker_pid" 2>/dev/null || break
   sleep 0.005
@@ -1890,7 +1931,7 @@ chmod 0700 "$H_STATE_OVERRIDE/state" "$H_STATE_OVERRIDE/state/procevent-capture-
 override_crash_decoy="$H_STATE_OVERRIDE/state/procevent-capture-reservations/.extension-capture-$override_crash_token.decoy.json"
 printf 'decoy\n' > "$override_crash_decoy"
 chmod 0600 "$override_crash_decoy"
-kill -KILL -"$override_crash_runner_pid" 2>/dev/null || fail "could not terminate overridden-state runner"
+fm_test_signal_try KILL --members "$override_crash_runner_pid" || fail "could not terminate overridden-state runner: $FM_TEST_SIGNAL_VERDICT"
 wait "$override_crash_start_pid" 2>/dev/null || true
 override_crash_start_pid=
 override_crash_runner_pid=
@@ -2240,7 +2281,8 @@ JS
 }
 crash_cleanup_group_pid=$(node - "$ROOT/bin/fm-extension-launch-barrier.mjs" "$orphan_token" <<'JS'
 const {spawn} = require("child_process");
-const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", ...process.argv.slice(2)],
+const idle = "setTimeout(() => {}, 1000 * Number(process.env.FM_TEST_STUB_MAX_BLOCK_SECONDS || 120))";
+const child = spawn(process.execPath, ["-e", idle, ...process.argv.slice(2)],
   {detached: true, stdio: "ignore"});
 console.log(child.pid);
 child.unref();
@@ -2255,7 +2297,7 @@ expect_failure "process-cleanup-failed" env FM_HOME="$H_ORPHAN_READY" "$HOST" cl
 kill -0 "$$" 2>/dev/null || fail "ownerless cleanup signalled a reused PID"
 kill -0 -"$crash_cleanup_group_pid" 2>/dev/null || fail "ownerless cleanup signalled an unrelated group"
 orphan_dead_pid=$crash_cleanup_group_pid
-kill -TERM -"$crash_cleanup_group_pid" 2>/dev/null || fail "cannot stop private orphan fixture group"
+fm_test_signal_try TERM --members "$crash_cleanup_group_pid" || fail "cannot stop private orphan fixture group: $FM_TEST_SIGNAL_VERDICT"
 for _ in $(seq 1 200); do
   kill -0 -"$crash_cleanup_group_pid" 2>/dev/null || break
   sleep 0.1
@@ -2325,7 +2367,7 @@ if [ "${#orphan_live[@]}" -gt 0 ]; then
   # Killing the runner groups strands their detached invocation groups, which
   # the home sweep's invocation cleanup then reclaims as host-crash residue.
   for orphan_runner in "${orphan_live[@]}"; do
-    kill -KILL -"${orphan_runner#*:}" 2>/dev/null || true
+    fm_test_signal_try KILL --members "${orphan_runner#*:}" || true
   done
   FM_HOME="$H_ORPHAN_READY" "$PROCEVENT" sweep-home >/dev/null 2>&1 || true
   fail "recovered source ${orphan_live[*]%%:*} did not finish within ${orphan_wait_seconds}s"

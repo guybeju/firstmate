@@ -523,7 +523,7 @@ test_host_quiet_boundary_retains_the_watcher() {
     "the same watcher must survive the quiet boundaries"
   kill -0 "$first_watcher" 2>/dev/null || fail "the retained watcher must still be running"
   assert_not_contains "$(cat "$home/host.out")" "cycle boundary" "a quiet boundary must produce no model output"
-  kill "$host" 2>/dev/null
+  fm_test_signal_try TERM --identity "$host" || true
   i=0
   while kill -0 "$host" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
   pass "the model-free Codex host keeps one watcher across quiet boundaries with no model output and warm-compacts on the restarted clock"

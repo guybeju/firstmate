@@ -324,7 +324,7 @@ done
 pass "the entrypoint composes a deduplicated discovered child PATH (kept $PRESENT_CHECKED existing, omitted $ABSENT_CHECKED absent)"
 
 WORKER_PID=$(cat "$TMP_ROOT/remote-jobs/worker.pid")
-kill -TERM "$WORKER_PID"
+fm_test_signal TERM --identity "$WORKER_PID"
 for _ in $(seq 1 100); do
   [ ! -f "$TMP_ROOT/remote-jobs/worker.pid" ] && break
   sleep 0.05

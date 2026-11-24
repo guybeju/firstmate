@@ -5634,7 +5634,7 @@ test_process_spawned_during_grace_is_reaped_on_later_pass() {
   if [ -f "$child_file" ]; then child_pid=$(cat "$child_file"); fi
   if [ -n "$child_pid" ] && kill -0 "$child_pid" 2>/dev/null; then
     child_survived=1
-    kill -KILL "$child_pid" 2>/dev/null || true
+    fm_test_signal_try KILL --identity "$child_pid" || true
   fi
   if kill -0 "$pid" 2>/dev/null; then
     parent_survived=1

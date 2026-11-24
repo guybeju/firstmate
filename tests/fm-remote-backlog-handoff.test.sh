@@ -31,7 +31,7 @@ fm_remote_handoff_teardown() {
   if [ -f "$TMP_ROOT/remote-jobs/worker.pid" ]; then
     worker_pid=$(cat "$TMP_ROOT/remote-jobs/worker.pid" 2>/dev/null || true)
     if [ -n "$worker_pid" ]; then
-      kill "$worker_pid" 2>/dev/null || true
+      fm_test_signal_try TERM --identity "$worker_pid" || true
       i=0
       while [ "$i" -lt 500 ] && kill -0 "$worker_pid" 2>/dev/null; do
         sleep 0.01

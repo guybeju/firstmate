@@ -1591,7 +1591,7 @@ SH
     waited=$((waited + 1))
   done
   if kill -0 "$grandchild" 2>/dev/null; then
-    kill -KILL "$grandchild" 2>/dev/null || true
+    fm_test_signal_try KILL --identity "$grandchild" || true
     fail "the timed-out script left grandchild $grandchild running"
   fi
 

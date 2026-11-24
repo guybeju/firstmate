@@ -94,7 +94,8 @@ p = subprocess.Popen([os.environ.get("BASH", "bash"), "-c", script, "_", sys.arg
 try:
     out, err = p.communicate(timeout=15)
 except subprocess.TimeoutExpired:
-    os.killpg(p.pid, signal.SIGKILL)
+    subprocess.run([os.environ["FM_TEST_SIGNAL_GUARD"], "--send", "wait-for-exit-probe", "KILL", "--group", str(p.pid)],
+                   stdout=subprocess.DEVNULL, check=False)
     p.communicate()
     raise SystemExit("wait_for_exit hung after its deadline on a stopped child")
 if p.returncode or "survived TERM; sending KILL" not in err:
@@ -817,7 +818,7 @@ SH
   [ -d "$dir/race-once" ] || fail "reap race hook never fired"
   case "$(cat "$out" 2>/dev/null || true)" in
     won\ *)
-      kill -KILL "$(sed 's/^won //' "$out")" 2>/dev/null || true
+      fm_test_signal_try KILL --identity "$(sed 's/^won //' "$out")" || true
       [ "$rc" -ne 0 ] || fail "competing reapers both hold the steal mutex"
       ;;
     lost)
@@ -1972,7 +1973,7 @@ case "$last" in
   *.watch.lock.steal)
     sleep 0.2
     arm_pid=$(cat "$FM_TEST_ARM_PID_FILE" 2>/dev/null || true)
-    [ -n "$arm_pid" ] && kill -TERM "$arm_pid" 2>/dev/null || true
+    [ -n "$arm_pid" ] && "$FM_TEST_SIGNAL_GUARD" --send stand-in TERM --identity "$arm_pid" >/dev/null 2>&1 || true
     ;;
 esac
 exec "$FM_TEST_REAL_LN" "$@"
@@ -2018,8 +2019,13 @@ case "$last" in
       sleep 0.02
       i=$((i + 1))
     done
-    kill -TERM "$(cat "$FM_TEST_ARM_PID_FILE")" 2>/dev/null || true
-    while [ ! -e "$FM_TEST_RELEASE" ]; do sleep 0.05; done
+    "$FM_TEST_SIGNAL_GUARD" --send stand-in TERM --identity "$(cat "$FM_TEST_ARM_PID_FILE")" >/dev/null 2>&1 || true
+    i=0
+    while [ ! -e "$FM_TEST_RELEASE" ] && [ "$i" -lt $((${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120} * 20)) ]; do
+      sleep 0.05
+      i=$((i + 1))
+    done
+    [ -e "$FM_TEST_RELEASE" ] || exit 1
     ;;
 esac
 exec "$FM_TEST_REAL_LN" "$@"
@@ -2096,7 +2102,8 @@ test_arm_starts_and_self_heals() {
     grep -F "watcher: started pid=$lock_pid (beacon fresh)" "$armout" >/dev/null \
       || fail "arm ($row) started line did not name the confirmed live watcher (lock '$lock_pid')"
     kill -0 "$lock_pid" 2>/dev/null || fail "arm ($row) confirmed-started watcher is not actually alive"
-    kill "$armpid" "$lock_pid" 2>/dev/null || true
+    kill "$armpid" 2>/dev/null || true
+    fm_test_signal_try TERM --identity "$lock_pid" || true
     wait "$armpid" 2>/dev/null || true
   done
   pass "arm starts cleanly and resurfaces recovery after a dead-pid lock"
@@ -2455,7 +2462,7 @@ case "$*" in
   *".wake-queue.lock"*)
     if mkdir "$TEST_MUTATION_ONCE" 2>/dev/null; then
       pid=$(cat "$FM_STATE_OVERRIDE/.watch.lock/pid")
-      kill -"$TEST_MUTATION_SIGNAL" "$pid"
+      "$FM_TEST_SIGNAL_GUARD" --send mutation-stand-in "$TEST_MUTATION_SIGNAL" --identity "$pid" >/dev/null
       sleep 0.5
       "$TEST_MUTATION_REAL" "$@"
       status=$?
@@ -2596,7 +2603,7 @@ test_stopped_watcher_is_live_but_stale_then_exit_is_classified() {
   watcher_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
   grep -qF "watcher: started pid=$watcher_pid" "$armout" || fail "load counterfactual watcher did not start"
 
-  kill -STOP "$watcher_pid" 2>/dev/null || fail "could not SIGSTOP watcher"
+  fm_test_signal_try STOP --identity "$watcher_pid" || fail "could not SIGSTOP watcher: $FM_TEST_SIGNAL_VERDICT"
   touch -t 200001010000 "$state/.last-watcher-beat"
   FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_alive "$2"' _ "$LIB" "$watcher_pid" \
     || fail "SIGSTOP watcher was not classified as a live pid"
@@ -2604,8 +2611,8 @@ test_stopped_watcher_is_live_but_stale_then_exit_is_classified() {
     fail "SIGSTOP watcher with a stale beacon was classified healthy"
   fi
 
-  kill -CONT "$watcher_pid" 2>/dev/null || true
-  kill -TERM "$watcher_pid" 2>/dev/null || true
+  fm_test_signal_try CONT --identity "$watcher_pid" || true
+  fm_test_signal_try TERM --identity "$watcher_pid" || true
   wait_for_exit "$armpid" 80
   status=$?
   [ "$status" -ne 0 ] && [ "$status" -ne 124 ] || fail "terminated stopped-watcher cycle did not surface nonzero (status $status)"

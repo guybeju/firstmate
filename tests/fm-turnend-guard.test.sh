@@ -2399,7 +2399,7 @@ test_hook_claude_mode_waits_for_late_claim() {
   helper=$!
   out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=3000 run_hook_claude "$dir" false); status=$?
   holder=$(cat "$dir/holder.pid" 2>/dev/null || true)
-  kill "$holder" 2>/dev/null || true
+  fm_test_signal_try TERM --identity "$holder" || true
   kill "$helper" 2>/dev/null || true
   wait "$helper" 2>/dev/null || true
   expect_code 0 "$status" "--claude must wait briefly for a late auto-arm claim instead of forcing a continuation"

@@ -633,8 +633,8 @@ SH
     HC_TERMINAL_ID=t2 HC_TERMINAL_SOCKET="$other" fm_backend_detect \
     && [ "$FM_BACKEND_DETECT_SIGNAL" = app-terminal ]) \
     || fail "a labeled terminal on the HC_SESSION core must select hc with signal app-terminal"
-  kill "$opid" 2>/dev/null; wait "$opid" 2>/dev/null
-  kill "$lpid" 2>/dev/null; wait "$lpid" 2>/dev/null
+  fm_test_signal_try TERM --identity "$opid" || true; wait "$opid" 2>/dev/null
+  fm_test_signal_try TERM --identity "$lpid" || true; wait "$lpid" 2>/dev/null
 
   out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID PASEO_AGENT_ID; PATH="$fb:$PATH" XDG_RUNTIME_DIR="$run" \
     HC_TERMINAL_ID=t2 HC_TERMINAL_SOCKET="$sock" fm_backend_detect) \
@@ -670,7 +670,7 @@ SH
     [ "${FM_BACKEND_DETECT_SIGNAL:-}" = app-terminal-unusable ]) \
     || fail "a live terminal with a below-minimum hc must stay undetected with signal app-terminal-unusable, got '$out'"
   [ -z "$out" ] || fail "a live terminal with a below-minimum hc must print no backend, got '$out'"
-  kill "$lpid" 2>/dev/null; wait "$lpid" 2>/dev/null
+  fm_test_signal_try TERM --identity "$lpid" || true; wait "$lpid" 2>/dev/null
 
   # --- earlier surface markers still win over the app signals --------------
   rm -f "$sock"
@@ -683,7 +683,7 @@ SH
     FM_FAKE_HC_GET='{"labels":{"herdr.space":"fm-app"}}' \
     HERDR_ENV=1 HC_TERMINAL_ID=t2 HC_TERMINAL_SOCKET="$sock" fm_backend_detect)
   [ "$out" = herdr ] || fail "a herdr marker inside an app terminal must keep herdr, got '$out'"
-  kill "$lpid" 2>/dev/null; wait "$lpid" 2>/dev/null
+  fm_test_signal_try TERM --identity "$lpid" || true; wait "$lpid" 2>/dev/null
 
   # --- app-window is not a signal: a live herdr-app.sock or open window ---
   # reaches every process on the host, so it cannot tell a firstmate inside
@@ -718,16 +718,16 @@ SH
   [ ! -e "$run/herdr-core/app1.sock" ] && [ ! -e "$sockdir/state" ] \
     || fail "detection created core state for a session that was not running"
   mkdir -p "$sockdir/state/herdr-core/default"
-  kill "$opid" 2>/dev/null; wait "$opid" 2>/dev/null
+  fm_test_signal_try TERM --identity "$opid" || true; wait "$opid" 2>/dev/null
   opid=$(live_sock "$sockdir/state/herdr-core/default/default.sock"); sleep 0.2
   out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID PASEO_AGENT_ID HC_TERMINAL_ID HC_TERMINAL_SOCKET XDG_RUNTIME_DIR; PATH="$fb:$PATH" \
     XDG_STATE_HOME="$sockdir/state" HERDR_APP_HOME="$apphome" fm_backend_detect) \
     && fail "a live window over a running state-dir core must not select hc, got '$out'"
-  kill "$opid" 2>/dev/null; wait "$opid" 2>/dev/null
+  fm_test_signal_try TERM --identity "$opid" || true; wait "$opid" 2>/dev/null
 
   # A stale socket file changes nothing - the app home is never probed for
   # selection at all.
-  kill "$lpid" 2>/dev/null; wait "$lpid" 2>/dev/null
+  fm_test_signal_try TERM --identity "$lpid" || true; wait "$lpid" 2>/dev/null
   out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID PASEO_AGENT_ID HC_TERMINAL_ID HC_TERMINAL_SOCKET; PATH="$fb:$PATH" \
     HERDR_APP_HOME="$apphome" fm_backend_detect) \
     && fail "a stale herdr-app.sock must not select hc, got '$out'"
@@ -746,7 +746,7 @@ SH
     [ -z "${FM_BACKEND_DETECT_SIGNAL:-}" ]) \
     || fail "a live window with a below-minimum hc must stay silently undetected, got signal '${FM_BACKEND_DETECT_SIGNAL:-}'"
   [ -z "$out" ] || fail "a live window with a below-minimum hc must print no backend, got '$out'"
-  kill "$lpid" 2>/dev/null; wait "$lpid" 2>/dev/null
+  fm_test_signal_try TERM --identity "$lpid" || true; wait "$lpid" 2>/dev/null
   rm -rf "$sockdir"
 
   pass "fm_backend_detect: app-terminal (live spawn core + herdr.space label) selects hc; a live herdr-app.sock or open window is never a signal for a marker-less process; another core, a stopped core, dead/stale/missing evidence, and unusable toolchains never switch"
@@ -824,8 +824,8 @@ SH
   [ "$out" = tmux ] || fail "a live window with no running spawn core must keep the default backend, got '$out'"
   [ -s "$errfile" ] && fail "a live window with no running core resolves silently"$'\n'"$(cat "$errfile")"
   [ ! -e "$run/herdr-core/app1.sock" ] || fail "resolving the backend must not start the app1 core"
-  kill "$cpid" 2>/dev/null; wait "$cpid" 2>/dev/null
-  kill "$lpid" 2>/dev/null; wait "$lpid" 2>/dev/null
+  fm_test_signal_try TERM --identity "$cpid" || true; wait "$cpid" 2>/dev/null
+  fm_test_signal_try TERM --identity "$lpid" || true; wait "$lpid" 2>/dev/null
   rm -rf "$sockdir"
 
   pass "fm_backend_name: a live app window never selects hc for a marker-less process and resolves silently; explicit settings win; a live app-terminal candidate with an unusable toolchain names the missing piece"

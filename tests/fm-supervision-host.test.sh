@@ -90,7 +90,7 @@ test_host_stopped_right_after_a_handled_wake_exits_and_frees_the_queue() {
     || fail "handled then TERM: the wake was not handled on the engine: $(cat "$home/state/.supervision-host.log")"
   pid=$(awk -F '\t' '$1 == "host" { print $2; exit }' "$home/state/.supervision-host")
   [ -n "$pid" ] || fail "fixture: no host record after the handled wake"
-  kill -TERM "$pid" 2>/dev/null || true
+  fm_test_signal_try TERM --identity "$pid" || true
   wait_until 100 bash -c '! kill -0 "$1" 2>/dev/null' _ "$pid" \
     || fail "handled then TERM: the host did not exit within 10s of TERM after a handled wake"
   FM_HOME="$home" timeout 10 bash -c '. "$1"; fm_wake_append check probe "check: probe"' _ "$ROOT/bin/fm-wake-lib.sh" \
@@ -405,7 +405,7 @@ test_primary_without_a_verified_mirror_runs_away_only() {
   assert_re '^primary=grok$' "$home/engine-call.1" "the away engine must carry the grok primary pin"
   assert_re '^POSTURE: AWAY\.' "$home/engine-call.1" "the away wake must carry the away tail"
   [ ! -s "$home/host.rc" ] || fail "a handled away wake on grok reached main: $(cat "$home/host.out")"
-  kill -TERM "$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")"
+  fm_test_signal TERM --identity "$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")"
   wait_until_deadline 60 host_exited "$home" || fail "away grok: the host did not stop on TERM"
   pass "host: a primary with no verified dialog mirror keeps every attended close on main, and its away posture still runs"
 }
@@ -497,7 +497,7 @@ SH
   append_status "$home" 'first'
   wait_until 250 handled_at_least "$home" 1 || fail "mirror boundary: the first wake was not handled: $(cat "$home/state/.supervision-host.log")"
   assert_re '^\[captain\] first ask$' "$home/engine-call.1" "fixture: the first turn did not carry the first dialog"
-  kill -TERM "$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")"
+  fm_test_signal TERM --identity "$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")"
   wait_until_deadline 60 host_exited "$home" || fail "mirror boundary: the first host did not stop on TERM"
 
   printf '{"hook_event_name":"UserPromptSubmit","prompt_id":"p2","prompt":"second ask, never handed over"}' > "$home/mirror-seed.2"
@@ -522,14 +522,14 @@ SH
   assert_no_re '^\[captain\] first ask$' "$second" "a resumed conversation must not be fed dialog it already has"
 
   printf '{"hook_event_name":"UserPromptSubmit","prompt_id":"p3","prompt":"third ask, turn stopped"}' > "$home/mirror-seed.3"
-  kill -TERM "$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")"
+  fm_test_signal TERM --identity "$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")"
   wait_until_deadline 60 host_exited "$home" || fail "mirror boundary: the second handling host did not stop on TERM"
   echo hang > "$home/stub-mode"
   park_after_stop "$home"
   append_status "$home" 'stopped mid-turn'
   wait_until 250 test -e "$home/engine-call.3" || fail "mirror boundary: the stopped turn never started"
   assert_re '^\[captain\] third ask, turn stopped$' "$home/engine-call.3" "fixture: the stopped turn did not carry the third dialog"
-  kill -TERM "$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")"
+  fm_test_signal TERM --identity "$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")"
   wait_until_deadline 60 host_exited "$home" || fail "mirror boundary: the host did not stop mid-turn on TERM"
   echo handle > "$home/stub-mode"
   park_after_stop "$home"
@@ -541,7 +541,7 @@ SH
   assert_no_re '^\[captain\] second ask' "$third" "a resumed conversation must not be fed dialog a handled turn delivered"
 
   printf '{"hook_event_name":"UserPromptSubmit","prompt_id":"p4","prompt":"fourth ask, turn unreported"}' > "$home/mirror-seed.4"
-  kill -TERM "$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")"
+  fm_test_signal TERM --identity "$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")"
   wait_until_deadline 60 host_exited "$home" || fail "mirror boundary: the third handling host did not stop on TERM"
   echo noreport > "$home/stub-mode"
   park_after_stop "$home"
@@ -674,7 +674,7 @@ test_away_wake_is_handled_on_the_engine_and_never_reaches_main() {
 
   pid=$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")
   watcher=$(cat "$home/state/.watch.lock/pid")
-  kill -TERM "$pid"
+  fm_test_signal TERM --identity "$pid"
   wait_until_deadline 60 host_exited "$home" || fail "the host did not stop on TERM"
   expect_code 143 "$(cat "$home/host.rc")" "a TERMed host must exit 143"
   wait_until 100 sh -c '! kill -0 "$1" 2>/dev/null' _ "$watcher" || fail "a stopped host left its watcher running"
@@ -743,7 +743,7 @@ test_silent_outcomes_are_not_relayed_when_the_captain_returns() {
       [ ! -s "$home/host.rc" ] || fail "$mode: a silent-only outcome forced a captain handoff: $(cat "$home/host.out")"
       watcher_live "$home" || fail "$mode: the host did not park on its successor"
       host=$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")
-      kill -TERM "$host"
+      fm_test_signal TERM --identity "$host"
       wait_until_deadline 60 host_exited "$home" || fail "$mode: the host did not stop on TERM"
     else
       wait_until_deadline 60 host_exited "$home" || fail "$mode: the failed turn did not hand the wake to main: $(cat "$home/host.out" 2>/dev/null) $(tail -n 8 "$home/state/.supervision-host.log" 2>/dev/null)"
@@ -807,7 +807,7 @@ test_outcome_after_the_return_survives_a_host_killed_at_the_turn_end() {
   wait_until 250 grep -qs 'supervision-host-return:1' "$home/state/.wake-queue" \
     || fail "return-first: the late outcome was never queued: $(cat "$home/engine-report.log" 2>/dev/null)"
   host=$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")
-  kill -TERM "$host"
+  fm_test_signal TERM --identity "$host"
   wait_until_deadline 60 host_exited "$home" || fail "return-first: the stopped host did not exit"
   rc=$(cat "$home/host.rc")
   [ "$rc" -gt 128 ] || fail "fixture: the host was not stopped mid-turn (rc=$rc): $(cat "$home/host.out")"
@@ -842,7 +842,7 @@ test_next_host_clears_a_turn_its_killed_predecessor_left() {
   wait_until 250 grep -qs 'supervision-host-return:1' "$home/state/.wake-queue" || fail "killed: the turn never reported"
   host=$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")
   engine=$(cut -f1 "$home/state/.supervision-host.engine-pid")
-  kill -KILL "$host"
+  fm_test_signal KILL --identity "$host"
   wait_until 100 host_exited "$home" || fail "killed: the host did not die"
   ls "$home"/state/.supervision-host-result.* >/dev/null 2>&1 || fail "fixture: the killed turn left no result file, so this case proves nothing"
   wait_until 100 sh -c '! kill -0 "$1" 2>/dev/null' _ "$engine" || fail "the bounded engine survived its killed host"

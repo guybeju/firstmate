@@ -12,8 +12,9 @@
 #     helper, which signals only a pid its signal-check accepted.
 # It also runs helpers.sh's exit cleanup, tb_stop_boards, with an empty, a
 # relative and a bare "/" TMP_ROOT, and requires that it ran no command at all.
-# Comment lines are not checked. The other board stages still send signals of
-# their own and are not checked here.
+# Comment lines are not checked. The other board stages are not checked here;
+# tests/check-signals.sh refuses a computed signal target outside the guarded
+# helper in every test directory, the board's included.
 #
 # Usage: myshape/test/check-signals.sh
 set -euo pipefail

@@ -59,7 +59,8 @@ test_recovers_from_a_crash() {
   tb_run "$home" "$TOPIC" open >/dev/null
   tb_run "$home" "$TOPIC" create "Keep me" --goal "survive" --id keep >/dev/null
   pid=$(tb_board_pid "$home")
-  kill -KILL "$pid"
+  fm_test_signal KILL --identity "$pid"
+  fm_test_signal_skipped "a crashed board is restarted" && return 0
   while kill -0 "$pid" 2>/dev/null; do sleep 0.1; done
   assert_present "$home/state/myshape/board.sock" "a killed board leaves its socket file behind"
   printf 'garbage' > "$home/data/topics.json.tmp-99999"
@@ -85,7 +86,8 @@ test_replaces_a_hung_board() {
   tb_run "$home" "$TOPIC" open >/dev/null
   tb_run "$home" "$TOPIC" create "Hang" --goal "wait" --id hang >/dev/null
   pid=$(tb_board_pid "$home")
-  kill -STOP "$pid"
+  fm_test_signal STOP --identity "$pid"
+  fm_test_signal_skipped "a hung board is replaced" && return 0
   tb_run "$home" "$TOPIC" goal hang "moved on" >/dev/null || fail "a command must get past a hung board"
   assert_not_equals "$pid" "$(tb_board_pid "$home")" "the hung board must have been replaced"
   kill -0 "$pid" 2>/dev/null && fail "the hung board must be dead"

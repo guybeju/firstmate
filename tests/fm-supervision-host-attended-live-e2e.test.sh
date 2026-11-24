@@ -66,10 +66,10 @@ stop_lab() {  # <lab>
   sleep 1
   if [ -f "$fm/state/.supervision-host" ]; then
     pid=$(awk -F '\t' '$1 == "host" { print $2; exit }' "$fm/state/.supervision-host")
-    [ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
+    [ -z "$pid" ] || fm_test_signal_try TERM --identity "$pid" || true
   fi
   pid=$(cat "$fm/state/.watch.lock/pid" 2>/dev/null || true)
-  [ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
+  [ -z "$pid" ] || fm_test_signal_try TERM --identity "$pid" || true
   FM_HOME="$fm" FM_PROCEVENT_CLAIM_ROOT="$lab/claims" "$fm/bin/fm-procevent.sh" sweep-home >/dev/null 2>&1 || true
   rm -rf "${PROJECTS:?}/$(printf '%s' "$fm" | sed 's/[^A-Za-z0-9]/-/g')"
 }

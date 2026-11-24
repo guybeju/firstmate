@@ -919,8 +919,12 @@ test_local_exclusion_list_covers_every_no_external_sources_code() {
       *) unexpected="${unexpected}${unexpected:+ }$code" ;;
     esac
   done < <(printf '%s\n' "$out" | sed -n 's/.*\[\(SC[0-9][0-9]*\)\].*/\1/p' | LC_ALL=C sort -u)
-  [ -z "$unexpected" ] \
-    || fail "no-external-sources pass emitted codes outside the local exclusion list: $unexpected"
+  if [ -n "$unexpected" ]; then
+    found=$(printf '%s' "$unexpected" | tr ' ' '|')
+    found=$(printf '%s\n' "$out" | grep -E "\[($found)\]" | head -40)
+    fail "no-external-sources pass emitted codes outside the local exclusion list: $unexpected
+$found"
+  fi
   pass "local exclusion list covers every no-external-sources ShellCheck code"
 }
 
@@ -1322,6 +1326,35 @@ test_doctor_change_without_its_pin_fails_lint() {
   pass "fm-lint.sh fails a remote doctor change that leaves the entrypoint pin stale"
 }
 
+# The test tree's signal check (tests/check-signals.sh) runs in every lint
+# mode: a test file that signals a pid read from a file fails lint, and the
+# same tree without that file passes.
+test_signal_check_findings_fail_lint() {
+  local tmp fakebin repo mode out rc sig='kill'
+  tmp=$(fm_test_tmproot fm-lint-signal-check)
+  fakebin=$(fm_fakebin "$tmp")
+  repo="$tmp/repo"
+  fm_lint_doctor_pin_repo "$repo" "$fakebin"
+  cp "$ROOT/tests/check-signals.sh" "$repo/tests/check-signals.sh"
+
+  for mode in ci changed explicit; do
+    rc=0
+    out=$(fm_lint_doctor_pin_run "$repo" "$fakebin" "$mode") || rc=$?
+    [ "$rc" -eq 0 ] || fail "lint failed a clean test tree under the signal check ($mode mode)"$'\n'"$out"
+  done
+
+  # shellcheck disable=SC2016 # The fixture test's $(...) and $home are literal text.
+  printf '%s -TERM "$(cat "$home/state/x.pid")" || true\n' "$sig" > "$repo/tests/pidfile.test.sh"
+  for mode in ci changed explicit; do
+    rc=0
+    out=$(fm_lint_doctor_pin_run "$repo" "$fakebin" "$mode") || rc=$?
+    [ "$rc" -ne 0 ] || fail "lint passed a test that signals a pid read from a file ($mode mode)"$'\n'"$out"
+    assert_contains "$out" "tests/pidfile.test.sh:1: a signal to a pid read from a file outside the guarded helper" \
+      "lint did not name the signal check's finding ($mode mode)"
+  done
+  pass "fm-lint.sh fails a test that signals a computed target outside the guarded helper"
+}
+
 test_doctor_pin_check_refuses_an_unreadable_pin() {
   local tmp fakebin repo case_name expected out rc
   for case_name in missing-pin duplicate-pin missing-doctor; do
@@ -1494,9 +1527,12 @@ if [ "${1:-}" = "--version" ]; then
 fi
 printf '%s\n' "$$" > "$FM_TEST_SHELLCHECK_PID"
 trap 'exit 143' HUP INT TERM
-while :; do
+i=0
+while [ "$i" -lt "${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}" ]; do
   sleep 1
+  i=$((i + 1))
 done
+exit 1
 SH
   chmod +x "$fakebin/shellcheck"
 
@@ -1538,7 +1574,7 @@ SH
       done
       if kill -0 "$shellcheck_pid" 2>/dev/null; then
         survivor=1
-        kill -KILL "$shellcheck_pid" 2>/dev/null || true
+        fm_test_signal_try KILL --identity "$shellcheck_pid" || true
       fi
       [ "$parent_rc" -eq 143 ] \
         || fail "jobs=$jobs telemetry=$telemetry signal exit was $parent_rc, expected 143"
@@ -2178,6 +2214,7 @@ test_rejects_direct_beads_cli_invocations
 test_rejects_direct_beads_cli_in_explicit_core_path
 test_doctor_change_without_its_pin_fails_lint
 test_doctor_pin_check_refuses_an_unreadable_pin
+test_signal_check_findings_fail_lint
 test_ignores_ambient_shellcheck_opts
 test_clean_fixture_passes
 test_jobs_are_deterministic_and_complete

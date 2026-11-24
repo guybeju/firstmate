@@ -51,7 +51,7 @@ pi_reap_process_groups() {
   for signal in TERM KILL; do
     while IFS= read -r pgid; do
       case "$pgid" in ''|*[!0-9]*) continue ;; esac
-      pi_owned_group_live "$pgid" && kill -s "$signal" -- "-$pgid" 2>/dev/null
+      pi_owned_group_live "$pgid" && fm_test_signal_try "$signal" --members "$pgid"
     done < "$PI_PROCESS_GROUPS"
     i=0
     while [ "$i" -lt 20 ]; do
@@ -3449,7 +3449,7 @@ test_pi_session_transition_generation_owner() {
 # predecessor only after this successor process has been committed.
 previous=$(cat "${FM_CHILD_PID_FILE:?}" 2>/dev/null || true)
 if [ -n "$previous" ] && kill -0 "$previous" 2>/dev/null; then
-  kill -TERM "$previous" 2>/dev/null || true
+  "$FM_TEST_SIGNAL_GUARD" --send fm-watch-arm-stand-in TERM --identity "$previous" >/dev/null 2>&1 || true
 fi
 if [ -f "${FM_FAIL_ONCE:?}" ]; then
   rm -f "$FM_FAIL_ONCE"
@@ -3715,9 +3715,11 @@ previous=$(sed -n '1p' "$FM_ARM_LOG.pid" 2>/dev/null || true)
 previous_marker=$(sed -n '2p' "$FM_ARM_LOG.pid" 2>/dev/null || true)
 printf '%s\n%s\n' "$$" "$marker" > "$FM_ARM_LOG.pid"
 if [ -n "$previous" ] && [ -f "$previous_marker" ]; then
-  kill -TERM "$previous" 2>/dev/null || true
+  "$FM_TEST_SIGNAL_GUARD" --send fm-watch-arm-stand-in TERM --identity "$previous" >/dev/null 2>&1 || true
 fi
-while :; do
+i=0
+while [ "$i" -lt $((${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120} * 50)) ]; do
+  i=$((i + 1))
   if [ -e "$FM_TRIGGER_FILE" ]; then
     outcome=$(cat "$FM_TRIGGER_FILE")
     rm -f "$FM_TRIGGER_FILE"
@@ -3729,6 +3731,7 @@ while :; do
   [ ! -e "$FM_STOP_FILE" ] || exit 0
   sleep 0.02
 done
+exit 1
 SH
   chmod +x "$repo/bin/fm-watch-arm.sh"
   out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_MARKER_ROOT="$marker_root" FM_TRIGGER_FILE="$trigger" FM_STOP_FILE="$stop" node --input-type=module 2>&1 <<'EOF'
@@ -4160,10 +4163,12 @@ trap 'exit 0' TERM INT
 previous=$(sed -n '1p' "$FM_ARM_LOG.pid" 2>/dev/null || true)
 previous_marker=$(sed -n '2p' "$FM_ARM_LOG.pid" 2>/dev/null || true)
 printf '%s\n%s\n' "$$" "$live" > "$FM_ARM_LOG.pid"
-if [ -n "$previous" ] && [ -f "$previous_marker" ]; then kill -TERM "$previous" 2>/dev/null || true; fi
+if [ -n "$previous" ] && [ -f "$previous_marker" ]; then "$FM_TEST_SIGNAL_GUARD" --send fm-watch-arm-stand-in TERM --identity "$previous" >/dev/null 2>&1 || true; fi
 if [ "$FM_HELD_CLOSE_CASE" = replacement ] && [ "$count" -eq 3 ]; then
   printf 'waiting=3\n' >> "$FM_ARM_LOG"
-  while :; do sleep 0.02; done
+  i=0
+  while [ "$i" -lt $((${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120} * 50)) ]; do sleep 0.02; i=$((i + 1)); done
+  exit 1
 fi
 printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
 printf 'ready=%s\n' "$count" >> "$FM_ARM_LOG"
@@ -4526,7 +4531,7 @@ count=$((count + 1))
 printf '%s\n' "$count" > "$FM_ARM_COUNT"
 previous=$(cat "$FM_ARM_COUNT.pid" 2>/dev/null || true)
 printf '%s\n' "$$" > "$FM_ARM_COUNT.pid"
-[ -z "$previous" ] || kill -TERM "$previous" 2>/dev/null || true
+[ -z "$previous" ] || "$FM_TEST_SIGNAL_GUARD" --send fm-watch-arm-stand-in TERM --identity "$previous" >/dev/null 2>&1 || true
 late_close() {
   sleep 0.15
   printf 'signal: late retiring actionable outcome\n'
@@ -4634,7 +4639,7 @@ count=$((count + 1))
 printf '%s\n' "$count" > "$FM_ARM_COUNT"
 previous=$(cat "$FM_ARM_COUNT.pid" 2>/dev/null || true)
 printf '%s\n' "$$" > "$FM_ARM_COUNT.pid"
-[ -z "$previous" ] || kill -TERM "$previous" 2>/dev/null || true
+[ -z "$previous" ] || "$FM_TEST_SIGNAL_GUARD" --send fm-watch-arm-stand-in TERM --identity "$previous" >/dev/null 2>&1 || true
 late_close() {
   sleep 0.08
   printf 'signal: module-%s late actionable outcome\n' "$count"
@@ -4744,8 +4749,12 @@ if [ "$count" -eq 1 ]; then
 fi
 previous=$(cat "$FM_CHILD_MARKER" 2>/dev/null || true)
 if [ -n "$previous" ] && kill -0 "$previous" 2>/dev/null; then
-  kill -TERM "$previous" 2>/dev/null || true
-  while kill -0 "$previous" 2>/dev/null; do sleep 0.01; done
+  "$FM_TEST_SIGNAL_GUARD" --send fm-watch-arm-stand-in TERM --identity "$previous" >/dev/null 2>&1 || true
+  i=0
+  while kill -0 "$previous" 2>/dev/null && [ "$i" -lt $((${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120} * 100)) ]; do
+    sleep 0.01
+    i=$((i + 1))
+  done
 fi
 cleanup() { rm -f "$FM_CHILD_MARKER"; }
 trap cleanup EXIT
@@ -4897,20 +4906,21 @@ EOF
     i=$((i + 1))
   done
   if kill -0 "$poller" 2>/dev/null; then
-    kill -KILL "$poller" 2>/dev/null || true
+    fm_test_signal_try KILL --identity "$poller" || true
     fail "the process-group reap left the failed case's poller pid $poller running"
   fi
-  out=$(ps -eo ppid=,args= 2>/dev/null | awk -v root="$repo/" '$1 == 1 && index($0, root)')
+  out=$(fm_test_root_orphans "$repo")
   [ -z "$out" ] || fail "orphans from the failed case survived the reap: $out"
   pass "Pi teardown reaps a failed case's orphaned poller as a process group"
 }
 
 # Run last: after the teardown reap, nothing this suite started may be left
-# running under init from its temporary root.
+# running as an orphan (under init or the session's subreaper) from its
+# temporary root.
 test_pi_suite_leaves_no_orphaned_processes() {
   local out
   pi_reap_process_groups
-  out=$(ps -eo ppid=,args= 2>/dev/null | awk -v root="$TMP_ROOT/" '$1 == 1 && index($0, root)')
+  out=$(fm_test_root_orphans "$TMP_ROOT")
   [ -z "$out" ] || fail "processes from this suite's temporary root outlived the teardown reap: $out"
   pass "Pi suite leaves no orphaned process from its temporary root"
 }
@@ -4981,7 +4991,7 @@ EOF
   done
   grep -qx "$pid" "$cleanup_log" 2>/dev/null || fail "Pi process-exit fallback did not deliver TERM to the replacement arm child"
   if kill -0 "$pid" 2>/dev/null; then
-    kill -TERM "$pid" 2>/dev/null || true
+    fm_test_signal_try TERM --identity "$pid" || true
     fail "Pi arm child $pid survived process-exit cleanup"
   fi
   pass "Pi process-exit cleanup stops the attached arm child"

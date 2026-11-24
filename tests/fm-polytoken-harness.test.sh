@@ -716,7 +716,7 @@ test_polytoken_rest_interrupt_settles_the_turn() {
   out=$(fm_polytoken_interrupt "$port" not-the-token 2 2>/dev/null)
   rc=$?
   [ "$rc" -ne 0 ] || fail "an unauthorized cancel must refuse rather than guess success"
-  kill "$pid" 2>/dev/null || true
+  fm_test_signal_try TERM --identity "$pid" || true
   pass "fm-polytoken-lib: the REST interrupt reports cancelled, not-running, and refuses unauthorized"
 }
 
@@ -734,7 +734,7 @@ interrupt_task_case() {  # <name> <event-written-during-cancel> [reopen-after] -
   read -r port pid < "$dir/handle"
   out=$(fm_polytoken_interrupt_task "$ROOT/bin" "$state" task "$port" stub-token 8) \
     || fail "the interrupt must be acknowledged"
-  kill "$pid" 2>/dev/null || true
+  fm_test_signal_try TERM --identity "$pid" || true
   [ "$out" = cancelled ] || fail "a settled cancel must report cancelled, got '$out'"
   fm_busy_record_read "$state" task
 }
@@ -772,7 +772,7 @@ test_polytoken_turn_settled_reads_the_typed_sync_verdict() {
     || fail "the cancel must be accepted"
   fm_polytoken_turn_settled "$port" "$token" \
     || fail "a cancelled turn must read as settled"
-  kill "$pid" 2>/dev/null || true
+  fm_test_signal_try TERM --identity "$pid" || true
   pass "fm-polytoken-lib: the typed settle postcondition follows GET /sync"
 }
 

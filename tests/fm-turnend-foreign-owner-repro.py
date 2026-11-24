@@ -59,6 +59,8 @@ def make(name):
         "FM_HOME_SUMMARY_INTERVAL": "999999",
         "FM_CHECK_INTERVAL": "999999",
         "FM_CLAUDE_AUTOARM_SYNC_WAIT_MS": "0",
+        "FM_PROCEVENT_CLAIM_ROOT": str(LAB / "procevent-claims"),
+        "FM_SUPERVISION_ENGINE_CLAUDE_BIN": str(LAB / "no-supervision-engine"),
     }
     return root, env
 
@@ -73,17 +75,28 @@ def run(env, command):
     )
 
 
+# A stand-in owner idles until stop() ends it, and ends by itself after 600 s,
+# past this script's worst case (seven 20 s waits and its 30 s runs). In a
+# log-only run, where stop()'s signals are only logged, stop() also writes the
+# stand-in's release file, so it ends at once and leaves nothing behind.
+IDLE = ('i=0; while [ ! -e "$REPRO_IDLE_RELEASE" ] && [ "$i" -lt 600 ]; '
+        'do sleep 1; i=$((i + 1)); done')
+LOG_ONLY = bool(os.environ.get("FM_TEST_SIGNAL_DRY_RUN"))
+
+
 def start(env, command, name):
     output = (OUT / name).open("w")
+    release = OUT / (name + ".release")
     process = subprocess.Popen(
         [str(FAKE), "-c", command],
-        env=env,
+        env=env | {"REPRO_IDLE_RELEASE": str(release)},
         stdout=output,
         stderr=subprocess.STDOUT,
         start_new_session=True,
         text=True,
     )
     output.close()
+    process.idle_release = release
     PROCS.append(process)
     return process
 
@@ -129,14 +142,32 @@ def autoarm(env, label):
     return process
 
 
+def guarded_signal(signal_name, form, pid):
+    """Send through the test's guarded helper (signal policy P-010), run directly."""
+    subprocess.run([os.environ["FM_TEST_SIGNAL_GUARD"], "--send", "turnend-foreign-owner-repro",
+                    signal_name, form, str(pid)], stdout=subprocess.DEVNULL, check=False)
+
+
 def stop(process):
     if process.poll() is None:
-        os.killpg(process.pid, signal.SIGTERM)
+        if LOG_ONLY:
+            process.idle_release.touch()
+        guarded_signal("TERM", "--group", process.pid)
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
+            guarded_signal("KILL", "--members", process.pid)
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                raise RuntimeError(f"stand-in {process.pid} did not end within 10 s of KILL") from None
+
+
+def skipped(case):
+    """In a log-only run only, report the case as skipped after its logged send."""
+    if LOG_ONLY:
+        print("ok - skip: log-only run, the signal was logged and not sent: " + case, flush=True)
+    return LOG_ONLY
 
 
 def require(condition, message):
@@ -148,7 +179,7 @@ try:
     root, env = make("nonowner")
     owner = start(
         env,
-        '"$FM_ROOT_OVERRIDE/bin/fm-lock.sh" && touch "$FM_HOME/state/owner-ready" && while :; do sleep 1; done',
+        '"$FM_ROOT_OVERRIDE/bin/fm-lock.sh" && touch "$FM_HOME/state/owner-ready" && ' + IDLE,
         "owner-idle.txt",
     )
     lock_path = root / "state/.lock"
@@ -194,20 +225,21 @@ try:
     require(fresh.returncode == 0, "a fresh leftover beat must not restore foreign-owner blocking")
 
     stop(owner)
-    replacement = start(
-        env,
-        'printf \'%s\\n\' \'{"session_id":"replacement","stop_hook_active":true}\' | "$FM_ROOT_OVERRIDE/bin/fm-claude-stop-autoarm.sh"; printf "replacement_rc=%s\\n" "$?"; sleep 1',
-        "replacement.txt",
-    )
-    until(
-        lambda: (root / "state/.watch.lock/pid").is_file(),
-        message="replacement owner did not publish state/.watch.lock/pid",
-    )
-    watcher_pid = (root / "state/.watch.lock/pid").read_text().strip()
-    print("COUNTERFACTUAL dead original owner: watcher=", watcher_pid, flush=True)
-    healthy = guard(env, "replacement-owned healthy watcher")
-    require(healthy.returncode == 0, "a replacement owning session must still recover supervision")
-    stop(replacement)
+    if not skipped("a replacement owning session recovers supervision after the owner dies"):
+        replacement = start(
+            env,
+            'printf \'%s\\n\' \'{"session_id":"replacement","stop_hook_active":true}\' | "$FM_ROOT_OVERRIDE/bin/fm-claude-stop-autoarm.sh"; printf "replacement_rc=%s\\n" "$?"; sleep 1',
+            "replacement.txt",
+        )
+        until(
+            lambda: (root / "state/.watch.lock/pid").is_file(),
+            message="replacement owner did not publish state/.watch.lock/pid",
+        )
+        watcher_pid = (root / "state/.watch.lock/pid").read_text().strip()
+        print("COUNTERFACTUAL dead original owner: watcher=", watcher_pid, flush=True)
+        healthy = guard(env, "replacement-owned healthy watcher")
+        require(healthy.returncode == 0, "a replacement owning session must still recover supervision")
+        stop(replacement)
 
     # Positive control: a live harness-shaped process outside the owner's
     # ancestry that carries the owner's own trusted session id is the same
@@ -219,7 +251,7 @@ try:
     same_env["CLAUDE_CODE_SESSION_ID"] = "synthetic-same"
     same_owner = start(
         same_env,
-        'export CLAUDE_PID=$$; "$FM_ROOT_OVERRIDE/bin/fm-lock.sh" && touch "$FM_HOME/state/owner-ready" && while :; do sleep 1; done',
+        'export CLAUDE_PID=$$; "$FM_ROOT_OVERRIDE/bin/fm-lock.sh" && touch "$FM_HOME/state/owner-ready" && ' + IDLE,
         "same-owner.txt",
     )
     same_lock = same / "state/.lock"
@@ -245,7 +277,7 @@ try:
         'export CLAUDE_PID=$$; printf "%s\\n" "$$" > "$FM_HOME/state/accepted-pid"; '
         '"$FM_ROOT_OVERRIDE/bin/fm-lock.sh"; printf "%s\\n" "$?" > "$FM_HOME/state/accepted-rc.tmp"; '
         'mv "$FM_HOME/state/accepted-rc.tmp" "$FM_HOME/state/accepted-rc"; '
-        "while :; do sleep 1; done",
+        + IDLE,
         "same-accepted.txt",
     )
     until(
@@ -292,6 +324,13 @@ try:
     require("single_owner_guard_rc=2" in sole_owner.stdout, "a sole owner without supervision must retain the guard")
     print("COMPLETE", flush=True)
 finally:
+    leftover = []
     for process in reversed(PROCS):
-        stop(process)
+        try:
+            stop(process)
+        except RuntimeError as error:
+            leftover.append(str(error))
     shutil.rmtree(LAB, ignore_errors=True)
+    if leftover:
+        print("FAILED: " + "; ".join(leftover), flush=True)
+        raise SystemExit(1)

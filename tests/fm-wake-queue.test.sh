@@ -1050,7 +1050,7 @@ test_secondmate_proven_idle_ring_lets_the_child_drain() {
 # lands while that read is blocked must still stop the watcher at once and run
 # its cleanup, as it does for every other pane read.
 test_term_stops_a_watcher_blocked_in_the_drain_ring_idle_capture() {
-  local dir state sub fakebin fifo out pid holder i rc orphan
+  local dir state sub fakebin fifo out pid holder i rc orphan orphan_pid
   dir=$(make_case secondmate-ring-blocked-capture)
   state="$dir/state"
   sub="$dir/secondmate"
@@ -1117,7 +1117,7 @@ SH
   wait_for_exit "$pid" 100
   rc=$?
   orphan=$(pgrep -f "cat $fifo" || true)
-  [ -z "$orphan" ] || pkill -f "cat $fifo" 2>/dev/null || true
+  for orphan_pid in $orphan; do fm_test_signal_try TERM --identity "$orphan_pid" || true; done
   kill "$holder" 2>/dev/null || true
   wait "$holder" 2>/dev/null || true
   [ "$rc" -ne 124 ] || fail "TERM did not stop a watcher blocked in the drain-ring idle capture"

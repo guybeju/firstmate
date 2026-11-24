@@ -27,7 +27,9 @@ JOB_LABEL=dev.firstmate.remote-job
 CASE_N=0
 DOCTOR_WORKER_PID=
 HOLDER_PIDS=()
-trap 'if [ -n "$DOCTOR_WORKER_PID" ]; then kill "$DOCTOR_WORKER_PID" 2>/dev/null || true; fi; if [ "${#HOLDER_PIDS[@]}" -gt 0 ]; then kill "${HOLDER_PIDS[@]}" 2>/dev/null || true; fi; fm_test_cleanup || true' EXIT
+# The EXIT trap's loop variable; declared here because the trap is a string.
+holder=
+trap 'if [ -n "$DOCTOR_WORKER_PID" ]; then fm_test_signal_try TERM --identity "$DOCTOR_WORKER_PID" || true; fi; for holder in "${HOLDER_PIDS[@]+"${HOLDER_PIDS[@]}"}"; do fm_test_signal_try TERM --identity "$holder" || true; done; fm_test_cleanup || true' EXIT
 GUARD="$ROOT/bin/fm-remote-herdr-guard.sh"
 
 # A fixture must be able to present a host with NO herdr, so the doctor never
@@ -226,7 +228,7 @@ EOF
       marker="$FM_FAKE_HOME/.firstmate/remote-herdr-takeover-fm-remote"
       { IFS= read -r doctor_pid; IFS= read -r doctor_start; } < "$marker" || exit 7
       [ -n "$doctor_start" ] || exit 7
-      kill -"$(cat "$FM_FAKE_STATE/interrupt-takeover")" "$doctor_pid"
+      "$FM_TEST_SIGNAL_GUARD" --send fake-launchctl "$(cat "$FM_FAKE_STATE/interrupt-takeover")" --identity "$doctor_pid" >/dev/null
       exit 0
     fi
     [ ! -f "$FM_FAKE_STATE/kickstart-fail" ] || { printf 'Kickstart failed: service unavailable\n' >&2; exit 6; }
@@ -1252,13 +1254,13 @@ assert_contains "$DOCTOR_OUT" 'check remote-job-worker=ok:' "the refreshed worke
 assert_contains "$DOCTOR_OUT" 'check remote-job-probe=ok: the remote job worker completed the required-tool probe' \
   "doctor did not probe tools through the refreshed worker"
 DOCTOR_WORKER_PID=$(cat "$CASE_HOME/.firstmate/remote-job/worker.pid")
-kill -TERM "$DOCTOR_WORKER_PID"
+fm_test_signal TERM --identity "$DOCTOR_WORKER_PID"
 for _ in $(seq 1 100); do
   kill -0 "$DOCTOR_WORKER_PID" 2>/dev/null || break
   sleep 0.05
 done
 if kill -0 "$DOCTOR_WORKER_PID" 2>/dev/null; then
-  kill -KILL "$DOCTOR_WORKER_PID" 2>/dev/null || true
+  fm_test_signal_try KILL --identity "$DOCTOR_WORKER_PID" || true
 fi
 DOCTOR_WORKER_PID=
 pass "doctor refreshes stale worker identity before probing tools"

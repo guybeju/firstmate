@@ -292,6 +292,11 @@ fm_test_reap_procevent_homes() {
     case "$seen" in *$'\n'"$home"$'\n'*) continue ;; esac
     seen+="$home"$'\n'
     [ -d "$home/state/procevent" ] || continue
+    if ! fm_test_under_run_root "$home"; then
+      fm_test_signal_note "source=fm_test_cleanup | product stop not called: fm-procevent.sh sweep-home for home $home, which is not under this run's temp roots"
+      continue
+    fi
+    fm_test_signal_note "source=fm_test_cleanup | product stop: fm-procevent.sh sweep-home | home=$home claim_root=${claim_root:--}"
     if [ -n "$claim_root" ]; then
       FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_PROCEVENT_CLAIM_ROOT="$claim_root" \
         "$ROOT/bin/fm-procevent.sh" sweep-home >/dev/null 2>&1 || true
@@ -324,7 +329,7 @@ fm_test_track_watcher_state() {  # <state-dir>
 }
 
 fm_test_reap_watchers() {
-  local state lock_home seen=$'\n'
+  local state lock_home lock_pid seen=$'\n'
   [ -f "$FM_TEST_WATCHER_REGISTRY" ] || return 0
   while IFS= read -r state; do
     [ -n "$state" ] || continue
@@ -338,6 +343,12 @@ fm_test_reap_watchers() {
     [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" != "$$" ] || continue
     lock_home=$(cat "$state/.watch.lock/fm-home" 2>/dev/null || true)
     [ -n "$lock_home" ] || continue
+    lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
+    if ! fm_test_under_run_root "$lock_home"; then
+      fm_test_signal_note "source=fm_test_cleanup | product stop not called: fm-watch-arm.sh --stop for home $lock_home, which is not under this run's temp roots | lock pid=${lock_pid:--}"
+      continue
+    fi
+    fm_test_signal_note "source=fm_test_cleanup | product stop: fm-watch-arm.sh --stop | home=$lock_home state=$state lock pid=${lock_pid:--} command=$(ps -ww -o args= -p "${lock_pid:-0}" 2>/dev/null || true)"
     FM_HOME="$lock_home" FM_STATE_OVERRIDE="$state" \
       "$ROOT/bin/fm-watch-arm.sh" --stop >/dev/null 2>&1 || true
   done < "$FM_TEST_WATCHER_REGISTRY"
@@ -358,6 +369,19 @@ export FM_TEST_STUB_MAX_BLOCK_SECONDS
 # poll past a runner killed too hard for any cleanup to run.
 FM_TEST_SUITE_PID=$$
 export FM_TEST_SUITE_PID
+# The identity evidence tests/signal-guard.sh checks before a computed signal:
+# this run's temp roots (the fm_test_tmproot registry) and this run's own mark,
+# which every process the run starts inherits in FM_TEST_RUN_MARKS; a nested
+# suite adds its own mark after its parent's.
+FM_TEST_RUN_ROOTS=$FM_TEST_CLEANUP_REGISTRY
+FM_TEST_RUN_MARK="fm-test-run-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+FM_TEST_RUN_MARKS="${FM_TEST_RUN_MARKS:+$FM_TEST_RUN_MARKS }$FM_TEST_RUN_MARK"
+export FM_TEST_RUN_ROOTS FM_TEST_RUN_MARK FM_TEST_RUN_MARKS
+# Stand-ins and Perl, Python or Node test code send a computed signal by
+# running "$FM_TEST_SIGNAL_GUARD" --send <source> <signal> <form> directly,
+# with an argument list, so the guard sees them as its caller.
+FM_TEST_SIGNAL_GUARD="$ROOT/tests/signal-guard.sh"
+export FM_TEST_SIGNAL_GUARD
 
 # fm_test_nonplatform_binary <binary> <dir>: print a path that runs <binary> as
 # a non-platform process. macOS hides a platform binary's environment from
@@ -390,32 +414,101 @@ fm_test_remove_tree() {
 # run from a fixture checkout whose bin links back here, or a fake harness
 # session - can reparent to init and keep polling after its test ends, and
 # removing the root only turns its wait into one that can never finish. Before a
-# root is removed, every process naming that exact mktemp root is signalled,
-# TERM and then KILL, each followed by a bounded 2s wait. The match is the
-# unique per-run root path, never a script or process name, so it cannot reach
-# another home's processes; this shell and its ancestors are never signalled.
-fm_test_reap_root_processes() {  # <root>
-  local root=${1%/} chain pid pids signal i
-  [ -n "$root" ] && [ "$root" != / ] || return 0
+# root of this run is removed, every process naming that exact mktemp root is
+# sent TERM and then KILL through the guarded helper (tests/signal-guard.sh
+# --identity, which verifies the root in its command line before each send),
+# each followed by a bounded 2s wait. The match is the unique per-run root
+# path, never a script or process name, and this shell and its ancestors are
+# never candidates. In log-only mode the helper records each one and sends
+# nothing; the reap first gives them 10 s to end by themselves. A root of
+# another run (fm_test_reap_orphans) is never signalled.
+fm_test_root_pids() {  # <root>: pids whose command line names <root>/, this shell's chain excluded.
+  local chain pid
   chain=" "
   pid=$$
   while [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; do
     chain="$chain$pid "
     pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')
   done
-  for signal in TERM KILL; do
+  ps -ww -eo pid=,args= 2>/dev/null \
+    | FM_TEST_REAP_ROOT="$1/" awk -v chain="$chain" \
+      'index($0, ENVIRON["FM_TEST_REAP_ROOT"]) && index(chain, " " $1 " ") == 0 { print $1 }'
+}
+
+fm_test_reap_root_processes() {  # <root>
+  local root=${1%/} pid pids signal i
+  [ -n "$root" ] && [ "$root" != / ] || return 0
+  pids=$(fm_test_root_pids "$root")
+  [ -n "$pids" ] || return 0
+  if fm_test_signal_dry_run; then
     i=0
-    while [ "$i" -lt 20 ]; do
-      pids=$(ps -ww -eo pid=,args= 2>/dev/null \
-        | FM_TEST_REAP_ROOT="$root/" awk -v chain="$chain" \
-          'index($0, ENVIRON["FM_TEST_REAP_ROOT"]) && index(chain, " " $1 " ") == 0 { print $1 }')
-      [ -n "$pids" ] || return 0
-      # shellcheck disable=SC2086 # one argument per pid
-      [ "$i" -gt 0 ] || kill -s "$signal" $pids 2>/dev/null
+    while [ -n "$pids" ] && [ "$i" -lt 100 ]; do
       sleep 0.1
       i=$((i + 1))
+      pids=$(fm_test_root_pids "$root")
+    done
+    for pid in $pids; do
+      "$ROOT/tests/signal-guard.sh" --send fm_test_cleanup TERM --identity "$pid" >/dev/null 2>&1 || true
+    done
+    return 0
+  fi
+  for signal in TERM KILL; do
+    for pid in $pids; do
+      "$ROOT/tests/signal-guard.sh" --send fm_test_cleanup "$signal" --identity "$pid" >/dev/null 2>&1 || true
+    done
+    i=0
+    while [ "$i" -lt 20 ]; do
+      sleep 0.1
+      i=$((i + 1))
+      pids=$(fm_test_root_pids "$root")
+      [ -n "$pids" ] || return 0
     done
   done
+}
+
+# fm_test_is_orphan <pid>: 0 when <pid> is alive and walking up its parents
+# never reaches this test script, so it was left behind by the run. That
+# holds wherever orphans go: pid 1, or a subreaper such as `systemd --user` on
+# a desktop session. It only reads the process table; nothing is signalled.
+fm_test_is_orphan() {
+  local pid=$1 levels=0
+  [ -n "$(ps -o pid= -p "$pid" 2>/dev/null)" ] || return 1
+  while [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && [ "$levels" -lt 64 ]; do
+    [ "$pid" != "$FM_TEST_SUITE_PID" ] || return 1
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')
+    levels=$((levels + 1))
+  done
+  return 0
+}
+
+# fm_test_root_orphans <root>: each orphan (fm_test_is_orphan) whose command
+# line names <root>/, as "<pid> <command>" lines.
+fm_test_root_orphans() {
+  local pid
+  for pid in $(fm_test_root_pids "${1%/}"); do
+    fm_test_is_orphan "$pid" || continue
+    printf '%s %s\n' "$pid" "$(ps -ww -o args= -p "$pid" 2>/dev/null)"
+  done
+}
+
+# fm_test_under_run_root <path>: 0 when <path> is inside a root this run made.
+fm_test_under_run_root() {
+  local path root
+  path=$(cd -P -- "$1" 2>/dev/null && pwd -P) || path=$1
+  [ -f "$FM_TEST_CLEANUP_REGISTRY" ] || return 1
+  while IFS= read -r root; do
+    [ -n "$root" ] || continue
+    case "$path/" in "$root"/*) return 0 ;; esac
+  done < "$FM_TEST_CLEANUP_REGISTRY"
+  return 1
+}
+
+# fm_test_signal_note <line>: one line in the log-only record; nothing otherwise.
+# It runs at source time too (fm_test_reap_orphans), before the log-only mode
+# is validated below, so it checks the log path itself.
+fm_test_signal_note() {
+  [ -n "${FM_TEST_SIGNAL_DRY_RUN:-}" ] || return 0
+  case "${FM_TEST_SIGNAL_LOG:-}" in /*) printf '%s\n' "$1" >> "$FM_TEST_SIGNAL_LOG" ;; esac
 }
 
 fm_test_cleanup() {
@@ -462,13 +555,16 @@ export TREEHOUSE_ROOT
 # prior run that was killed hard enough to skip the traps above (e.g. a
 # SIGKILL timeout). Only removes directories carrying the .fm-test-fixture
 # marker fm_test_tmproot writes, so it never touches unrelated fm-* tmp dirs
-# from real (non-test) firstmate commands. The marker identifies the owning
+# from real (non-test) firstmate commands. It never signals: a root another
+# run made is not this run's own evidence, so while any process still names
+# it the root is kept and each such process is reported on stderr (and in the
+# log-only record), and a later run tries again. The marker identifies the owning
 # shell across PID reuse, so the same live owner always wins over the age
 # fallback for dead or unowned roots.
 FM_TEST_ORPHAN_MAX_AGE_SECONDS=${FM_TEST_ORPHAN_MAX_AGE_SECONDS:-3600}
 
 fm_test_reap_orphans() {
-  local marker dir mtime now owner_pid owner_identity current_identity
+  local marker dir mtime now owner_pid owner_identity current_identity pid pids
   now=$(date +%s)
   for marker in "$FM_TEST_TMPDIR"/fm-*/.fm-test-fixture; do
     [ -e "$marker" ] || continue
@@ -486,7 +582,15 @@ fm_test_reap_orphans() {
     mtime=$(stat -c %Y "$marker" 2>/dev/null || stat -f %m "$marker" 2>/dev/null) || continue
     [ $((now - mtime)) -ge "$FM_TEST_ORPHAN_MAX_AGE_SECONDS" ] || continue
     dir=$(dirname "$marker")
-    fm_test_reap_root_processes "$dir"
+    pids=$(fm_test_root_pids "$dir")
+    if [ -n "$pids" ]; then
+      for pid in $pids; do
+        printf '# fm-test: stale fixture root %s kept; pid %s still names it: %s\n' \
+          "$dir" "$pid" "$(ps -ww -o args= -p "$pid" 2>/dev/null || true)" >&2
+        fm_test_signal_note "source=fm_test_reap_orphans | stale root of another run kept, not signalled | root=$dir pid=$pid"
+      done
+      continue
+    fi
     fm_test_remove_tree "$dir"
   done
 }
@@ -709,6 +813,15 @@ fm_test_signal_dry_run() {
   [ -n "${FM_TEST_SIGNAL_DRY_RUN:-}" ]
 }
 
+# fm_test_signal_skipped <case>: right after a signal a case depends on, in
+# log-only mode only, report the case as skipped (its signal was logged, not
+# sent) and return 0 so the caller returns; otherwise return 1 and print
+# nothing. Use: fm_test_signal_skipped "<case>" && return 0
+fm_test_signal_skipped() {
+  fm_test_signal_dry_run || return 1
+  pass "skip: log-only run, the signal was logged and not sent: $1"
+}
+
 fm_test_record_child() {  # <pid that $! just gave>
   case "${1:-}" in
     '' | 0* | *[!0-9]*) fail "fm_test_record_child: '${1:-}' is not a pid from \$!" ;;
@@ -718,34 +831,58 @@ fm_test_record_child() {  # <pid that $! just gave>
 
 # fm_test_signal <signal-name> <pid>
 # fm_test_signal <signal-name> --below <recorded-pid> <command-glob> <stand-in-pid>
+# fm_test_signal <signal-name> --identity <pid>
+# fm_test_signal <signal-name> --group <leader-pid>
+# fm_test_signal <signal-name> --members <group-id>
 # The tests' way to signal. The first form signals a recorded child of this
-# shell; the second a process under one, which the guard picks and verifies
-# itself at send time (see tests/signal-guard.sh; fm_test_crash_at is its
-# caller). Anything the guard refuses fails the test unsent; in log-only mode
-# nothing is sent at all. Sets FM_TEST_SIGNALLED_PID. A recorded child this
-# shell has not waited for cannot have been reused.
+# shell; --below a process under one; --identity a process the test did not
+# start itself but that carries evidence of this run; --group a group whose
+# live leader carries path or ancestry evidence; --members each live member of
+# a group whose leader may be gone, one by one. tests/signal-guard.sh owns the
+# checks and sends at once, so it verifies the target live (fm_test_crash_at
+# is the --below caller). Anything the guard refuses fails the test unsent
+# (with --members, any refused member fails it, and accepted members are still
+# signalled); in log-only mode nothing is sent at all. Sets
+# FM_TEST_SIGNALLED_PID to the pid or group leader signalled. A recorded child
+# this shell has not waited for cannot have been reused.
 fm_test_signal() {
   fm_test_signal_try "$@" || fail "signal guard: $FM_TEST_SIGNAL_VERDICT"
 }
 
 # fm_test_signal_try: fm_test_signal, but a refusal returns 1 with the verdict
 # in FM_TEST_SIGNAL_VERDICT instead of failing the test, so a caller can first
-# clean up what it started. Its kill is the one signal command of the tests
-# that source this file.
+# clean up what it started, and a send to a target already gone returns 3. The
+# guard is the sender: its parent, this shell, is the signalling shell.
 fm_test_signal_try() {
-  local self log="" source=main frame
+  local source=main frame rc=0 accepted
   FM_TEST_SIGNALLED_PID=
   for frame in "${FUNCNAME[@]:1}"; do
     case "$frame" in fm_test_signal*) ;; *) source=$frame; break ;; esac
   done
-  self=$(exec sh -c 'printf "%s\n" "$PPID"')
-  ! fm_test_signal_dry_run || log=$FM_TEST_SIGNAL_LOG
   FM_TEST_SIGNAL_VERDICT=$(FM_TEST_RECORDED_CHILDREN=$FM_TEST_RECORDED_CHILDREN \
-    sh "$ROOT/tests/signal-guard.sh" "$self" "$log" "$source" "$@")
+    "$ROOT/tests/signal-guard.sh" --send "$source" "$@") || rc=$?
   ! fm_test_signal_dry_run || return 0
-  case "$FM_TEST_SIGNAL_VERDICT" in "accepted "*) ;; *) return 1 ;; esac
-  FM_TEST_SIGNALLED_PID=${FM_TEST_SIGNAL_VERDICT#accepted }
-  kill -s "$1" "$FM_TEST_SIGNALLED_PID"
+  accepted=${FM_TEST_SIGNAL_VERDICT%%$'\n'*}
+  case "$accepted" in
+    "accepted group "*) accepted=${accepted#accepted group } ;;
+    "accepted "*) accepted=${accepted#accepted } ;;
+    *) accepted= ;;
+  esac
+  FM_TEST_SIGNALLED_PID=${accepted%% *}
+  return "$rc"
+}
+
+# fm_test_signal_children <signal-name> <pid>: each live child of <pid>,
+# listed with pgrep -P, is sent <signal-name> through the guard's --identity
+# check one at a time; nothing is signalled by name or pattern. List them
+# before <pid> itself is signalled, or they are no longer its children.
+# Returns 1 when any child was refused (it is left running).
+fm_test_signal_children() {
+  local child rc=0
+  for child in $(pgrep -P "$2" 2>/dev/null); do
+    fm_test_signal_try "$1" --identity "$child" || rc=1
+  done
+  return "$rc"
 }
 
 # fm_fake_crash_point <fakebin>
@@ -804,8 +941,9 @@ fm_test_process_state() {  # <pid>: its ps state letter, empty once it is gone.
 # the stand-in whose command line matches it (fm_test_signal --below). Fails
 # if <pid> exits first, if the point is not reached within 30 s, if the
 # stand-in is not running under <pid>, if the guard refuses, or if the victim
-# does not take the signal; before failing it ends <pid> through
-# fm_test_crash_abandon, so a failed case never leaves its own child behind.
+# does not take the signal; before failing it tries to end <pid> through
+# fm_test_crash_abandon, which waits only a bounded time: a failed case may
+# leave its child running when the guard refuses the KILL or it does not land.
 fm_test_crash_at() {
   local dir=$1 name=$2 signal=$3 pid=$4 glob=${5-} i=0 chain
   while [ ! -s "$dir/$name.reached" ]; do
@@ -855,8 +993,19 @@ fm_test_crash_abandon() {
   if [ "$i" -ge 600 ]; then
     fm_test_signal_try KILL "$pid" ||
       printf 'fm_test_crash_abandon: could not end pid %s: %s\n' "$pid" "$FM_TEST_SIGNAL_VERDICT" >&2
+    # A KILL the guard refused, or one that has not landed yet, must not hold
+    # the failure: reap only once the pid is gone, within 30 s.
+    i=0
+    while [ "$i" -lt 600 ]; do
+      case "$(fm_test_process_state "$pid")" in '' | Z*) break ;; esac
+      sleep 0.05
+      i=$((i + 1))
+    done
   fi
-  fm_test_signal_dry_run || wait "$pid" 2>/dev/null || true
+  case "$(fm_test_process_state "$pid")" in
+    '' | Z*) fm_test_signal_dry_run || wait "$pid" 2>/dev/null || true ;;
+    *) printf 'fm_test_crash_abandon: pid %s is still running; not waiting for it\n' "$pid" >&2 ;;
+  esac
   fail "$4"
 }
 

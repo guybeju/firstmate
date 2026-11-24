@@ -144,9 +144,9 @@ lab_pids() {
 
 reap_lab() {
   local pid
-  for pid in $(lab_pids); do kill -TERM "$pid" 2>/dev/null || true; done
+  for pid in $(lab_pids); do fm_test_signal_try TERM --identity "$pid" || true; done
   sleep 1
-  for pid in $(lab_pids); do kill -KILL "$pid" 2>/dev/null || true; done
+  for pid in $(lab_pids); do fm_test_signal_try KILL --identity "$pid" || true; done
 }
 
 cleanup() {
@@ -318,8 +318,8 @@ pass "omp $OMP_VERSION: an actionable close spawned a ledger-linked successor an
 successor_pid=$(cat "$PROJECT/state/.watch.lock/pid" 2>/dev/null || true)
 [ -n "$successor_pid" ] || fail "no successor watcher recorded before the guard probe"
 lab_pid_is_safe "$successor_pid" || fail "refusing to freeze a watcher outside the lab ($successor_pid)"
-kill -STOP "$successor_pid" 2>/dev/null || fail "could not freeze the successor watcher"
-thaw() { kill -CONT "$successor_pid" 2>/dev/null || true; }
+fm_test_signal_try STOP --identity "$successor_pid" || fail "could not freeze the successor watcher: $FM_TEST_SIGNAL_VERDICT"
+thaw() { fm_test_signal_try CONT --identity "$successor_pid" || true; }
 i=0
 while [ "$i" -lt 60 ]; do
   age=$(( $(date +%s) - $(stat -f %m "$PROJECT/state/.last-watcher-beat" 2>/dev/null || stat -c %Y "$PROJECT/state/.last-watcher-beat" 2>/dev/null || date +%s) ))

@@ -594,7 +594,7 @@ test_build_refuses_to_arm_when_the_session_stays_ended() {
 }
 
 test_build_starts_a_listener_for_an_already_armed_board() {
-  local home data board out sid claim
+  local home data board out sid claim listener
   home=$(make_home relisten)
   data="$home/payload.json"
   board="$home/.lavish/bearings-board.html"
@@ -606,8 +606,24 @@ test_build_starts_a_listener_for_an_already_armed_board() {
   # would, then rebuild. `already-armed` must not be the end of the story.
   claim="$home/procevent-claims/$sid.claim"
   assert_present "$claim" "the first build left no listener to lose"
-  kill -KILL -"$(sed -n '2p' "$claim")" 2>/dev/null || true
-  kill -KILL "$(sed -n '2p' "$claim")" 2>/dev/null || true
+  listener=$(sed -n '2p' "$claim")
+  # The guard refuses a group member it cannot tie to this run, such as the
+  # perl reader the poll pipes into, which ends on its own once the poll is
+  # gone. A poll the listener forks while the group is being listed escapes one
+  # pass, so the group is listed and signalled again until it is empty; a
+  # member that never ends fails here by name.
+  fm_test_signal_try KILL --members "$listener" || true
+  fm_test_signal_try KILL --identity "$listener" || true
+  fm_test_signal_skipped "a lost listener is re-armed by the rebuild" && return 0
+  for _ in $(seq 1 50); do
+    kill -0 -"$listener" 2>/dev/null || break
+    sleep 0.2
+    fm_test_signal_try KILL --members "$listener" || true
+  done
+  if kill -0 -"$listener" 2>/dev/null; then
+    fail "listener group $listener outlived its KILL: $(ps -e -o pid=,pgid=,args= \
+      | awk -v g="$listener" '$2 == g' | tr '\n' ';')"
+  fi
   sleep 1
 
   out=$(run_board "$home" build "$data") || fail "the rebuild failed"

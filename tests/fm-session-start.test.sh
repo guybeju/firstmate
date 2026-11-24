@@ -2230,10 +2230,11 @@ if (!$pid) {
   setpgrp(0, 0);
   exec @ARGV;
 }
+my $guard = $ENV{FM_TEST_SIGNAL_GUARD} // die "FM_TEST_SIGNAL_GUARD is not set\n";
 local $SIG{ALRM} = sub {
-  kill 'TERM', -$pid;
+  system($guard, "--send", "fake-timeout", "TERM", "--group", $pid);
   select undef, undef, undef, $kill_after;
-  kill 'KILL', -$pid;
+  system($guard, "--send", "fake-timeout", "KILL", "--members", $pid);
   waitpid $pid, 0;
   exit 137;
 };
@@ -2312,7 +2313,8 @@ SH
     my $pid = fork;
     die "fork failed" unless defined $pid;
     if (!$pid) { setpgrp(0, 0); exec @ARGV }
-    local $SIG{ALRM} = sub { kill "KILL", -$pid; waitpid $pid, 0; exit 99 };
+    my $guard = $ENV{FM_TEST_SIGNAL_GUARD} // die "FM_TEST_SIGNAL_GUARD is not set\n";
+    local $SIG{ALRM} = sub { system($guard, "--send", "timeout-safety-alarm", "KILL", "--members", $pid); waitpid $pid, 0; exit 99 };
     alarm 5;
     waitpid $pid, 0;
     exit($? >> 8);

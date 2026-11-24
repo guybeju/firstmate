@@ -1666,9 +1666,11 @@ unit_stop_confirms_daemon_exit() {
     seq() { printf "1\n"; }
     sleep() { :; }
     kill() {
-      command kill "$@"
       if [ "$1" = -TERM ]; then
+        "$FM_TEST_SIGNAL_GUARD" --send fm_afk_launch_stop TERM --identity "$2" >/dev/null || return 1
         rm -rf "$FM_AFK_LAUNCH_STATE/.supervise-daemon.lock"
+      else
+        command kill "$@"
       fi
     }
     ! fm_afk_launch_stop

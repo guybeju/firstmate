@@ -47,6 +47,9 @@
 # DOCTOR_SHA256 exactly once, and it must equal the sha256 of
 # bin/fm-remote-doctor.sh, because the entrypoint refuses any other doctor on
 # a remote host without git.
+# Every mode also runs the test tree's signal check, tests/check-signals.sh
+# (signal policy P-010), over every test directory; its header owns what it
+# refuses, and a tree without it has nothing to check.
 #
 # Lint defaults to two concurrency-limited workers over two stable logical
 # shards, and each worker runs ONE canonical root per ShellCheck process, so a
@@ -750,6 +753,13 @@ fm_lint_run_doctor_pin() {
   return 1
 }
 
+# No test may signal a computed target outside the guarded helper; the check
+# is static text analysis and starts no test.
+fm_lint_run_signal_check() {
+  [ -f tests/check-signals.sh ] || return 0
+  bash tests/check-signals.sh >/dev/null
+}
+
 JOBS=${FM_LINT_JOBS:-2}
 TELEMETRY=${FM_LINT_TELEMETRY:-}
 FAST=0
@@ -980,6 +990,7 @@ if [ "$CHANGED_MODE" -eq 1 ] && [ "$ROOT_COUNT" -eq 0 ]; then
   overall_rc=0
   fm_lint_run_backend_purity || overall_rc=$?
   fm_lint_run_doctor_pin || overall_rc=$?
+  fm_lint_run_signal_check || overall_rc=$?
   fm_lint_run_workflows || overall_rc=$?
   exit "$overall_rc"
 fi
@@ -1326,6 +1337,7 @@ fi
 check_rc=0
 fm_lint_run_backend_purity || check_rc=$?
 fm_lint_run_doctor_pin || check_rc=$?
+fm_lint_run_signal_check || check_rc=$?
 if [ "$overall_rc" -eq 0 ] && [ "$check_rc" -ne 0 ]; then
   overall_rc=$check_rc
 fi

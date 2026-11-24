@@ -86,7 +86,7 @@ tracked_pid() {
 stop_tracked() {
   local pid
   pid=$(tracked_pid) || { rm -f "$FM_TEST_TRACKED"; return 0; }
-  kill -TERM "$pid" 2>/dev/null || true
+  "$FM_TEST_SIGNAL_GUARD" --send launchctl-stub TERM --identity "$pid" >/dev/null 2>&1 || true
   for _ in $(seq 1 200); do
     kill -0 "$pid" 2>/dev/null || break
     /bin/sleep 0.05

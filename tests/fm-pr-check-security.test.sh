@@ -137,6 +137,16 @@ make_case() {
 printf 'guard\n' >> "$FM_TEST_GUARD_LOG"
 SH
   chmod +x "$fake_root/bin/fm-guard.sh"
+  # Task records here name tmux endpoints, so this default answers as a host
+  # with no tmux server and no case reaches the real tmux. A case that needs
+  # other answers writes its own fakebin/tmux over it.
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${0%/fakebin/tmux}/tmux-default.log"
+printf 'no server running on /tmp/tmux-fm-test/default\n' >&2
+exit 1
+SH
+  chmod +x "$fakebin/tmux"
   cat > "$fakebin/gh" <<'SH'
 #!/usr/bin/env bash
 printf 'host=%s\n' "${GH_HOST:-}" >> "$FM_TEST_GH_LOG"
@@ -2565,7 +2575,12 @@ case "${!#}" in
   */.fm-pr-baseline.*/task-a.meta)
     "$FM_TEST_REAL_MV" "$@" || exit 1
     : > "$FM_TEST_BASELINE_MOVE_STARTED"
-    while [ ! -e "$FM_TEST_BASELINE_MOVE_RELEASE" ]; do sleep 0.01; done
+    i=0
+    while [ ! -e "$FM_TEST_BASELINE_MOVE_RELEASE" ] \
+      && [ "$i" -lt $((${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120} * 100)) ]; do
+      sleep 0.01
+      i=$((i + 1))
+    done
     exit 0
     ;;
 esac
@@ -2623,6 +2638,11 @@ SH
   pid=$!
   fm_test_record_child "$pid"
   fm_test_crash_at "$dir" cp TERM "$pid"
+  fm_test_signal_skipped \
+    "interrupted atomic preparation cleans private temporaries and publishes nothing" && {
+    wait "$pid" 2>/dev/null || true
+    return 0
+  }
   set +e
   wait "$pid"
   rc=$?
@@ -2927,7 +2947,8 @@ test_custom_snapshot_cleanup_on_signal() {
   child_pid_file="$dir/custom-child.pid"
   # shellcheck disable=SC2016  # The generated child expands $$ when it runs.
   printf '%s\n' '#!/usr/bin/env bash' 'trap "" TERM' \
-    'printf "%s\n" "$$" > "$FM_TEST_CUSTOM_CHILD_PID"' 'while :; do sleep 1; done' \
+    'printf "%s\n" "$$" > "$FM_TEST_CUSTOM_CHILD_PID"' \
+    'i=0; while [ "$i" -lt "${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}" ]; do sleep 1; i=$((i + 1)); done' \
     > "$state/custom.check.sh"
   chmod 0700 "$state/custom.check.sh"
   cat > "$dir/fakebin/timeout" <<'SH'
@@ -3034,7 +3055,7 @@ SH
       run_watcher_bounded "$dir/home" "$fakebin" > "$dir/watch.out" 2> "$dir/watch.err" || rc=$?
     child_pid=$(cat "$child_pid_file" 2>/dev/null || true)
     if [ -n "$child_pid" ] && process_is_live_non_zombie "$child_pid"; then
-      kill -KILL "$child_pid" 2>/dev/null || true
+      fm_test_signal_try KILL --identity "$child_pid" || true
       fail "$backend watcher left a returned check descendant alive"
     fi
     [ "$rc" -eq 0 ] \
@@ -3893,13 +3914,18 @@ group/subgroup/project
   if [ -z "$hung" ] || ! kill -0 "$hung" 2>/dev/null; then
     fail "the hung GitLab detail read never started"
   fi
-  kill -TERM -- "-$poll_pid" 2>/dev/null
-  wait "$poll_pid" 2>/dev/null || true
-  waited=0
-  while kill -0 "$hung" 2>/dev/null && [ "$waited" -lt 40 ]; do sleep 0.05; waited=$((waited + 1)); done
-  if kill -0 "$hung" 2>/dev/null; then
-    kill -KILL "$hung" 2>/dev/null
-    fail "a stopped GitLab poll left its hung detail read running"
+  fm_test_signal_try TERM --group "$poll_pid" || true
+  if fm_test_signal_dry_run; then
+    wait "$poll_pid" 2>/dev/null || true
+    pass "skip: log-only run, the signal was logged and not sent: a stopped GitLab poll takes its hung detail read down with it"
+  else
+    wait "$poll_pid" 2>/dev/null || true
+    waited=0
+    while kill -0 "$hung" 2>/dev/null && [ "$waited" -lt 40 ]; do sleep 0.05; waited=$((waited + 1)); done
+    if kill -0 "$hung" 2>/dev/null; then
+      fm_test_signal_try KILL --identity "$hung" || true
+      fail "a stopped GitLab poll left its hung detail read running"
+    fi
   fi
   rm -f "$dir/glab.log.hangpid"
   # Without perl no detail read can be bounded, so none is made: both paths
@@ -4334,7 +4360,8 @@ test_self_merged_lane_is_still_cleaned_up_by_the_poll() {
     || fail "self-merge-cleanup: merge entrypoint failed: $(cat "$dir/merge.err")"
   [ -f "$state/task-a.pr-poll-merge-notified" ] \
     || fail "self-merge-cleanup: the merge entrypoint did not record the outcome first"
-  printf '#!/usr/bin/env bash\nprintf started > "%s/teardown.started"\nwhile [ ! -e "%s/teardown.release" ]; do sleep 0.05; done\nprintf "%%s\\n" "$*" >> "%s/teardown.log"\n' "$dir" "$dir" "$dir" > "$dir/teardown-stub"
+  # shellcheck disable=SC2016 # The stub's $i, $((...)) and $* expand when the stub runs.
+  printf '#!/usr/bin/env bash\nprintf started > "%s/teardown.started"\ni=0\nwhile [ ! -e "%s/teardown.release" ] \\\n  && [ "$i" -lt $((${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120} * 20)) ]; do\n  sleep 0.05\n  i=$((i + 1))\ndone\nprintf "%%s\\n" "$*" >> "%s/teardown.log"\n' "$dir" "$dir" "$dir" > "$dir/teardown-stub"
   chmod +x "$dir/teardown-stub"
   retire_contributions_observer "$dir"
   add_stop_custom_check "$dir"
@@ -5569,7 +5596,11 @@ set -eu
 trap 'fm_lock_release "$FM_TEST_LOCK" || true' EXIT
 fm_lock_acquire_wait "$FM_TEST_LOCK"
 : > "$FM_TEST_ACQUIRED"
-while [ ! -e "$FM_TEST_RELEASE" ]; do sleep 0.01; done
+i=0
+while [ ! -e "$FM_TEST_RELEASE" ] && [ "$i" -lt $((${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120} * 100)) ]; do
+  sleep 0.01
+  i=$((i + 1))
+done
 SH
   chmod +x "$dir/poll-publish-holder.sh"
   FM_TEST_ROOT="$ROOT" FM_TEST_LOCK="$PR_POLL_HOLDER_LOCK" \

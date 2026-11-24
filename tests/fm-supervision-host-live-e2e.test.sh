@@ -36,13 +36,13 @@ stop_lab() {
   local pid
   if [ -f "$FM/state/.supervision-host" ]; then
     pid=$(awk -F '\t' '$1 == "host" { print $2; exit }' "$FM/state/.supervision-host")
-    [ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
+    [ -z "$pid" ] || fm_test_signal_try TERM --identity "$pid" || true
     sleep 2
   fi
   pid=$(cat "$FM/state/.watch.lock/pid" 2>/dev/null || true)
-  [ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
+  [ -z "$pid" ] || fm_test_signal_try TERM --identity "$pid" || true
   while IFS= read -r pid; do
-    [ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
+    [ -z "$pid" ] || fm_test_signal_try TERM --identity "$pid" || true
   done < "$LAB/claude-pids" 2>/dev/null || true
 }
 trap 'stop_lab; fm_test_cleanup' EXIT
@@ -132,7 +132,7 @@ printf '# second turn: %s\n' "$(grep '	handled	' "$FM/state/.supervision-host.lo
 
 host_pid=$(awk -F '\t' '$1 == "host" { print $2 }' "$FM/state/.supervision-host")
 watcher=$(cat "$FM/state/.watch.lock/pid")
-kill -TERM "$host_pid"
+fm_test_signal TERM --identity "$host_pid"
 wait_until 400 test -s "$LAB/host.rc" || fail "the host did not stop on TERM"
 wait_until 100 sh -c '! kill -0 "$1" 2>/dev/null' _ "$watcher" || fail "a stopped host left its watcher running"
 [ ! -e "$FM/state/.supervision-host" ] || fail "a stopped host left its record"

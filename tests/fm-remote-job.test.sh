@@ -47,7 +47,7 @@ cleanup_remote_job_fixture() {
   [ -z "$EXCL_SECOND_PID" ] || kill -KILL "$EXCL_SECOND_PID" 2>/dev/null || true
   local excl_lane
   for excl_lane in ${EXCL_LANES[@]+"${EXCL_LANES[@]}"}; do
-    kill -KILL "$excl_lane" 2>/dev/null || true
+    fm_test_signal_try KILL --identity "$excl_lane" || true
   done
   local stall_pid
   for stall_pid in "$STALL_WORKER_PID" "$STALL_REPLACEMENT_PID"; do
@@ -55,7 +55,7 @@ cleanup_remote_job_fixture() {
     kill -KILL "$stall_pid" 2>/dev/null || true
     wait "$stall_pid" 2>/dev/null || true
   done
-  [ -z "$STALL_JOB_GROUP" ] || kill -KILL -- "-$STALL_JOB_GROUP" 2>/dev/null || true
+  [ -z "$STALL_JOB_GROUP" ] || fm_test_signal_try KILL --members "$STALL_JOB_GROUP" || true
   if [ -f "$STATE_ROOT/worker.pid" ]; then
     fm_remote_job_stop_worker_tree "$(cat "$STATE_ROOT/worker.pid")" || true
   fi
@@ -463,7 +463,7 @@ NEW_WORKER_PID=$(cat "$STATE_ROOT/worker.pid")
 pass "worker identity binds the canonical configured code root"
 
 CRASHED_WORKER_PID=$NEW_WORKER_PID
-kill -KILL "$CRASHED_WORKER_PID"
+fm_test_signal KILL --identity "$CRASHED_WORKER_PID"
 wait "$CRASHED_WORKER_PID" 2>/dev/null || true
 assert_present "$STATE_ROOT/worker.lock" "an unclean exit did not retain the worker ownership lock"
 sleep 20 &
@@ -627,7 +627,7 @@ for _ in $(seq 1 100); do
 done
 assert_present "$STARTED" "the shutdown fixture did not begin executing"
 WORKER_PID=$(cat "$STATE_ROOT/worker.pid")
-kill -TERM "$WORKER_PID"
+fm_test_signal TERM --identity "$WORKER_PID"
 for _ in $(seq 1 100); do
   kill -0 "$WORKER_PID" 2>/dev/null || break
   sleep 0.05
@@ -660,7 +660,7 @@ for _ in $(seq 1 100); do
 done
 assert_present "$CRASH_STARTED" "the crash fixture did not begin executing"
 CRASHED_WORKER_PID=$(cat "$STATE_ROOT/worker.pid")
-kill -KILL "$CRASHED_WORKER_PID"
+fm_test_signal KILL --identity "$CRASHED_WORKER_PID"
 for _ in $(seq 1 200); do
   RESTARTED_WORKER_PID=$(cat "$STATE_ROOT/worker.pid" 2>/dev/null || true)
   [ -n "$RESTARTED_WORKER_PID" ] && [ "$RESTARTED_WORKER_PID" != "$CRASHED_WORKER_PID" ] && break
@@ -746,7 +746,7 @@ assert_present "$QUARANTINE_STARTED" "the quarantine fixture did not begin execu
 GROUP_PID=$(cat "$JOB_DIR/.claim/group")
 printf 'invalid\n' > "$JOB_DIR/.claim/group"
 WORKER_PID=$(cat "$STATE_ROOT/worker.pid")
-kill -TERM "$WORKER_PID"
+fm_test_signal TERM --identity "$WORKER_PID"
 wait "$WORKER_PID" 2>/dev/null || true
 for _ in $(seq 1 100); do
   [ -f "$STATE_ROOT/worker.lock/quarantine" ] && break
@@ -762,7 +762,7 @@ REPLACEMENT_RC=$?
 set -e
 [ "$REPLACEMENT_RC" -ne 0 ] || fail "a replacement worker ignored quarantined ownership"
 assert_present "$STATE_ROOT/worker.lock/quarantine" "a replacement removed quarantined ownership"
-kill -KILL -- "-$GROUP_PID" 2>/dev/null || true
+fm_test_signal_try KILL --members "$GROUP_PID" || true
 sleep 3
 assert_absent "$QUARANTINE_SIDE_EFFECT" "the quarantined command mutated after explicit termination"
 pass "failed shutdown quarantines ownership against replacement workers"
@@ -1054,7 +1054,7 @@ fi
 wait "$LOST_TERM_PID" 2>/dev/null || true
 LOST_DEAD_PID=$LOST_TERM_PID
 LOST_TERM_PID=
-kill -TERM "$LOST_DEAD_PID" 2>/dev/null || true
+fm_test_signal_try TERM --identity "$LOST_DEAD_PID" || true
 kill -0 "$REPLACEMENT_OWNER_PID" 2>/dev/null \
   || fail "terminating the old worker also terminated the replacement owner"
 kill -0 "$OWNER_JOB_SUPERVISOR" 2>/dev/null \
@@ -1163,7 +1163,7 @@ until [ "$(ps -o state= -p "$STALL_REPLACEMENT_PID" 2>/dev/null | cut -c1)" = T 
 done
 [ "$(ps -o state= -p "$STALL_REPLACEMENT_PID" 2>/dev/null | cut -c1)" = T ] \
   || fail "the replacement could not be held while the ousted worker resumed"
-kill -KILL -- "-$STALL_JOB_GROUP" 2>/dev/null || true
+fm_test_signal_try KILL --members "$STALL_JOB_GROUP" || true
 STALL_DEADLINE=$((SECONDS + 30))
 until ! kill -0 -- "-$STALL_JOB_GROUP" 2>/dev/null || [ "$SECONDS" -ge "$STALL_DEADLINE" ]; do
   sleep 0.05

@@ -135,9 +135,25 @@ wait_owner() { # <state> <pid>
   return 1
 }
 
+# Reaps <pid>, a worker this shell started, once it has ended; a worker still
+# running after the fixture ceiling fails the case by name instead of holding
+# the suite forever (the EXIT trap then ends every tracked worker).
+wait_ended() { # <pid> <what>
+  local i=0 limit=$((${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120} * 20)) still
+  while kill -0 "$1" 2>/dev/null && [ "$i" -lt "$limit" ]; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+  if kill -0 "$1" 2>/dev/null; then
+    still=$(ps -o args= -p "$1" 2>/dev/null)
+    fail "$2: worker $1 still running after ${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}s: $still"
+  fi
+  wait "$1" 2>/dev/null || true
+}
+
 stop_worker() { # <pid>
   kill -TERM "$1" 2>/dev/null || true
-  wait "$1" 2>/dev/null || true
+  wait_ended "$1" "a worker sent TERM"
 }
 
 # A pid no process holds: a child that has already been reaped.
@@ -184,7 +200,7 @@ assert_replacement_owns() { # <state> <label> <what>
 test_killed_before_pid_publish_is_reclaimed() {
   local state="$TMP_ROOT/killed"
   serve "$state" killed-first kill
-  wait "$SERVE_PID" 2>/dev/null || true
+  wait_ended "$SERVE_PID" "the worker signalled at its crash point"
   assert_present "$state/worker.lock" "the killed worker left no lock to reclaim"
   assert_absent "$state/worker.lock/pid" "the worker was killed after publishing its pid, not inside the window"
   [ "$(entries "$state/worker.lock" '*' | wc -l | tr -d ' ')" = 1 ] \
@@ -198,7 +214,7 @@ test_killed_before_pid_publish_is_reclaimed() {
 test_terminated_before_pid_publish_releases_lock() {
   local state="$TMP_ROOT/terminated"
   serve "$state" terminated-first term
-  wait "$SERVE_PID" 2>/dev/null || true
+  wait_ended "$SERVE_PID" "the worker signalled at its crash point"
   [ -z "$(entries "$state/worker.lock" '*')" ] \
     || fail "a worker terminated before publishing its pid kept its temporaries: $(entries "$state/worker.lock" '*' | tr '\n' ' ')"
   assert_absent "$state/worker.lock" "a worker terminated before publishing its pid left its lock behind"
@@ -208,7 +224,7 @@ test_terminated_before_pid_publish_releases_lock() {
 test_terminated_before_command_publish_releases_lock() {
   local state="$TMP_ROOT/terminated-records"
   serve "$state" terminated-records term command
-  wait "$SERVE_PID" 2>/dev/null || true
+  wait_ended "$SERVE_PID" "the worker signalled at its crash point"
   [ -z "$(entries "$state/worker.lock" '*')" ] \
     || fail "a worker terminated before publishing its command kept its records: $(entries "$state/worker.lock" '*' | tr '\n' ' ')"
   assert_absent "$state/worker.lock" "a worker terminated before publishing its command left its lock behind"

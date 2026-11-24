@@ -54,10 +54,10 @@ cleanup() {
   "$TMUX" -L "$SOCKET" kill-server 2>/dev/null || true
   sleep 0.1
   if [ -n "$watcher_pid" ] && lab_pid_is_safe "$watcher_pid"; then
-    kill -TERM "$watcher_pid" 2>/dev/null || true
+    fm_test_signal_try TERM --identity "$watcher_pid" || true
   fi
   if [ -n "$arm_pid" ] && lab_pid_is_safe "$arm_pid"; then
-    kill -TERM "$arm_pid" 2>/dev/null || true
+    fm_test_signal_try TERM --identity "$arm_pid" || true
   fi
   rm -rf "$LAB"
 }

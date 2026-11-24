@@ -218,7 +218,7 @@ test_agent_state_reads_a_shell_wrappers_group() {
   jq --argjson p "$wrapper" '.foreground.pid = $p' "$D/t9.json" > "$D/t9.tmp" && mv "$D/t9.tmp" "$D/t9.json"
   for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -g "$wrapper" -f '^claude' >/dev/null && break; sleep 0.1; done
   out=$(hc_shell 'fm_backend_agent_state hc fmtest:t9')
-  kill -- "-$wrapper" 2>/dev/null || true
+  fm_test_signal_try TERM --group "$wrapper" || true
   wait "$wrapper" 2>/dev/null || true
   assert_equals "$out" alive "a shell wrapper running a harness child is alive"
   pass "hc: agent_state reads a shell wrapper's process group before calling it dead"

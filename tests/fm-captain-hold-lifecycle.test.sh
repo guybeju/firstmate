@@ -1128,8 +1128,8 @@ test_release_rechecks_away_after_waiting_on_task_lock() {
   sleep 1
   FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$ROOT/bin/fm-afk-contract.sh" enter \
     --words 'merge green work' >/dev/null 2>&1 || fail "away entry failed"
+  fm_test_signal_children TERM "$holder" || true
   kill "$holder" 2>/dev/null || true
-  pkill -P "$holder" 2>/dev/null || true
   rm -rf "$home/state/.control-sample-widget.lock"
   wait "$release_pid" || rc=$?
   [ "$rc" -ne 0 ] || fail "a release that waited on the task lock lifted the hold after away entry"
@@ -4669,7 +4669,7 @@ if [ "${1:-}" = hold ] && [ "${2:-}" != --help ]; then
   "$REAL_TASKS_AXI" show "$2" --full > "$FM_HOME/before-backend-hold" || exit $?
   : > "$FM_HOME/hold-refused"
   if [ -f "$FM_HOME/interrupt-hold" ]; then
-    kill -TERM "$(cat "$FM_HOME/hold-pid")"
+    "$FM_TEST_SIGNAL_GUARD" --send tasks-axi-stand-in TERM --identity "$(cat "$FM_HOME/hold-pid")" >/dev/null
   fi
   exit 9
 fi

@@ -141,7 +141,7 @@ case "$mode" in
     [ -z "$ack" ] || [ "$mode" = noack ] || "$FM_REPO/bin/fm-wake-drain.sh" $ack >> "$FM_HOME/engine-ack.log" 2>&1
     case "$mode" in captain-close-before-return)
       watcher=$(cat "$STATE/.watch.lock/pid" 2>/dev/null || true)
-      [ -z "$watcher" ] || kill -TERM "$watcher" 2>/dev/null || true
+      [ -z "$watcher" ] || "$FM_TEST_SIGNAL_GUARD" --send engine-stand-in TERM --identity "$watcher" >/dev/null 2>&1 || true
       i=0
       while [ -n "$watcher" ] && kill -0 "$watcher" 2>/dev/null && [ "$i" -lt 100 ]; do
         sleep 0.05
@@ -193,30 +193,30 @@ HOMES_FILE="$TMP_ROOT/homes"
 stop_home_processes() {  # <home>
   local home=$1 pid arms='' i=0
   pid=$(cut -f1 "$home/state/.supervision-handoff-owner" 2>/dev/null || true)
-  [ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
+  [ -z "$pid" ] || fm_test_signal_try TERM --identity "$pid" || true
   if [ -f "$home/state/.supervision-host" ]; then
     arms=$(awk -F '\t' '$1 == "arm" { print $2 }' "$home/state/.supervision-host")
     pid=$(awk -F '\t' '$1 == "host" { print $2; exit }' "$home/state/.supervision-host")
-    [ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
+    [ -z "$pid" ] || fm_test_signal_try TERM --identity "$pid" || true
     while [ "$i" -lt 50 ] && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; do
       sleep 0.1
       i=$((i + 1))
     done
   fi
   for pid in $arms; do
-    kill -TERM "$pid" 2>/dev/null || true
+    fm_test_signal_try TERM --identity "$pid" || true
   done
   pid=$(cat "$home/state/.watch.lock/pid" 2>/dev/null || true)
-  [ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
+  [ -z "$pid" ] || fm_test_signal_try TERM --identity "$pid" || true
   while IFS= read -r pid; do
     if [ -e "$home/session.stop" ]; then
       wait "$pid" 2>/dev/null || true
     else
-      kill -TERM "$pid" 2>/dev/null || true
+      fm_test_signal_try TERM --identity "$pid" || true
     fi
   done < <(cat "$home/claude-pids" 2>/dev/null)
   while IFS= read -r pid; do
-    kill -TERM "$pid" 2>/dev/null || true
+    fm_test_signal_try TERM --identity "$pid" || true
   done < <(cat "$home/orphan-pid" 2>/dev/null)
 }
 suite_cleanup() {
@@ -764,7 +764,7 @@ quiet_pass_through_successor() {  # <home>
   local home=$1 pid i gen
   pid=$(cat "$home/state/.watch.lock/pid" 2>/dev/null || true)
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-    kill -TERM "$pid" 2>/dev/null || true
+    fm_test_signal_try TERM --identity "$pid" || true
     i=0
     while [ "$i" -lt 50 ] && kill -0 "$pid" 2>/dev/null; do
       sleep 0.1
@@ -833,7 +833,7 @@ park_outcome() {  # <name> <park-seconds>; sets PARK_OUTCOME to boundary or hand
     # shellcheck disable=SC2034 # read by the sourcing fm-supervision-host*.test.sh files
     PARK_OUTCOME=boundary
   else
-    kill -TERM "$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")"
+    fm_test_signal TERM --identity "$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")"
     wait_until_deadline 60 host_exited "$home" || fail "$1: the host did not stop on TERM"
     # shellcheck disable=SC2034 # read by the sourcing fm-supervision-host*.test.sh files
     PARK_OUTCOME=handled
@@ -978,7 +978,7 @@ assert_lost_handoff_keeps_watching() {  # <boundary|pass-through>
   else
     assert_re '	pass-through	attended	main-only	' "$home/state/.supervision-host.log" "$mode: the hand-back dropped the pass-through row"
   fi
-  kill -TERM -- "-$(cat "$home/hook.pgid")" 2>/dev/null || true
+  fm_test_signal TERM --members "$(cat "$home/hook.pgid")"
   # Drop the continuation entirely: no drain, acknowledgement, or Stop follows.
   watcher_live "$home" || fail "$mode: lost continuation left no verified watcher"
   watcher=$(cat "$home/state/.watch.lock/pid")
