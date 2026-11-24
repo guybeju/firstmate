@@ -8,8 +8,9 @@
 #     FM_HOME the caller has can steer the board;
 #   - a system-only PATH: a tripwire directory, /usr/bin, /bin, and the
 #     directories of node, jq and git when they live elsewhere;
-#   - tripwires named after every Firstmate script and library of this
-#     checkout, which log to $SA_TRIP_LOG when run or sourced;
+#   - tripwires named after every Firstmate script and library, from
+#     myshape/test/firstmate-names and this checkout's bin/, which log to
+#     $SA_TRIP_LOG when run or sourced;
 #   - decoy Firstmate files in every scratch home, checked byte for byte at
 #     the end.
 # shellcheck disable=SC2034 # the globals are read by the sourcing scripts.
@@ -48,22 +49,39 @@ sa_init() {
   sa_tripwires "$SA_PATHTRIP"
 }
 
-# sa_tripwires <dir>: one tripwire per Firstmate script name of this checkout
+# sa_firstmate_names: every Firstmate script name to put a tripwire under, one
+# per line: the names in myshape/test/firstmate-names (Firstmate's bin/fm-*.sh
+# when that list was made, so a copy of the board without Firstmate still has
+# them) and every bin/fm-*.sh of this checkout (so a newer Firstmate script is
+# never missed).
+sa_firstmate_names() {
+  local path
+  {
+    cat "$ROOT/myshape/test/firstmate-names"
+    for path in "$ROOT"/bin/fm-*.sh; do
+      [ ! -e "$path" ] || printf '%s\n' "${path##*/}"
+    done
+  } | LC_ALL=C sort -u
+}
+
+# sa_tripwires <dir>: one tripwire per Firstmate script name (sa_firstmate_names)
 # in <dir>, every name but the no-tripwire ones. The board's own two files are
 # not named fm-*, so none of them is ever replaced. A *-lib.sh tripwire logs
 # when sourced; any other logs when run and exits 97.
 sa_tripwires() {
-  local dir=$1 path name
+  local dir=$1 name
   mkdir -p "$dir"
-  for path in "$ROOT"/bin/fm-*.sh; do
-    name=${path##*/}
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
     case " $SA_NO_TRIPWIRE " in *" $name "*) continue ;; esac
     case "$name" in
       *-lib.sh) printf 'printf "sourced %%s\\n" %q >> %q\n' "$name" "$SA_TRIP_LOG" > "$dir/$name" ;;
       *) printf '#!/bin/sh\nprintf "ran %%s %%s\\n" %q "$*" >> %q\nexit 97\n' "$name" "$SA_TRIP_LOG" > "$dir/$name" ;;
     esac
     chmod +x "$dir/$name"
-  done
+  done <<EOF
+$(sa_firstmate_names)
+EOF
 }
 
 # sa_trip_root <broot>: tripwires in the root's bin/ and in a bin/ beside the
