@@ -3,7 +3,7 @@
 `install-rules`、`status` 的規則那一行與三個範本後來搬到 first mate 這一側：指令是 `bin/fm-board.sh install-rules` 與 `bin/fm-board.sh rules`，範本在 `fm-board/rules/`，備份在 `state/fm-board/rules-backup/`，測試在 `fm-board/test/`（[adapter](../../fm-board/spec/adapter.markdown)）；下面照當時的樣子保留。
 這一頁用的是改名（[open-issues](open-issues.markdown) C57）之前的名字 `topic-board` 與 `fm-topic`；新舊名字的對照在 C57。
 
-做完之後：使用者可以用一個指令把看板的規則裝進偏好檔，`status` 會說規則是不是最新的。這是程式的最後一段；裝規則本身是[上線](rollout.markdown)的最後一步。
+做完之後：使用者可以用一個指令把看板的規則裝進偏好檔，`status` 會說規則是不是最新的。這是程式的最後一段；裝規則本身是[上線](../../fm-board/spec/rollout.markdown)的最後一步。
 
 ## 先驗再做
 

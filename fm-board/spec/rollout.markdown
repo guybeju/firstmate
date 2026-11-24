@@ -1,6 +1,6 @@
 # 上線
 
-上線的結果與 R 表是照當時的名字記的；改名（[open-issues](open-issues.markdown) C57）之前，看板的名字是 `topic-board` 與 `fm-topic`，對照在 C57。
+上線的結果與 R 表是照當時的名字記的；改名（[open-issues](../../myshape/spec/open-issues.markdown) C57）之前，看板的名字是 `topic-board` 與 `fm-topic`，對照在 C57。
 
 這不是一個 PR，是六段都合併進 fork 的 `carry` 之後，把看板開始用起來的步驟。全部由使用者執行或明講之後才執行。
 
@@ -33,7 +33,7 @@
 
 ## 上線時要驗的事
 
-這些都需要真的 secondmate，規劃時這個 home 一個都沒有。2026-11-17 主 first mate 在真的 home 與一台遠端的 Mac（secondmate `macmate`）上驗過的結果寫在表後；其餘的結果在 [handover](handover.markdown) 第 3 節。各段「先驗再做」裡標了需要 secondmate 的項目（1-1、1-6、1-7、1-8、3-1、3-2、3-3、4-1、4-2、4-3）也在這時候一起驗。
+這些都需要真的 secondmate，規劃時這個 home 一個都沒有。2026-11-17 主 first mate 在真的 home 與一台遠端的 Mac（secondmate `macmate`）上驗過的結果寫在表後；其餘的結果在 [handover](../../myshape/spec/handover.markdown) 第 3 節。各段「先驗再做」裡標了需要 secondmate 的項目（1-1、1-6、1-7、1-8、3-1、3-2、3-3、4-1、4-2、4-3）也在這時候一起驗。
 
 | # | 要驗的事 | 怎麼驗 | 假設不成立時 |
 | --- | --- | --- | --- |
@@ -54,7 +54,7 @@
 - R-4 作廢：這一列假設「合併有衝突代表 fork 改到了上游的檔案」。fleet 之後在 `carry` 上改了上游的檔案（fork 的 PR 20 到 24、26），衝突不再代表看板違反只新增。上游合併改由 fleet 負責，見下一節。
 - R-5 通過：每個 PR 的 base 都是 fork 的 `carry`。
 - R-6 通過：Mac 的 home 的 `origin` 是它的 code root 的路徑。
-- R-7 驗了一半：暫時的 home 裡 `order` 照佇列的順序列出可派的項目，待辦的列為該 hold；真的派到容量滿的那一半沒有驗，見 [handover](handover.markdown) 第 3 節。
+- R-7 驗了一半：暫時的 home 裡 `order` 照佇列的順序列出可派的項目，待辦的列為該 hold；真的派到容量滿的那一半沒有驗，見 [handover](../../myshape/spec/handover.markdown) 第 3 節。
 
 ## 之後怎麼更新
 

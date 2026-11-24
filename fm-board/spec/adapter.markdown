@@ -19,10 +19,10 @@
 | `bin/fm-dispatch-plan.sh` | `order`：照看板的佇列排出該派、該 hold、該解除的 backlog 項目，其餘的列在「先不派」並附原因，在每個 home；`queues-in`、`queues-push`：把佇列副本送到遠端的 second mate（[dispatch-plan](../../dispatch-plan/spec/dispatch-plan.markdown)） |
 | `bin/fm-backlog-archive-lib.sh` | tasks-axi 的 Done 保留把完成的項目搬去的封存檔在哪裡、裡面有哪些完成的 id；上游的 `fm-fleet-snapshot.sh` source 它（見下面） |
 | `fm-board/rules/` | 三個規則範本，副檔名 `.md.tmpl`（fork 不能新增追蹤的 `.md`） |
-| `fm-board/test/` | `run.sh` 與這一側的測試：`feed`（`stage-1-feed.sh`），`deliver`（`stage-2-deliver.sh`），`tag`、`setup`、`bind`、`--in-home`（`stage-1-tag.sh`），帶 task 的 `split`（`stage-3-split.sh`），看板存項目之前的要你動手，與舊版搬上來的項目換到新程式之後（`stage-3-handson-holds.sh`，第 3.3 節），設定檔、session start 與群組能寫的 checkout（`stage-4-binding.sh`），規則與安裝說明（`stage-6-*.sh`、`check-guide.sh`），改名前的名字與 `migrate-myshape`（`stage-8-*.sh`） |
+| `fm-board/test/` | `run.sh` 與這一側的測試：`feed`（`stage-1-feed.sh`），`deliver`（`stage-2-deliver.sh`），`tag`、`setup`、`bind`、`--in-home`（`stage-1-tag.sh`），帶 task 的 `split`（`stage-3-split.sh`），看板存項目之前的要你動手，與舊版搬上來的項目換到新程式之後（`stage-3-handson-holds.sh`，第 3.3 節），設定檔、session start 與群組能寫的 checkout（`stage-4-binding.sh`），規則與安裝說明（`stage-6-*.sh`、`check-guide.sh`），改名前的名字與 `migrate-myshape`（`stage-8-*.sh`）；彙整腳本（`stage-1-read.sh`），session start 的檢查（`stage-2-startup.sh`），看板改過的議題接上 `tag`（`stage-2-topics-tag.sh`），看板接上真的 `fm-board.sh` 的第三到五段（`stage-3-data.sh`、`stage-4-writes.sh`、`stage-5-http.sh`、`stage-5-page.sh`），跨 fork 歷史的升級（`stage-7-upgrade.sh`）；建 first mate 的 home 與替身的 `helpers.sh`，它先載入看板的測試套件 `myshape/test/kit/helpers.sh` |
 | `dispatch-plan/test/` | `run.sh` 與 `fm-dispatch-plan.sh` 的測試（`stage-1` 到 `stage-4`） |
 | `dispatch-plan/spec/` | `fm-dispatch-plan.sh` 的說明 |
-| `fm-board/spec/` | 這一頁 |
+| `fm-board/spec/` | 這一頁、[rollout](rollout.markdown)（上線）、[handover](handover.markdown)（這一側的測試與交接之後的分工） |
 
 `bin/` 底下的八支和看板的指令一樣，要通過 `bin/fm-lint.sh <檔>` 與 bash 3.2 的語法檢查。
 `fm-board.sh` 與 `fm-dispatch-plan.sh` 要在 git 裡是可執行的：遠端 home 的 `tag`、`setup`、`order` 與 `queues-in` 經 `fm-on.sh` 跑，它只執行追蹤、可執行的 `bin/fm-*.sh`。
@@ -156,7 +156,7 @@ second mate 的 home 讀不到那一份時（沒有檔或副本、讀不懂、�
 | `data/<task-id>/topic` | 0644 | `tag`；每個 home 各自一份，看板經彙整腳本讀 |
 | `state/dispatch-plan/` | 0700 | `fm-dispatch-plan.sh`：遠端 second mate 的 `queues.json`（`queues-in`），主 home 的 `pushed/`（`queues-push`） |
 | `config/fleet-ledger` | — | `setup`；上游的帳本旗標 |
-| `state/captain-hold-events.jsonl` | — | 上游的 `bin/fm-captain-hold.sh`（fork 加的 `record_hold_line`，contracts 第 2 節）：每次 hold 一行 `held`、每次作答、放行、對帳、PR 結算一行 `resolved`，`{"v":1,"ts":<epoch>,"task":…,"occurrence":<n>,"event":…}`，只追加；重做時再寫一行，讀的一方取最早的。寫不進去時那支指令照常完成，stderr 多一行 `actionable:` |
+| `state/captain-hold-events.jsonl` | — | 上游的 `bin/fm-captain-hold.sh`（fork 加的 `record_hold_line`，第 8 節）：每次 hold 一行 `held`、每次作答、放行、對帳、PR 結算一行 `resolved`，`{"v":1,"ts":<epoch>,"task":…,"occurrence":<n>,"event":…}`，只追加；重做時再寫一行，讀的一方取最早的。寫不進去時那支指令照常完成，stderr 多一行 `actionable:` |
 | `data/captain.md`、`data/captain-shared.md` 裡的標記區塊 | — | `install-rules` |
 | `state/fm-board/rules-backup/` | 0700 | `install-rules` 寫入前的備份 |
 | `state/fm-board/migrate-myshape.journal`、`migrate-myshape.d/`、`migrate-myshape.lock/` | — | `migrate-myshape` 的紀錄、它記下的校驗碼與 hold 原因、同時只跑一個的鎖；`--undo` 做完時刪掉紀錄 |
@@ -229,3 +229,49 @@ argv 的確切形狀與結果怎麼判在第 3.2 節。
 | `bin/fm-send.sh <task-id> <文字>` 與 `<sm> --fire-and-forget <16 位十六進位> <文字>` | exit 0 是送到；exit 3 是自己重試後仍未確認；不接受 `--` 終止符，所以開頭是 `/`、`$`、`!`、`-` 的文字由看板擋下 | 替身：`fm-board/test/stage-2-deliver.sh`；`stage-4-writes.sh` 的 `test_direct_message`、`test_retries_run_out` |
 | `bin/fm-on.sh <sm> <指令…>` 與 `--stdin` | 在遠端 home 執行並把 stdout、exit code 傳回；exit 255 是連線層失敗，可以重試 | 替身：`fm-board/test/stage-2-deliver.sh`、`stage-3-data.sh`（遠端 home 是本機的目錄）、`stage-4-writes.sh` 的 `test_answers`、`test_tagging` |
 | `bin/fm-captain-hold.sh answers --source myshape`，stdin 一行 `<task-id>\t<answer>\t<label>\t<mode>` | 逐行讀 stdout：`closed: <id>` 是成功；`skipped: <id> (already closed)`、`(… records a different captain decision …)`、`(not held for the captain)` 是別處已處理；其他的 `skipped:`、`refused:` 是失敗。`mode` 是 `done` 或 `release` | 替身：`fm-board/test/stage-2-deliver.sh`；`stage-4-writes.sh` 的 `test_answers`、`stage-5-http.sh` 的 `test_answer_takes_two_steps`。真的：`stage-2-deliver.sh` 的 `test_answer_with_the_real_hold_tool`（`done`）與 `stage-4-writes.sh` 的 `test_hands_on_hold_with_the_real_hold_tool`（`release`），只有裝了 `tasks-axi` 才跑 |
+
+## 8. fork 裡新增的檔案與限制
+
+這一節原本是 [contracts](../../myshape/spec/contracts.markdown) 第 2 節。
+
+
+看板只新增檔案，不改上游既有的檔案；例外有三處：`bin/fm-session-start.sh` 裡的呼叫點（第 9 節）；[open-issues](../../myshape/spec/open-issues.markdown) C19 的 `bin/fm-captain-hold.sh` `hold --on-answer` 與它在既有的 `tests/fm-captain-hold-lifecycle.test.sh` 裡的測試；以及 C59 的 `bin/fm-captain-hold.sh` `record_hold_line`，每次 hold、作答、放行在 `state/captain-hold-events.jsonl` 寫一行確切的時間（contracts 第 4 節，這一頁第 5 節）。
+上游合併進 `carry` 時這些檔可能衝突，衝突時保留這幾行。
+
+| 路徑 | 內容 | 哪一段加入 |
+| --- | --- | --- |
+| `bin/myshape.sh` | 看板的指令，Bash；只 source `myshape-lib.sh` | 一（之後各段加子命令） |
+| `bin/fm-topic-board-read.sh` | 唯讀彙整腳本，Bash | 一 |
+| `bin/myshape-lib.sh` | 看板自己的函式（id 檢查、錯誤、議題 id 解析），只被 source，自己不 source 任何檔 | 一 |
+| `bin/fm-topic-session-start.sh` | 開 session 時檢查看板服務、沒在跑就啟動，印啟動摘要裡的那一行，Bash | 上線後 |
+| `myshape/src/` | TypeScript 原始碼：服務、node client、頁面腳本 | 二起 |
+| `myshape/dist/` | `tsc` 的編譯結果，提交進 git；執行期只跑這裡的 `.js` | 二起 |
+| `myshape/public/` | 靜態頁面：`index.html`、`board.css`、`icon.svg` | 五 |
+| `myshape/spec/` | 這份 spec，副檔名 `.markdown` | 一 |
+| `myshape/test/` | 看板自己的測試與 `run.sh`，看板的測試函式庫 `lib.sh`、守門 helper `signal-guard.sh` 與測試套件 `kit/`（看板與 aggregator 的測試都用） | 一起；函式庫、守門 helper 與測試套件是拆 repo 的準備 |
+| `myshape/package.json`、`pnpm-lock.yaml`、`tsconfig.json`、`.gitignore` | 只有開發期相依；`.gitignore` 忽略 `node_modules/` 與 `.metrics/` | 二 |
+| `FORK-SETUP.markdown`（根目錄） | 新機器從零安裝 fork 與看板的說明；`fm-board/test/check-guide.sh` 檢查它引用的名稱 | 上線後 |
+
+first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、規則範本 `fm-board/rules/`、它們的測試與說明）不是看板的，列在這一頁第 1 節；這一側改到的上游檔案（`bin/fm-backlog-handoff.sh`、`bin/fm-fleet-snapshot.sh`）也列在那裡。
+
+硬性限制（都實測過，見 [verification](../../myshape/spec/verification.markdown)）：
+
+- fork 裡不能新增任何追蹤的 `*.md`、`*.mdx`、`*.rst`、`*.txt`，也不能在 `docs/examples/` 加檔。上游的 `bin/fm-doc-audience-check.sh` 要求這些檔全部登記在既有的 `docs/documentation-audiences.json`。所以新目錄裡不放 `README.md`。
+- 不能追蹤 `data/`、`state/`、`config/`、`projects/`、`.no-mistakes/` 底下的檔（上游 `.gitignore` 與 CI 的 invariants 都擋）。
+- 不在 `tests/` 新增任何檔。上游的 `fm-test-run.sh --check-coverage` 限制沒有時間量測的 serial 測試不超過 15%，目前是 44/297，多一個 `tests/*.test.sh` 就超標；量測表在上游的 `bin/fm-test-run.sh` 裡，不能改（採建議 C6）。
+- `bin/myshape.sh`、`bin/myshape-lib.sh` 與 `bin/fm-topic-board-read.sh` 要通過上游釘住版本的 ShellCheck（`bin/fm-lint.sh <檔>`）與 bash 3.2 的語法檢查（`/bin/bash -n`，macOS 內建版本），不直接呼叫 `bd`。
+- `fm-on.sh` 只執行遠端 code root 裡 git 追蹤、可執行、非 symlink 的 `bin/fm-*.sh`，所以遠端要用到的 `fm-topic-board-read.sh` 與 `fm-board.sh` 都在 `bin/`、都要 `chmod +x` 後提交。
+
+## 9. 看板與框架之間的其他接點
+
+這一節原本是 [contracts](../../myshape/spec/contracts.markdown) 第 11 節。
+
+看板服務只經 [contracts](../../myshape/spec/contracts.markdown) 第 7 節設定檔寫的兩支程式碰到另一邊；first mate 的設定檔讓兩支都是 `bin/fm-board.sh`，它讀寫框架的哪些東西、測試在哪裡，在這一頁第 3 節與第 7 節。
+看板自己的測試（`myshape/test/stage-7-*.sh`）用照 contracts 第 4 節與 7.1 寫的替身 aggregator（`myshape/test/stub-aggregator/`），放在看板的 code root 外面、用它自己的名字，經設定檔接上並在頁面上確認，不跑任何框架的程式；比較升級的那些步驟（`fm-board/test/stage-7-upgrade.sh`，它要 fork 的完整歷史）另把替身放在舊版看板唯一會跑的 `bin/fm-board.sh`。兩邊共用的範例在 `myshape/test/contract/`，由看板維護，first mate 這一側的測試讀它們。
+first mate 這一側的第三到五段（`fm-board/test/stage-3-data.sh`、`stage-4-writes.sh`、`stage-5-http.sh`、`stage-5-page.sh`）用 `fm-board/test/helpers.sh` 的 `tb_make_fake_root` 跑真的 `fm-board.sh` 與框架的替身：那個 code root 的 `bin/fm-board.sh` 是提交過的一個小包裝，從 `tb-fake.env` 讀替身要的設定再交給真的 `fm-board.sh`，因為看板不再把自己的環境傳給程式；看的是兩邊接起來之後頁面與通知和以前一樣。
+
+- `bin/fm-session-start.sh`：fleet state 那一段的最後，只在拿到 session 鎖、不是 `--reemit` 時，呼叫 `bin/fm-topic-session-start.sh`，它的輸出原樣印進啟動摘要。這是看板在上游檔案裡唯一的呼叫點；合併上游時要留著這幾行。看板的測試靠真的 `fm-session-start.sh` 與 `fm-lock.sh`：拿得到鎖時跑、鎖被一個活著的 harness 程序拿著時是唯讀。測試：真的，`fm-board/test/stage-2-startup.sh` 全部。
+- `tests/lib.sh`：first mate 這一側的測試（`fm-board/test`、`dispatch-plan/test`）source 它，用 `fm_test_tmproot`、`fm_test_run`、`fm_test_cleanup`、`fm_git_init_commit`、`fm_write_meta`、`fm_fakebin`、`pass`、`fail`、`assert_equals`、`assert_contains`、`assert_not_contains`、`assert_grep`、`assert_present`、`assert_absent`、`expect_code` 與變數 `ROOT`。改到這些，這一側的每個測試腳本都受影響。看板自己的測試不用它，改 source 看板的 `myshape/test/lib.sh`，名稱與輸出相同。
+- 環境變數 `FM_HOME`、`FM_ROOT_OVERRIDE`、`FM_DATA_OVERRIDE`、`FM_CONFIG_OVERRIDE`、`FM_STATE_OVERRIDE`：看板的 Bash 指令照上游的慣例解析路徑。
+- 自我更新：主 home 的 `config/self-update-source` 指向 `carry`。看板的服務在下一個議題指令發現程式的 commit 變了，就換掉自己；開著的頁面看到 `/api/state` 的 `code_commit` 和它載入時不同，就自己重新載入。
+- first mate 這一側的指令（`fm-board.sh`、`fm-dispatch-plan.sh`）依賴的框架介面，包括 `install-rules` 在 `data/captain.md`、`data/captain-shared.md` 裡維護的標記區塊，列在這一頁第 7 節。

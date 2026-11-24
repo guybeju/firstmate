@@ -52,7 +52,7 @@ firstmate 本身的需求只在上游的文件寫一次，照那裡準備：
 - [configuration「Toolchain」](docs/configuration.md#toolchain)：每個 home 都要的工具清單（`node`、`git`、`gh`、`no-mistakes`、`gh-axi`、`chrome-devtools-axi`、`tasks-axi`、`quota-axi`），加上依 backend 多出來的工具（tmux 要 `tmux` 與 `treehouse`）。
   第一次開 session 時 first mate 會列出缺的與太舊的工具，經你同意才裝，所以不必事先裝齊。
 
-看板多要的東西（[rollout「前提」](myshape/spec/rollout.markdown)）：
+看板多要的東西（[rollout「前提」](fm-board/spec/rollout.markdown)）：
 
 - 主 home：`node` 22 以上與 `jq`。
   看板只跑編譯好的 `dist/`，不需要 TypeScript 支援。
@@ -119,7 +119,7 @@ firstmate: updated <舊 commit>..<新 commit> (instructions changed: …)
 - `config/self-update-source` 讀不懂、remote 不存在或分支名稱不合法時，整個更新在動任何東西之前停下並指出那個檔；照訊息改檔，不會退回 `origin`。
 - `firstmate: skipped: …` 表示 checkout 髒了、不在預設分支或分歧了，更新什麼都沒動；照原因處理後再跑。
   原因是 `fetch of origin carry failed` 時是讀不到 fork，照第 2 步的「不對時」處理。
-- 不要為了讓更新過而刪掉 `config/self-update-source`：home 跟到 `carry` 之後，拿掉這個檔會被當成分歧，要手動處理（[configuration](docs/configuration.md#self-update-source-configself-update-source)、[rollout「已知限制」](myshape/spec/rollout.markdown)）。
+- 不要為了讓更新過而刪掉 `config/self-update-source`：home 跟到 `carry` 之後，拿掉這個檔會被當成分歧，要手動處理（[configuration](docs/configuration.md#self-update-source-configself-update-source)、[rollout「已知限制」](fm-board/spec/rollout.markdown)）。
 
 ## 4. 開 session，補到能派工
 
@@ -187,7 +187,7 @@ bin/myshape.sh status
 ## 6. 裝規則，重開 session
 
 規則告訴 first mate 什麼時候該跑看板的指令。
-它是最後一步：要等第 5 步的 `status` 每個 home 都是 `相同` 才裝（[rollout](myshape/spec/rollout.markdown) 第 7 步）。
+它是最後一步：要等第 5 步的 `status` 每個 home 都是 `相同` 才裝（[rollout](fm-board/spec/rollout.markdown) 第 7 步）。
 
 ```
 bin/fm-board.sh install-rules
@@ -236,10 +236,10 @@ bin/fm-board.sh install-rules
   更新之後還開著的這種 hold 不會消失：看板在「等你決定」顯示它，問題是 `動手：` 開頭的原文；舊版搬上看板的項目照舊在「要你動手」，關掉它不再關它的 hold，那個 hold 就留在「等你決定」。
   手動處理：做完那件事之後在看板上回答那個待決事項，答了就關掉；或請 first mate 用 `bin/myshape.sh todo add` 把它放成要你動手的項目，再回答那個待決事項。
   **確認**：「等你決定」裡沒有 `動手：` 開頭的待決事項；更新後的 `bin/fm-board.sh --help` 不再列 `adopt`。
-  退回這一版之前的程式時，舊版又把還開著的這種 hold 搬上看板（[rollout「之後怎麼更新」](myshape/spec/rollout.markdown)）。
+  退回這一版之前的程式時，舊版又把還開著的這種 hold 搬上看板（[rollout「之後怎麼更新」](fm-board/spec/rollout.markdown)）。
 - **規則範本有變**：更新後 `bin/fm-board.sh rules` 會印 `和範本不同`；由使用者決定之後再跑一次 `bin/fm-board.sh install-rules`，再重開 session。
   有 second mate 時，先和第 8 節第 4 點一樣確認每個 home 都是 `相同` 再裝：新的規則可能用到只有新版程式才有的指令，例如共用規則從 v3 起叫 second mate 跑 `bin/fm-board.sh tag`，還沒更新的 home 沒有這支指令。
-- **上游有新版**：只有在 fork 的維護者把上游的 `main` 合併進 `carry` 之後才會到你手上，之後就和「fork 有新版」一樣（[rollout「之後怎麼更新」](myshape/spec/rollout.markdown)）。
+- **上游有新版**：只有在 fork 的維護者把上游的 `main` 合併進 `carry` 之後才會到你手上，之後就和「fork 有新版」一樣（[rollout「之後怎麼更新」](fm-board/spec/rollout.markdown)）。
   這台機器不用自己合併上游。
 - `carry` 的推送與 base 是 `carry` 的 PR 會跑 fork 自己的 lint 檢查 [`carry-lint.yml`](.github/workflows/carry-lint.yml)，內容是 `bin/fm-lint.sh` 完整的兩個 partition；它只在 fork 的 Actions 開著時才會跑。
   `bin/fm-lint.sh` 每一次也跑 `tests/check-signals.sh`：任何一個測試沒經過守門 helper 就對算出來的目標送訊號（pid 檔、process group、照名稱或命令列找到的程序），lint 就失敗。
@@ -262,7 +262,7 @@ bin/fm-board.sh install-rules
 
 只有一台機器、沒有 second mate 的話，這一節可以跳過。
 second mate 本身怎麼佈建照上游：同機的見 [secondmate-provisioning 技能](.agents/skills/secondmate-provisioning/SKILL.md)，遠端的見 [remote-secondmates](docs/remote-secondmates.md)。
-看板要多做的事與順序在 [rollout「步驟」](myshape/spec/rollout.markdown)，順序不能換：
+看板要多做的事與順序在 [rollout「步驟」](fm-board/spec/rollout.markdown)，順序不能換：
 
 1. **每台遠端機器的 code root 先跟到 `carry`**（是 code root，不是 second mate 的 home）。
    code root 要有一個指向 fork 的 remote，並寫自己的 `config/self-update-source`，第一個字是那個 remote 在那台機器上的名稱。
@@ -322,7 +322,7 @@ second mate 本身怎麼佈建照上游：同機的見 [secondmate-provisioning 
 ## 這一頁怎麼保持正確
 
 看板每次修改（程式、指令、規則範本、需要的工具）都要在同一個修改裡對照這一頁、改掉不一致的地方，PR 說明裡寫出這一頁查過了、改了什麼。
-這條規則記在 [handover](myshape/spec/handover.markdown) 第 5 節。
+這條規則記在 first mate 這一側的 [handover](fm-board/spec/handover.markdown) 第 2 節。
 
 `fm-board/test/check-guide.sh` 自動檢查這一頁的一部分，由 `fm-board/test/run.sh` 一起跑（`stage-6-guide.sh`）：
 
