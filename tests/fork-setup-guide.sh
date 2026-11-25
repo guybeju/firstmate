@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# check-guide.sh: the setup guide at the checkout root cites only names that
+# check-fork-setup.sh: the setup guide at the checkout root cites only names that
 # exist, and each kind of check really catches a wrong name.
 # shellcheck disable=SC2016 # the backticks in the planted lines are Markdown code spans.
 set -u
 
 # shellcheck source=tests/lib.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tests/lib.sh"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-board-guide)
-CHECK="$ROOT/fm-board/test/check-guide.sh"
+CHECK="$ROOT/tests/check-fork-setup.sh"
 GUIDE="$ROOT/FORK-SETUP.markdown"
 
 # check_copy <name> <line>: run the check on a copy of the guide with <line>

@@ -9,8 +9,9 @@ fork 的首頁顯示的是 `main`，和上游一樣，但首頁右側 About 的�
 
 ## 0. 先知道的事
 
-- **為什麼用 fork 而不是上游**：看板（`myshape/` 與 `bin/myshape*.sh`）和 first mate 這一側接看板的指令（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、`fm-board/`）只在 fork 的 `carry` 分支上。
-  `carry` 是上游的 `main` 加上看板與 fork 自己的修正，上游沒有這些東西。
+- **為什麼用 fork 而不是上游**：看板（`myshape/` 與 `bin/myshape*.sh`）和 first mate 這一側接看板的指令（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、`fm-board/`）在 <https://github.com/guybeju/myshape> 開發。
+  fork 的 `carry` 分支帶著兩者的一份釘住的副本，路徑和這裡寫的一樣，來自 [`myshape.lock`](myshape.lock) 記的那個 commit。
+  `carry` 是上游的 `main` 加上這份副本，再加上 fork 自己的修正，包括上游的指令裡接看板的四個地方（`bin/fm-session-start.sh` 一處、`bin/fm-captain-hold.sh` 兩處、`bin/fm-fleet-snapshot.sh` 一處）；上游沒有這些東西。
   fork 的 `main` 和上游的 `main` 相同，所以只 clone 不切換時，手上是沒有看板的上游版本。
 - **怎麼跟著 `carry`**：home 的 checkout 停在預設分支 `main`，由 `config/self-update-source` 讓更新改從 fork 的 `carry` 前進。
   這個檔的規則在 [configuration「Self-update source」](docs/configuration.md#self-update-source-configself-update-source)。
@@ -28,7 +29,7 @@ fork 的首頁顯示的是 `main`，和上游一樣，但首頁右側 About 的�
 先看這一節，決定這台機器要不要多做驗證。
 
 - **Linux**：上游的 README 列為支援的平台。
-  看板在 Linux 上開發；[handover](myshape/spec/handover.markdown) 第 1 節要求在那台 Linux 上看板的測試全部通過，第 3 節沒有另外記一筆 Linux 全套測試的結果。
+  看板在 Linux 上開發；看板自己的測試現在在 guybeju/myshape 的 CI 上跑，不在 `carry` 上（怎麼跑在 [handover](myshape/spec/handover.markdown) 第 1 節），handover 第 3 節沒有另外記一筆 Linux 全套測試的結果。
 - **macOS**：上游的 README 列為支援的平台。
   看板的全套測試在 macOS 上跑過，記在 handover 第 3 節：當時的 commit 是 `faa7a8f6`，不設 `TMPDIR`。
   `PATH` 預設（bash 5.3.20）與 `PATH="/bin:$PATH"`（每一層都是 bash 3.2.57）結果相同：第一段 23 項、第二段 13、第三段 14、第四段 14、第五段 8 加上 `skip: firefox not found`、第六段 9，沒有失敗。
@@ -40,9 +41,11 @@ fork 的首頁顯示的是 `main`，和上游一樣，但首頁右側 About 的�
 
 從零裝起這件事本身沒有完整驗過：handover 第 3 節的結果都來自已經在用的 home。
 這一頁的第 2、3、5、6 步曾在 Linux 上一個暫時的 home 裡照本頁走過一遍，用 curl 代替瀏覽器開看板；第 4 步（開 session、補齊工具到能派工）與第 8 節沒有從零走過。
+那一次走在 `carry` 改成帶釘住的副本之前，所以第 3 步後來加上的 `bin/fm-board-vendor.sh --check` 確認沒有從零走過。
 
 macOS 上 `bin/myshape*.sh` 與 `bin/fm-board.sh` 用的是 `PATH` 上第一個 `bash`（腳本第一行是 `#!/usr/bin/env bash`），細節在 handover 第 1 節。
-遠端的 second mate 會跑 `bin/fm-dispatch-plan.sh` 的 `order` 與 `queues-in`，以及 `bin/fm-board.sh tag` 對佇列副本的檢查（第 8 節第 6 點）；它們照 bash 3.2 與 BSD 工具寫，但 `dispatch-plan/test` 與 `fm-board/test/stage-1-tag.sh` 還沒在 Mac 上跑過。
+遠端的 second mate 會跑 `bin/fm-dispatch-plan.sh` 的 `order` 與 `queues-in`，以及 `bin/fm-board.sh tag` 對佇列副本的檢查（第 8 節第 6 點）；它們照 bash 3.2 與 BSD 工具寫。
+在 GitHub 的 macOS 機器上用 `/bin/bash` 3.2 跑過一次（guybeju/myshape 的 <https://github.com/guybeju/myshape/actions/runs/45400618489/attempts/2>）：`fm-board/test/stage-1-tag.sh` 的 18 項全過，`dispatch-plan/test` 有一項 `order` 的測試失敗（`every item the captain says is done waits for a check, and nothing else`）；那次 macOS 上的失敗不修。
 
 ## 1. 需要的東西
 
@@ -58,7 +61,7 @@ firstmate 本身的需求只在上游的文件寫一次，照那裡準備：
   看板只跑編譯好的 `dist/`，不需要 TypeScript 支援。
 - 開看板的瀏覽器要在主 home 這台機器上：服務只綁 `127.0.0.1`（[contracts](myshape/spec/contracts.markdown) 第 6.2 節）。
 - 遠端 second mate 的機器：只要 `jq`，不需要 `node`（第 8 節）。
-- `pnpm` 與 `firefox` 只有開發與跑看板的測試時才要（handover 第 1 節），裝起來用不需要。
+- `pnpm` 只有在 guybeju/myshape 開發看板時才要；`firefox` 只有跑 first mate 這一側的頁面測試時才要（[這一側的 handover](fm-board/spec/handover.markdown) 第 1 節）。裝起來用兩個都不需要。
 
 **確認**：`node --version` 印出 22 以上，`jq --version` 有輸出；firstmate 自己的工具在第 4 步由啟動檢查確認。
 **不對時**：照上面兩個上游連結安裝；`node` 低於 22 時看板的指令會停下並說要升級（第 5 步）。
@@ -112,14 +115,19 @@ self-update source: origin carry (config/self-update-source)
 firstmate: updated <舊 commit>..<新 commit> (instructions changed: …)
 ```
 
-之後 `git -C <clone> rev-parse HEAD` 要等於 `git ls-remote https://github.com/guybeju/firstmate.git carry` 的第一欄，`<clone>/myshape/`、`<clone>/bin/myshape.sh` 與 `<clone>/bin/fm-board.sh` 要存在。
+之後 `git -C <clone> rev-parse HEAD` 要等於 `git ls-remote https://github.com/guybeju/firstmate.git carry` 的第一欄，`<clone>/myshape/`、`<clone>/bin/myshape.sh`、`<clone>/bin/fm-board.sh` 與 [`<clone>/myshape.lock`](myshape.lock) 要存在。
 再跑一次會印 `firstmate: already current`。
+然後 `bin/fm-board-vendor.sh --check` 要印 `ok - <檔數> files match guybeju/myshape@<commit> (on main)`：看板與 first mate 這一側的副本和 `myshape.lock` 記的 commit 一模一樣。
+它用 https 讀公開的 guybeju/myshape，不需要登入。
 
 **不對時**：
 
 - `config/self-update-source` 讀不懂、remote 不存在或分支名稱不合法時，整個更新在動任何東西之前停下並指出那個檔；照訊息改檔，不會退回 `origin`。
 - `firstmate: skipped: …` 表示 checkout 髒了、不在預設分支或分歧了，更新什麼都沒動；照原因處理後再跑。
   原因是 `fetch of origin carry failed` 時是讀不到 fork，照第 2 步的「不對時」處理。
+- `bin/fm-board-vendor.sh --check` 印 `not ok - <路徑>: …`：那個 vendor 進來的檔和釘住的 commit 不同（不同的內容、mode，少了，或多出來）。
+  不要手改 vendor 進來的檔；要改的在 guybeju/myshape 改，經同步 PR 進來（第 7 節）。
+  印的是 `not ok - fetch of main from https://github.com/guybeju/myshape failed` 時是讀不到 GitHub，照第 2 步的「不對時」處理。
 - 不要為了讓更新過而刪掉 `config/self-update-source`：home 跟到 `carry` 之後，拿掉這個檔會被當成分歧，要手動處理（[configuration](docs/configuration.md#self-update-source-configself-update-source)、[rollout「已知限制」](fm-board/spec/rollout.markdown)）。
 
 ## 4. 開 session，補到能派工
@@ -166,6 +174,7 @@ bin/myshape.sh status
 **確認**：有 `看板服務：在跑`、`程式目錄：<clone>`、`輪詢：進行中`、`aggregator：已接上（first mate）`、`aggregator 設定：firstmate，feed bin/fm-board.sh，deliver bin/fm-board.sh`，每一行 `home <id>：` 都是 `相同`（只有主 home 時只有 `home main：相同`）。
 看板經 `bin/fm-board.sh` 讀 first mate 的資料、把頁面上的動作交給 first mate（[adapter](fm-board/spec/adapter.markdown) 第 3 節）。
 那支程式在 git 裡追蹤、和 HEAD 相同，所以看板不用在頁面上確認就執行它。
+它是 guybeju/myshape 在 `myshape.lock` 那個 commit 的副本，`bin/fm-board-vendor.sh --check` 確認這一點（第 3 步）。
 沒有設定檔時這一行是 `aggregator：沒有接上（沒有 config/myshape-aggregator.json）`：頁面上的動作照常完成，要送出的會等看板接上之後依序送出；跑 `bin/fm-board.sh bind` 寫好設定檔，再跑一次 `bin/myshape.sh open`（下一次開 session 或下一個 `bin/fm-board.sh tag`、`split` 也會自己寫好，並印一行「看板的 aggregator 設定原本不在，已寫好：firstmate…」）。
 `aggregator：沒有接上（config/myshape-aggregator.json 不能用：是空的，看板不執行任何程式）`：有人在那裡放了空檔，要看板不跑任何程式；要接回去就刪掉它再跑 `bin/fm-board.sh bind` 與 `bin/myshape.sh open`。
 剛打開時 `home main：` 那一行可能是 `還沒讀到`，等一下再看。
@@ -182,7 +191,7 @@ bin/myshape.sh status
   開 session 時的 `看板服務：無法啟動：<原因>` 是同一個原因，照著修，下一次開 session 或任何一個看板指令會再試。
 - 上一次啟動失敗的原因在 `state/myshape/startup-error`，服務的輸出在 `state/myshape/service.log`（contracts 第 3 節）。
 - 某個 home 顯示 `無法回報`（頁面上那個 home 的橫幅說原因，例如 `還沒換到 fork`）、`版本不相容` 或 `版本不同`，或頁面說帳本未開，表示那個 home 不在同一版或沒開帳本；只有主 home 時不會出現，有 second mate 時見第 8 節。
-- `aggregator：沒有接上（<路徑> 的群組也能寫（權限 0775）；需要確認的程式不能讓群組寫…）`：設定檔寫的程式不是 git 追蹤、和 HEAD 相同的 `bin/` 底下的檔，又是群組能寫的。first mate 的設定檔只會在兩種情況遇到：`bin/fm-board.sh` 在 checkout 裡被改過、還沒提交，這時把那個改動提交或還原之後再跑一次 `bin/myshape.sh open`；或是啟動看板的環境裡有 `MYSHAPE_ROOT_OVERRIDE`（first mate 開 session 與 `split` 時把自己的 `FM_ROOT_OVERRIDE` 換成這個名字交過去），指向 `bin/myshape.sh` 所在的 checkout 以外的目錄（這時每支程式都要確認），這時拿掉那個變數再跑 `bin/myshape.sh restart`。不要對整個 checkout 改權限。
+- `aggregator：沒有接上（<路徑> 的群組也能寫（權限 0775）；需要確認的程式不能讓群組寫…）`：設定檔寫的程式不是 git 追蹤、和 HEAD 相同的 `bin/` 底下的檔，又是群組能寫的。first mate 的設定檔只會在兩種情況遇到：`bin/fm-board.sh` 在 checkout 裡被改過、還沒提交，這時把那個改動還原之後再跑一次 `bin/myshape.sh open`（不要提交：vendor 進來的檔改過再提交，`bin/fm-board-vendor.sh --check` 就會失敗；要改的在 guybeju/myshape 改，經同步 PR 進來）；或是啟動看板的環境裡有 `MYSHAPE_ROOT_OVERRIDE`（first mate 開 session 與 `split` 時把自己的 `FM_ROOT_OVERRIDE` 換成這個名字交過去），指向 `bin/myshape.sh` 所在的 checkout 以外的目錄（這時每支程式都要確認），這時拿掉那個變數再跑 `bin/myshape.sh restart`。不要對整個 checkout 改權限。
 - 不用時 `bin/myshape.sh stop` 停掉服務；主 first mate 下一次開 session 時會再把它啟動。
 
 ## 6. 裝規則，重開 session
@@ -196,6 +205,7 @@ bin/fm-board.sh install-rules
 
 它把兩段規則各寫成一個標記區塊，放進 `data/captain.md` 與 `data/captain-shared.md`，區塊外的內容不動，寫之前備份到 `state/fm-board/rules-backup/`。
 規則是 first mate 的，所以安裝的指令與範本（`fm-board/rules/`）都在 first mate 這一側。
+它們在 guybeju/myshape 的 `adapters/firstmate/fm-board/rules/` 寫，跟著釘住的副本進來。
 
 **確認**：輸出有 `captain.md：新增（v11）` 與 `captain-shared.md：新增（v5）`（已經裝過的是 `已更新` 或 `已是最新`）。
 之後 `bin/fm-board.sh rules` 印出 `規則：captain.md 和範本相同（v11）；captain-shared.md 和範本相同（v5）`。
@@ -210,9 +220,12 @@ bin/fm-board.sh install-rules
 
 ## 7. 之後怎麼更新
 
-- **fork 有新版**（看板或 fork 的修正進了 `carry`）：在主 home 跑 `/updatefirstmate`。
-  下一個看板指令發現服務的程式版本或設定檔不同，會自動換掉舊服務（開 session 時的檢查只在替這個 home 補寫設定檔時換，其他時候只回報 `看板服務：在跑`）；`status` 出現「目前的程式是 …；下一個指令或 restart 會換成新版」時，也可以直接 `bin/myshape.sh restart`。
-  **確認**：`status` 的 `程式版本：` 等於 `git -C <clone> rev-parse HEAD`。
+- **看板或 first mate 這一側有新版**：修改先在 guybeju/myshape 合併。
+  之後一個同步 PR 把那個 commit 帶進 `carry`：在 worker 自己的 checkout、名稱含 `board-sync` 的分支上跑 `bin/fm-board-vendor.sh vendor <commit>`，它也改 `myshape.lock`；不在 home 裡跑（[這一側的 handover](fm-board/spec/handover.markdown) 第 2 節）。
+  那個 PR 合併進 `carry` 之後，在主 home 跑 `/updatefirstmate`。
+- **fork 自己的修正進了 `carry`**：在主 home 跑 `/updatefirstmate`。
+- 上面兩種更新之後都一樣：下一個看板指令發現服務的程式版本或設定檔不同，會自動換掉舊服務（開 session 時的檢查只在替這個 home 補寫設定檔時換，其他時候只回報 `看板服務：在跑`）；`status` 出現「目前的程式是 …；下一個指令或 restart 會換成新版」時，也可以直接 `bin/myshape.sh restart`。
+  **確認**：`status` 的 `程式版本：` 等於 `git -C <clone> rev-parse HEAD`，`bin/fm-board-vendor.sh --check` 印 `ok - …`。
 - **看板改名成 myshape 的那一次更新**：已經過去了，每個跟著 `carry` 的 home 都搬完，搬家的指令與改名前的名字的處理也拿掉了。
   還有一個停在改名前的名字的 home 時，要先更新到中間的一個 commit、在那裡搬家，再更新到最新，步驟在 [rollout「之後怎麼更新」](fm-board/spec/rollout.markdown)。
 - **看板改由設定檔接上 first mate 的那一次更新**（只有一次）：更新之前就設好的主 home 沒有 `config/myshape-aggregator.json`。
@@ -235,13 +248,17 @@ bin/fm-board.sh install-rules
 - `carry` 的推送與 base 是 `carry` 的 PR 會跑 fork 自己的 lint 檢查 [`carry-lint.yml`](.github/workflows/carry-lint.yml)，內容是 `bin/fm-lint.sh` 完整的兩個 partition；它只在 fork 的 Actions 開著時才會跑。
   `bin/fm-lint.sh` 每一次也跑 `tests/check-signals.sh`：任何一個測試沒經過守門 helper 就對算出來的目標送訊號（pid 檔、process group、照名稱或命令列找到的程序），lint 就失敗。
   它是 `carry` 的必要檢查：規則集 `carry-required-lint` 要求 `Lint 1` 與 `Lint 2` 通過才能進 `carry`，略過名單是空的。
+  `Lint 1` 另外跑 `bin/fm-board-vendor.sh --check`，在那之前先用純 git 確認這支檢查程式本身就是 guybeju/myshape 在 `myshape.lock` 那個 commit 的那一份；所以和釘住的 commit 不同的副本進不了 `carry`。
+  這一步要連得到 github.com，讀的是公開的 guybeju/myshape，不帶權杖。
   改這個 workflow 的 job 名稱或它的 matrix 會改掉這兩個檢查的名字，所以那個修改合併之前，要先由 repository 的擁有者改好規則集。
   上游的 CI 只在 `main` 上跑，在 fork 上是停用的，所以上游的測試套件不會在 `carry` 上自動跑。
-  base 是 `carry`、又改到看板或它用到的檔（列在那個檔的 `paths:`）的 PR，另外會跑看板的測試 [`carry-board-tests.yml`](.github/workflows/carry-board-tests.yml)：`myshape/test`、`fm-board/test`、`dispatch-plan/test`、`check-dist.sh`，以及單元測試、型別、lint、格式的檢查，在 GitHub 的機器上跑，不在這台機器上。
+  base 是 `carry`、又改到看板或它用到的檔（列在那個檔的 `paths:`）的 PR，另外會跑看板的測試 [`carry-board-tests.yml`](.github/workflows/carry-board-tests.yml)：`bin/fm-board-vendor.sh --check`、`fm-board/test`、`dispatch-plan/test` 與這一頁的檢查 `tests/fork-setup-guide.sh`，在 GitHub 的機器上跑，不在這台機器上。
+  看板自己的測試（`myshape/test`、`check-dist.sh`，以及單元測試、型別、lint、格式的檢查）在 guybeju/myshape 的 CI 上跑，不在 `carry` 上。
   這個檢查只供參考，不是合併的必要條件；沒改到那些檔的 PR 不會出現這個檢查。
   任何一個測試印出 `skip:` 時這個檢查就算失敗，job summary 列出每一個 `NOT RUN:`。
-  它用的 pnpm 與 `tasks-axi` 鎖在只給 CI 用的 `ci-tools/board-tests/`。
+  它用的 `tasks-axi` 鎖在只給 CI 用的 `ci-tools/board-tests/`。
 - **退回較舊的版本或退回上游**：沒有定好的步驟。
+  要退回較舊的看板或 first mate 這一側，開一個同步 PR 鎖到 guybeju/myshape 較舊的 commit，不要手動退 vendor 進來的檔。
   退版之前先備份 `data/topics.json`，舊版存檔時會丟掉後來才加的欄位（rollout「之後怎麼更新」）。
   要退回看板改名成 myshape 之前的程式，要先退到改名之後、拿掉搬家指令之前的一個 commit，在那裡把每個搬過的 home 搬回舊名字，再往前退：舊的程式只認舊的名字；步驟在 [rollout「之後怎麼更新」](fm-board/spec/rollout.markdown)。
   要退回看板經 `bin/fm-board.sh feed` 與 `deliver` 讀寫之前的程式，先跑 `bin/myshape.sh stop`，把 `state/myshape/audit.jsonl` 移到別處，再退程式：舊的程式讀不懂這一版寫的寫入紀錄，頁面上的寫入歷史會從空的開始。
@@ -312,10 +329,12 @@ second mate 本身怎麼佈建照上游：同機的見 [secondmate-provisioning 
 
 ## 這一頁怎麼保持正確
 
-看板每次修改（程式、指令、規則範本、需要的工具）都要在同一個修改裡對照這一頁、改掉不一致的地方，PR 說明裡寫出這一頁查過了、改了什麼。
+看板與 first mate 這一側的修改（程式、指令、規則範本、需要的工具）都在 guybeju/myshape 做。
+把一個 commit 帶進 `carry` 的同步 PR 要對照這一頁、在同一個 PR 裡改掉不一致的地方，PR 說明裡寫出這一頁查過了、改了什麼。
 這條規則記在 first mate 這一側的 [handover](fm-board/spec/handover.markdown) 第 2 節。
 
-`fm-board/test/check-guide.sh` 自動檢查這一頁的一部分，由 `fm-board/test/run.sh` 一起跑（`stage-6-guide.sh`）：
+`tests/check-fork-setup.sh` 自動檢查這一頁的一部分。
+它屬於 fork，不 vendor，跟著這一頁放在 fork 裡；[`carry-board-tests.yml`](.github/workflows/carry-board-tests.yml) 把它的測試 `tests/fork-setup-guide.sh` 當成單獨的一個 stage 跑：
 
 - 每個相對連結指到的檔案存在（不檢查 `#` 後面的段落錨點）。
 - 提到的每支 `bin/fm-*.sh` 與 `bin/myshape.sh` 存在而且可以執行。

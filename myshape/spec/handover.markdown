@@ -40,7 +40,7 @@ shellcheck -x bin/myshape.sh bin/myshape-lib.sh myshape/test/*.sh myshape/test/k
 - `run.sh` 用啟動它的那個 bash 跑每個腳本，但腳本裡呼叫的 `bin/myshape*.sh` 是照自己第一行的 `#!/usr/bin/env bash` 找 bash。要在 macOS 上驗 bash 3.2，兩邊都要是 3.2：`PATH="/bin:$PATH" /bin/bash myshape/test/run.sh`。正式環境裡遠端的 home 用哪個 bash，同樣取決於當時 `PATH` 上第一個是哪一個。
 - 測試用的環境變數由各腳本自己設：`MYSHAPE_TEST=1` 打開只給測試用的 socket 操作，`MYSHAPE_READ_MS` 等縮短輪詢與重試的間隔。不用事先設任何變數。
 - 看板的測試 source 看板自己的測試函式庫 `myshape/test/lib.sh`，不用上游的 `tests/lib.sh`，所以只有看板自己的檔也跑得起來。驅動真的看板的那些 fixture 是測試套件 `myshape/test/kit/`（`helpers.sh` 與 `browser.mjs`），看板自己與 aggregator 的測試都用它。
-- `myshape/vendor-files` 一行一個路徑：第一個空行之前是看板的執行期（`tb_make_board_root` 照它建只有看板的副本），之後是 aggregator 要和執行期一起留著的檔（契約範例、測試套件與它們用到的檔）。
+- `myshape/vendor-files` 一行一個路徑：第一個空行之前是看板的執行期（`tb_make_board_root` 照它建只有看板的副本），之後是 aggregator 要和執行期一起留著的檔（契約範例、測試套件與它們用到的檔、這份 spec）。
 - 看板的測試只經一個守門 helper `myshape/test/signal-guard.sh` 送訊號：`myshape/test/signal-lib.sh` 的 `kill_own_child` 與 `myshape/test/lib.sh` 的 `fm_test_signal` 都經它送，結束時的清理也是。它只接受送訊號的 shell 自己的子程序（活著的父程序就是那個 shell），或命令列有這次測試建立、帶記號的暫存根目錄的程序。
 - `myshape/test/check-signals.sh` 檢查整個 `myshape/test`：唯一的送訊號指令是守門 helper 的那一行，其他只能是送 0 的探測；JavaScript 只有瀏覽器驅動程式對自己子程序的那一行與送 0 的探測。`FM_TEST_SIGNAL_DRY_RUN=1 FM_TEST_SIGNAL_LOG=<絕對路徑>` 讓這些腳本什麼都不送，只記下每一次會送給誰。在 fork 裡，上游的 `tests/check-signals.sh` 另外檢查每一個測試目錄，`bin/fm-lint.sh` 每一次都跑它。
 - 暫存目錄：macOS 預設的暫存目錄很深，會讓 socket 路徑超過 103 位元組的上限。`myshape/test/lib.sh` 與測試套件的 `helpers.sh` 在預設暫存目錄的路徑超過 40 個字元時改用 `/tmp`。
@@ -68,37 +68,37 @@ trash "$H"                                        # 再把暫時的 home 丟進�
 
 ## 2. 每個問題的狀態
 
-[open-issues](open-issues.markdown) 的每一條。「完成」是已經照那一條寫的做法實作並進了 `carry`；PR 是那一條進 `carry` 的那一個。Mac 上找到的另外三個測試相容性問題沒有編號，在 #29、#30、#31：暫存目錄太深與 `ss`、輔助函式的預設值寫法、巢狀引號。
+[open-issues](open-issues.markdown) 的每一條。「完成」是已經照那一條寫的做法實作並進了 `carry`；PR 是那一條進 `carry` 的那一個。Mac 上找到的另外三個測試相容性問題沒有編號，在 guybeju/firstmate#29、guybeju/firstmate#30、guybeju/firstmate#31：暫存目錄太深與 `ss`、輔助函式的預設值寫法、巢狀引號。
 
 | 條目 | 狀態 | PR |
 | --- | --- | --- |
-| C1 到 C21 | 完成：規劃時定案，第一次交付就照著做 | #1 |
-| C22 到 C27 | 完成：實作時發現並修掉 | #1 |
-| C28 | 延後（使用者 2026-11-17 定），之後要補，清單在第 4 節 | #1 起持續記錄 |
-| C29 到 C31 | 完成 | #3 |
-| C32 | 完成 | #4 |
-| C33 | 完成 | #5 |
-| C34 | 完成 | #6 |
-| C35 | 完成 | #7 |
-| C36 | 完成 | #9 |
-| C37 | 完成 | #11 |
-| C38 | 完成 | #13 |
-| C39 | 完成 | #14 |
-| C40 | 完成 | #15 |
-| C41 | 完成 | #16 |
-| C42 | 完成，只有截圖驗過，沒有自動測試 | #17 |
-| C43 | 完成 | #18 |
-| C44 | 完成，真的 home 上實測過（回報） | #19 |
-| C45 | 完成 | #25 |
-| C46 | 完成；真的 home 上建立過項目，「做完了」到關閉的一整輪還開著（第 3 節） | #27 |
-| C47 | 完成，Mac 上通過 | #28 |
-| C48 | 完成，Mac 的 bash 3.2.57 上通過 | #29 |
-| C49 | 完成 | #32 |
-| C50 | 完成 | #33 |
-| C51 | 完成 | #34 |
-| C52 | 完成 | #49 |
-| C53 | 完成 | #51 |
-| C54 | 完成 | #52 |
+| C1 到 C21 | 完成：規劃時定案，第一次交付就照著做 | guybeju/firstmate#1 |
+| C22 到 C27 | 完成：實作時發現並修掉 | guybeju/firstmate#1 |
+| C28 | 延後（使用者 2026-11-17 定），之後要補，清單在第 4 節 | guybeju/firstmate#1 起持續記錄 |
+| C29 到 C31 | 完成 | guybeju/firstmate#3 |
+| C32 | 完成 | guybeju/firstmate#4 |
+| C33 | 完成 | guybeju/firstmate#5 |
+| C34 | 完成 | guybeju/firstmate#6 |
+| C35 | 完成 | guybeju/firstmate#7 |
+| C36 | 完成 | guybeju/firstmate#9 |
+| C37 | 完成 | guybeju/firstmate#11 |
+| C38 | 完成 | guybeju/firstmate#13 |
+| C39 | 完成 | guybeju/firstmate#14 |
+| C40 | 完成 | guybeju/firstmate#15 |
+| C41 | 完成 | guybeju/firstmate#16 |
+| C42 | 完成，只有截圖驗過，沒有自動測試 | guybeju/firstmate#17 |
+| C43 | 完成 | guybeju/firstmate#18 |
+| C44 | 完成，真的 home 上實測過（回報） | guybeju/firstmate#19 |
+| C45 | 完成 | guybeju/firstmate#25 |
+| C46 | 完成；真的 home 上建立過項目，「做完了」到關閉的一整輪還開著（第 3 節） | guybeju/firstmate#27 |
+| C47 | 完成，Mac 上通過 | guybeju/firstmate#28 |
+| C48 | 完成，Mac 的 bash 3.2.57 上通過 | guybeju/firstmate#29 |
+| C49 | 完成 | guybeju/firstmate#32 |
+| C50 | 完成 | guybeju/firstmate#33 |
+| C51 | 完成 | guybeju/firstmate#34 |
+| C52 | 完成 | guybeju/firstmate#49 |
+| C53 | 完成 | guybeju/firstmate#51 |
+| C54 | 完成 | guybeju/firstmate#52 |
 | C55 | 完成 | 這一條進 `carry` 的 PR（commit 訊息寫明 C55） |
 | C58 | 完成 | 這一條進 `carry` 的 PR |
 | C59 | 完成 | 這一條進 `carry` 的 PR |

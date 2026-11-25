@@ -15,24 +15,24 @@
 #     fm-board/rules/.
 # Prints one "not ok" line per problem and exits 1, or one "ok" line and 0.
 #
-# Usage: fm-board/test/check-guide.sh [<guide> [<link-base-dir>]]
+# Usage: tests/check-fork-setup.sh [<guide> [<link-base-dir>]]
 #   <guide> defaults to FORK-SETUP.markdown at the checkout root; relative
 #   links resolve against <link-base-dir>, which defaults to the guide's
 #   directory.
 set -euo pipefail
 export LC_ALL=C
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GUIDE=${1:-$ROOT/FORK-SETUP.markdown}
 [ -f "$GUIDE" ] || {
-  echo "check-guide.sh: no such guide: $GUIDE" >&2
+  echo "check-fork-setup.sh: no such guide: $GUIDE" >&2
   exit 2
 }
 BASE=${2:-$(cd "$(dirname "$GUIDE")" && pwd)}
 problems=0
 
 problem() {
-  echo "not ok - check-guide: $1" >&2
+  echo "not ok - check-fork-setup: $1" >&2
   problems=$((problems + 1))
 }
 
@@ -129,7 +129,7 @@ check_version captain.md 'captain\.md' captain.block.md.tmpl
 check_version captain-shared.md 'captain-shared\.md' captain-shared.block.md.tmpl
 
 if [ "$problems" -gt 0 ]; then
-  echo "check-guide.sh: $problems problem(s) in $GUIDE" >&2
+  echo "check-fork-setup.sh: $problems problem(s) in $GUIDE" >&2
   exit 1
 fi
 echo "ok - $(basename "$GUIDE") cites only names that exist in this checkout"
