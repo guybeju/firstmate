@@ -12,6 +12,8 @@ fork 的首頁顯示的是 `main`，和上游一樣，但首頁右側 About 的�
 - **為什麼用 fork 而不是上游**：看板（`myshape/` 與 `bin/myshape*.sh`）和 first mate 這一側接看板的指令（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、`fm-board/`）在 <https://github.com/guybeju/myshape> 開發。
   fork 的 `carry` 分支帶著兩者的一份釘住的副本，路徑和這裡寫的一樣，來自 [`myshape.lock`](myshape.lock) 記的那個 commit。
   `carry` 是上游的 `main` 加上這份副本，再加上 fork 自己的修正，包括上游的指令裡接看板的四個地方（`bin/fm-session-start.sh` 一處、`bin/fm-captain-hold.sh` 兩處、`bin/fm-fleet-snapshot.sh` 一處）；上游沒有這些東西。
+  `bin/fm-fleet-snapshot.sh` 那一處是封存 blocker 的修正：code root 沒有它時，看板不回報那個 home（第 5 步的「不對時」）。
+  `carry` 以外的 fork（例如另一台機器自己的 fork）要先把這個修正移植過去、提交、更新那個 home，看板才會回報；要移植的檔與那幾行寫在[這一側的 handover](fm-board/spec/handover.markdown) 第 2 節，vendor 不會帶來。
   fork 的 `main` 和上游的 `main` 相同，所以只 clone 不切換時，手上是沒有看板的上游版本。
 - **怎麼跟著 `carry`**：home 的 checkout 停在預設分支 `main`，由 `config/self-update-source` 讓更新改從 fork 的 `carry` 前進。
   這個檔的規則在 [configuration「Self-update source」](docs/configuration.md#self-update-source-configself-update-source)。
@@ -190,7 +192,9 @@ bin/myshape.sh status
   沒有 `node` 或低於 22、`myshape/dist/` 不完整（回第 3 步更新）、`config/myshape-port` 不合法，都在這一行說明。
   開 session 時的 `看板服務：無法啟動：<原因>` 是同一個原因，照著修，下一次開 session 或任何一個看板指令會再試。
 - 上一次啟動失敗的原因在 `state/myshape/startup-error`，服務的輸出在 `state/myshape/service.log`（contracts 第 3 節）。
-- 某個 home 顯示 `無法回報`（頁面上那個 home 的橫幅說原因，例如 `還沒換到 fork`）、`版本不相容` 或 `版本不同`，或頁面說帳本未開，表示那個 home 不在同一版或沒開帳本；只有主 home 時不會出現，有 second mate 時見第 8 節。
+- 某個 home 顯示 `無法回報`、頁面上那個 home 的橫幅寫「這個 home 的 first mate 缺少封存 blocker 的修正：…」：那個 code root 的 `bin/fm-fleet-snapshot.sh` 沒有 fork 的封存 blocker 修正，看板先不回報那個 home；只有主 home 時也會出現。
+  `carry` 有這個修正，跟著 `carry` 的 home 不會這樣；照橫幅把修正移植到那個 code root 再更新（第 0 節）。
+- 某個 home 顯示其他原因的 `無法回報`（橫幅說原因，例如 `還沒換到 fork`）、`版本不相容` 或 `版本不同`，或頁面說帳本未開，表示那個 home 不在同一版或沒開帳本；只有主 home 時不會出現，有 second mate 時見第 8 節。
 - `aggregator：沒有接上（<路徑> 的群組也能寫（權限 0775）；需要確認的程式不能讓群組寫…）`：設定檔寫的程式不是 git 追蹤、和 HEAD 相同的 `bin/` 底下的檔，又是群組能寫的。first mate 的設定檔只會在兩種情況遇到：`bin/fm-board.sh` 在 checkout 裡被改過、還沒提交，這時把那個改動還原之後再跑一次 `bin/myshape.sh open`（不要提交：vendor 進來的檔改過再提交，`bin/fm-board-vendor.sh --check` 就會失敗；要改的在 guybeju/myshape 改，經同步 PR 進來）；或是啟動看板的環境裡有 `MYSHAPE_ROOT_OVERRIDE`（first mate 開 session 與 `split` 時把自己的 `FM_ROOT_OVERRIDE` 換成這個名字交過去），指向 `bin/myshape.sh` 所在的 checkout 以外的目錄（這時每支程式都要確認），這時拿掉那個變數再跑 `bin/myshape.sh restart`。不要對整個 checkout 改權限。
 - 不用時 `bin/myshape.sh stop` 停掉服務；主 first mate 下一次開 session 時會再把它啟動。
 
@@ -286,6 +290,7 @@ second mate 本身怎麼佈建照上游：同機的見 [secondmate-provisioning 
    second mate 的 home 不跑看板，所以 `setup` 在那裡不寫看板的設定檔，另印一行 `ok bind secondmate home 不跑看板，不寫 aggregator 設定`。
 4. **確認每個 home 都在同一版**：打開看板停留一分鐘以上（讓遠端輪到一次），`bin/myshape.sh status` 的每一行 `home <id>：` 都要是 `相同`。
    `無法回報`、頁面上那個 home 的橫幅寫 `還沒換到 fork`，表示那台遠端還沒跟到 `carry`：停在這裡，不要做下一步，也不要拿掉任何一邊的 `config/self-update-source`，記下那台的更新錯誤訊息再處理（rollout R-1）。
+   `無法回報`、橫幅寫「這個 home 的 first mate 缺少封存 blocker 的修正：…」是另一回事：那個 code root 的 `bin/fm-fleet-snapshot.sh` 沒有封存 blocker 的修正，不是還沒跟到 `carry`；同樣停在這裡，照第 5 步的「不對時」處理。
 5. **最後才裝規則**（第 6 步）：共用的那段規則會叫每個 second mate 跑 `fm-board.sh` 與 `fm-dispatch-plan.sh`，所以要等上一步全過。
    裝完重開主 first mate 的 session；second mate 在主 home 下一次啟動檢查把共用檔傳過去之後重啟。
 6. **有遠端的 second mate 時，讓主 home 把佇列送過去**。
