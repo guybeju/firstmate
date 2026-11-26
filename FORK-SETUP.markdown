@@ -212,8 +212,8 @@ bin/fm-board.sh install-rules
 規則是 first mate 的，所以安裝的指令與範本（`fm-board/rules/`）都在 first mate 這一側。
 它們在 guybeju/myshape 的 `adapters/firstmate/fm-board/rules/` 寫，跟著釘住的副本進來。
 
-**確認**：輸出有 `captain.md：新增（v11）` 與 `captain-shared.md：新增（v5）`（已經裝過的是 `已更新` 或 `已是最新`）。
-之後 `bin/fm-board.sh rules` 印出 `規則：captain.md 和範本相同（v11）；captain-shared.md 和範本相同（v5）`。
+**確認**：輸出有 `captain.md：新增（v12）` 與 `captain-shared.md：新增（v5）`（已經裝過的是 `已更新` 或 `已是最新`）。
+之後 `bin/fm-board.sh rules` 印出 `規則：captain.md 和範本相同（v12）；captain-shared.md 和範本相同（v5）`。
 裝完重開主 first mate 的 session：規則在下一次 session 開始或下一次壓縮之後才生效（`install-rules` 自己也會印這一句）。
 重開的 session 的啟動摘要裡會有第 5 步說的那一行；服務一直開著時是 `看板服務：在跑`。
 
@@ -270,6 +270,7 @@ bin/fm-board.sh install-rules
   退回看板自己存「要你動手」的項目之前的程式時，看板上的項目不會顯示，只剩 backlog 裡還開著的舊 hold；`data/myshape/todos.json` 留著，回到新版時項目又會出現。
   不想讓看板執行任何程式時，在 `config/myshape-aggregator.json` 放一個空檔（`: > config/myshape-aggregator.json`）再跑 `bin/myshape.sh restart`：看板照常顯示與存檔，要送出的等著；只刪掉那個檔不夠，下一次開 session 或下一個 `bin/fm-board.sh tag`、`split` 會把它寫回來，而它們從不換掉已經在那裡的檔。要接回去，刪掉空檔、跑 `bin/fm-board.sh bind`，再 restart，等著的各送一次。
   退回看板經設定檔接上 aggregator 之前的程式時，看板又只執行寫死的 `bin/fm-board.sh`；`config/myshape-aggregator.json` 與 `data/myshape/confirmations.json` 留著，舊版不讀。
+  退回看板有 hashtag 之前的程式時，舊版不讀 `data/myshape/hashtags.json`，所以什麼都不會丟；檔案留著，回到新版時 hashtag 又會出現。
 
 ## 8. 有 second mate 時
 
