@@ -178,9 +178,11 @@ bin/myshape.sh status
 看板經 `bin/fm-board.sh` 讀 first mate 的資料、把頁面上的動作交給 first mate（[adapter](fm-board/spec/adapter.markdown) 第 3 節）。
 那支程式在 git 裡追蹤、和 HEAD 相同，所以看板不用在頁面上確認就執行它。
 它是 guybeju/myshape 在 `myshape.lock` 那個 commit 的副本，`bin/fm-board-vendor.sh --check` 確認這一點（第 3 步）。
-沒有設定檔時這一行是 `aggregator：沒有接上（沒有 config/myshape-aggregator.json）`：頁面上的動作照常完成，要送出的會等看板接上之後依序送出；跑 `bin/fm-board.sh bind` 寫好設定檔，再跑一次 `bin/myshape.sh open`（下一次開 session 或下一個 `bin/fm-board.sh tag`、`split` 也會自己寫好，並印一行「看板的 aggregator 設定原本不在，已寫好：firstmate…」）。
+沒有設定檔時這一行是 `aggregator：沒有接上（沒有 config/myshape-aggregator.json）`：頁面上的動作照常完成，要送出的會等看板接上之後依序送出（排程的通知過了期限的不送，頁面的寫入歷史記成「過期沒送」）；跑 `bin/fm-board.sh bind` 寫好設定檔，再跑一次 `bin/myshape.sh open`（下一次開 session 或下一個 `bin/fm-board.sh tag`、`split` 也會自己寫好，並印一行「看板的 aggregator 設定原本不在，已寫好：firstmate…」）。
 `aggregator：沒有接上（config/myshape-aggregator.json 不能用：是空的，看板不執行任何程式）`：有人在那裡放了空檔，要看板不跑任何程式；要接回去就刪掉它再跑 `bin/fm-board.sh bind` 與 `bin/myshape.sh open`。
 剛打開時 `home main：` 那一行可能是 `還沒讀到`，等一下再看。
+除了頁面上的動作，看板也照自己的排程時鐘送排程的通知（`schedule.upcoming`、`schedule.due`、`schedule.missed`），不用人按：服務在跑時每 30 秒檢查一次，服務啟動時也檢查一次（[contracts](myshape/spec/contracts.markdown) 第 3.9 節）。
+所以服務停過之後再啟動時，還在時段裡的場次照常開、通知寫明晚了多久，時段整個過去了的照排程設定的 `missed` 處理，預設是每個排程送一則 `schedule.missed`。
 
 服務第一次成功啟動之後，主 first mate 每次開 session 都會檢查它：沒在跑就啟動，並在啟動摘要 fleet state 那一段的最後印一行 `看板服務：在跑`、`看板服務：原本沒在跑，已啟動`、`看板服務：原本沒有回應，已重新啟動`、`看板服務：已接上 firstmate，換上新的看板` 或 `看板服務：無法啟動：<原因>`（[`bin/fm-topic-session-start.sh`](bin/fm-topic-session-start.sh)）。
 少了 `config/myshape-aggregator.json` 時它先寫好（同 `bin/fm-board.sh bind`），在跑的看板就換掉，印的是 `看板服務：已接上 firstmate，換上新的看板`。
@@ -236,7 +238,7 @@ bin/fm-board.sh install-rules
 - **看板改由設定檔接上 first mate 的那一次更新**（只有一次）：更新之前就設好的主 home 沒有 `config/myshape-aggregator.json`。
   更新後第一次開 session、或第一個 `bin/fm-board.sh tag`、`split`（first mate 派工與歸併時會跑）先到的那一個替它寫好；開 session 時換掉在跑的看板，印 `看板服務：已接上 firstmate，換上新的看板`，指令則在 stderr 印一行「看板的 aggregator 設定原本不在，已寫好：firstmate…」。不用手動做什麼。
   在那之前，舊的看板服務照舊執行 `bin/fm-board.sh`，要送出的照常送出。
-  更新之後到那一刻之前，若先跑了 `bin/myshape.sh` 的指令（例如 first mate 照規則跑的 `summary`、`which`），看板會換成新版但還沒有設定檔：頁面上只多一行「沒有接上 aggregator（沒有 config/myshape-aggregator.json）…」，要送出的等著，`summary`、`which` 回「議題不明」；設定檔一寫好，下一個看板指令換上接上的看板，等著的各送一次，自己就好了。
+  更新之後到那一刻之前，若先跑了 `bin/myshape.sh` 的指令（例如 first mate 照規則跑的 `summary`、`which`），看板會換成新版但還沒有設定檔：頁面上只多一行「沒有接上 aggregator（沒有 config/myshape-aggregator.json）…」，要送出的等著，`summary`、`which` 回「議題不明」；設定檔一寫好，下一個看板指令換上接上的看板，等著的各送一次（排程的通知過了期限的不送，頁面的寫入歷史記成「過期沒送」），自己就好了。
   **確認**：`bin/myshape.sh status` 有 `aggregator：已接上（first mate）` 與 `aggregator 設定：firstmate，feed bin/fm-board.sh，deliver bin/fm-board.sh`。
 - **拿掉舊的要你動手的那一次更新**（只有一次）：看板自己存「要你動手」的項目之前，first mate 的要你動手是原因以 `動手：` 開頭的 captain hold；舊版的 first mate 把還開著的這種 hold 搬上看板，項目關掉時也關掉它的 hold。
   這一版兩件都拿掉了，連同檢查還有沒有這種 hold 的那個指令，所以要在更新之前檢查。
@@ -268,10 +270,12 @@ bin/fm-board.sh install-rules
   要退回看板改名成 myshape 之前的程式，要先退到改名之後、拿掉搬家指令之前的一個 commit，在那裡把每個搬過的 home 搬回舊名字，再往前退：舊的程式只認舊的名字；步驟在 [rollout「之後怎麼更新」](fm-board/spec/rollout.markdown)。
   要退回看板經 `bin/fm-board.sh feed` 與 `deliver` 讀寫之前的程式，先跑 `bin/myshape.sh stop`，把 `state/myshape/audit.jsonl` 移到別處，再退程式：舊的程式讀不懂這一版寫的寫入紀錄，頁面上的寫入歷史會從空的開始。
   退回看板自己存「要你動手」的項目之前的程式時，看板上的項目不會顯示，只剩 backlog 裡還開著的舊 hold；`data/myshape/todos.json` 留著，回到新版時項目又會出現。
-  不想讓看板執行任何程式時，在 `config/myshape-aggregator.json` 放一個空檔（`: > config/myshape-aggregator.json`）再跑 `bin/myshape.sh restart`：看板照常顯示與存檔，要送出的等著；只刪掉那個檔不夠，下一次開 session 或下一個 `bin/fm-board.sh tag`、`split` 會把它寫回來，而它們從不換掉已經在那裡的檔。要接回去，刪掉空檔、跑 `bin/fm-board.sh bind`，再 restart，等著的各送一次。
+  不想讓看板執行任何程式時，在 `config/myshape-aggregator.json` 放一個空檔（`: > config/myshape-aggregator.json`）再跑 `bin/myshape.sh restart`：看板照常顯示與存檔，要送出的等著；只刪掉那個檔不夠，下一次開 session 或下一個 `bin/fm-board.sh tag`、`split` 會把它寫回來，而它們從不換掉已經在那裡的檔。要接回去，刪掉空檔、跑 `bin/fm-board.sh bind`，再 restart，等著的各送一次（排程的通知過了期限的不送，頁面的寫入歷史記成「過期沒送」）。
   退回看板經設定檔接上 aggregator 之前的程式時，看板又只執行寫死的 `bin/fm-board.sh`；`config/myshape-aggregator.json` 與 `data/myshape/confirmations.json` 留著，舊版不讀。
   退回看板有 hashtag 之前的程式時，舊版不讀 `data/myshape/hashtags.json`，所以什麼都不會丟；檔案留著，回到新版時 hashtag 又會出現。
   退回看板有排程之前的程式時，舊版不讀 `data/myshape/schedules.json`，有排程的議題在那裡只是「待辦」裡的一般議題，所以什麼都不會丟；檔案留著，回到新版時排程又會出現。
+  退回看板有排程的時鐘之前的程式時，時鐘跟著停了，看板不再自己送排程的通知；寫入歷史裡記成 `expired`（過期沒送）的那幾筆，舊版不認得，頁面上顯示原文 `expired`，也不會接著送。
+  回到這一版時，時鐘從上一次檢查到的那一刻往後看，每個排程只看最近的那一場：時段整個過去了的照 `missed` 設定處理，預設是每個排程送一則 `schedule.missed`（[contracts](myshape/spec/contracts.markdown) 第 3.9 節）。
 
 ## 8. 有 second mate 時
 
