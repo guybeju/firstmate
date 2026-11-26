@@ -271,6 +271,7 @@ bin/fm-board.sh install-rules
   不想讓看板執行任何程式時，在 `config/myshape-aggregator.json` 放一個空檔（`: > config/myshape-aggregator.json`）再跑 `bin/myshape.sh restart`：看板照常顯示與存檔，要送出的等著；只刪掉那個檔不夠，下一次開 session 或下一個 `bin/fm-board.sh tag`、`split` 會把它寫回來，而它們從不換掉已經在那裡的檔。要接回去，刪掉空檔、跑 `bin/fm-board.sh bind`，再 restart，等著的各送一次。
   退回看板經設定檔接上 aggregator 之前的程式時，看板又只執行寫死的 `bin/fm-board.sh`；`config/myshape-aggregator.json` 與 `data/myshape/confirmations.json` 留著，舊版不讀。
   退回看板有 hashtag 之前的程式時，舊版不讀 `data/myshape/hashtags.json`，所以什麼都不會丟；檔案留著，回到新版時 hashtag 又會出現。
+  退回看板有排程之前的程式時，舊版不讀 `data/myshape/schedules.json`，有排程的議題在那裡只是「待辦」裡的一般議題，所以什麼都不會丟；檔案留著，回到新版時排程又會出現。
 
 ## 8. 有 second mate 時
 
