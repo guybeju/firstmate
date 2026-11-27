@@ -847,7 +847,8 @@ fm_test_record_child() {  # <pid that $! just gave>
 # checks and sends at once, so it verifies the target live (fm_test_crash_at
 # is the --below caller). Anything the guard refuses fails the test unsent
 # (with --members, any refused member fails it, and accepted members are still
-# signalled); in log-only mode nothing is sent at all. Sets
+# signalled); in log-only mode nothing is sent at all, and a refusal is
+# printed to stderr instead of failing the test. Sets
 # FM_TEST_SIGNALLED_PID to the pid or group leader signalled. A recorded child
 # this shell has not waited for cannot have been reused.
 fm_test_signal() {
@@ -866,7 +867,11 @@ fm_test_signal_try() {
   done
   FM_TEST_SIGNAL_VERDICT=$(FM_TEST_RECORDED_CHILDREN=$FM_TEST_RECORDED_CHILDREN \
     "$ROOT/tests/signal-guard.sh" --send "$source" "$@") || rc=$?
-  ! fm_test_signal_dry_run || return 0
+  if fm_test_signal_dry_run; then
+    [ "$rc" -eq 0 ] ||
+      printf '# log-only: the signal guard refused, the case is not failed: %s\n' "$FM_TEST_SIGNAL_VERDICT" >&2
+    return 0
+  fi
   accepted=${FM_TEST_SIGNAL_VERDICT%%$'\n'*}
   case "$accepted" in
     "accepted group "*) accepted=${accepted#accepted group } ;;

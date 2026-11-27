@@ -146,6 +146,10 @@ test_fm_test_signal_refuses_without_sending() {
     assert_grep "signal guard: refused: pid $$ is the test script itself" "$TMP_ROOT/refusal.err" \
       "fm_test_signal did not name the refusal"
   fi
+  ( FM_TEST_SIGNAL_DRY_RUN=1 FM_TEST_SIGNAL_LOG="$TMP_ROOT/forced-log-only.log" fm_test_signal TERM "$$" ) \
+    2> "$TMP_ROOT/forced-log-only.err"
+  assert_grep "# log-only: the signal guard refused, the case is not failed: refused: pid $$ is the test script itself" \
+    "$TMP_ROOT/forced-log-only.err" "a log-only refusal was not printed to stderr"
   pass "fm_test_signal refuses a target the guard refuses and sends it nothing"
 }
 
