@@ -150,8 +150,11 @@ Pushing a new head to a pull request cancels that pull request's still-running C
 A fork can set the repository variable `FM_CI_SKIP_PUSH` to `1` to skip the push run of `CI`, and `FM_CI_SKIP_MACOS` to `1` to skip the stock macOS Bash job, without a tracked edit that drifts from upstream.
 Each skip is a job-level condition, so a skipped job reports success rather than leaving the pull request pending, and with neither variable set every job runs on upstream and on every fork exactly as before.
 On this fork's `carry` branch, where those workflows do not run, [`.github/workflows/carry-lint.yml`](.github/workflows/carry-lint.yml) runs `bin/fm-lint.sh`'s two full canonical partitions on pushes and pull requests to `carry`.
-To run the portable test lanes on a GitHub-hosted runner instead of the local machine, push the commit as a branch named `hosted-tests/<name>` and delete that branch after the run; [`.github/workflows/carry-hosted-tests.yml`](.github/workflows/carry-hosted-tests.yml) runs only on such pushes, and its header names the lanes it leaves out.
-The pushed commit must contain that workflow file, so a branch that predates it is rebased or merged onto `carry` first.
+To run the portable test lanes on a GitHub-hosted runner instead of the local machine, push a branch named `hosted-tests/<name>` and delete that branch after the run; [`.github/workflows/carry-hosted-tests.yml`](.github/workflows/carry-hosted-tests.yml) runs only on such pushes, and its header names the lanes it leaves out.
+Do not push the commit under test itself: GitHub attaches check results to a commit, so a run on a pull request's head commit puts every hosted lane, failed or timed out ones included, among that pull request's checks, and `bin/fm-pr-merge.sh` then refuses the merge.
+Instead, for the commit under test `C`, push the one-parent empty commit `H=$(git commit-tree "C^{tree}" -p C -m "hosted-tests run of C")`, which tests the same tree under a commit no pull request has as its head.
+Before reading the results as evidence for `C`, confirm that `git rev-parse "H^{tree}"` equals `git rev-parse "C^{tree}"` and that `git rev-list --parents -n 1 H` prints exactly `H` followed by `C`.
+The commit under test must contain that workflow file, so a branch that predates it is rebased or merged onto `carry` first.
 Its result is advisory: no rule set requires it, and its job summary lists every `skip:` line, which is not evidence for the test that printed it.
 Use `bin/fm-test-run.sh --list-lanes` for exact lane names and `--help` for `--jobs` rules and required gate-skip flags when reproducing a lane locally.
 Leave the `sleep 0.1` cadence in the suites' bounded condition waits alone.
