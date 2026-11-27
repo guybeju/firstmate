@@ -122,6 +122,9 @@ The beacon is `state/.last-watcher-beat`, which only the watcher process touches
 
 - A cycle-end failure is benign when that live-watcher predicate is true.
   In that case the hook suppresses the arm output and continues silently.
+- An actionable close whose rewake is refused while the hook still owns its generation claim and its session still holds the lock re-arms within the same attempt bound, and its eventual rewake says so.
+  For example, main may acknowledge the wake while a StopFailure firing waits out its cooldown, and that turn's own Stop then defers to the waiting claim, so exiting could leave no participant to arm again.
+  A superseded generation, or a session that no longer holds the lock, stays silent.
 
 [`turnend-guard.md`](turnend-guard.md#failure-progression-and-block-budget) owns the failure-notice commit contract, monotonic failure progression, attended-alarm writers, suppression reasons, positive recovery reset, and session-bound interruption isolation.
 
@@ -558,6 +561,7 @@ It checks that a newly appended keyed decision is classified without rereading e
 - Exit-2 translation.
 - The handling successor an ended attached cycle starts with the closed arm as its predecessor and that outlives the rewake.
 - An unconfirmed successor reported in the banner without withholding the wake.
+- A rewake refused after a StopFailure cooldown wait re-arming, a dead-owner claim superseded on StopFailure, and a session that lost the lock staying silent.
 - The [session-bound HUP/TERM/INT failure handoff](turnend-guard.md#failure-progression-and-block-budget) and replacement-session notice isolation.
 
 It also covers generation-claim single-flight, stuck-claim and earlier-session supersession, superseded-owner silence, notice-marker refusal and retry, ownership-atomic episode reset, and the legacy upgrade shim.

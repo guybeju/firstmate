@@ -267,7 +267,7 @@ Before handing it back, the host stops its successor cycle, and whenever a succe
 That publication is required even when the successor already exited, because no watcher cleanup remains to make the close deliverable to the arm owner.
 If that publication fails, the hand-back adds a `supervision-host: watcher downtime could not be restored` line and the host exits nonzero.
 On Claude, a Stop hook whose rewake is refused while the recovery marker is still `pending:handling` or `announced:handling` and no watcher is live preserves the host's actionable output on any resulting rewake.
-The [Claude failure progression](turnend-guard.md#failure-progression-and-block-budget) owns its notice, retry, and attended-alarm decisions; every other refused rewake stays silent as before.
+The [Claude failure progression](turnend-guard.md#failure-progression-and-block-budget) owns its notice, retry, and attended-alarm decisions; [Claude arm failures](watcher-continuity.md#claude-arm-failures) owns every other refused rewake.
 So the owner's next arm starts from the same state as without the host, and the wake stays durable in the queue.
 
 ### Paths that hand the wake back

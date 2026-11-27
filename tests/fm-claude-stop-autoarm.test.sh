@@ -2110,6 +2110,24 @@ printf 'signal: fixture.status\n'
 printf 'supervision-host: branch-outcome: fixture\n'
 SH
         ;;
+      resurface-pass-through)
+        # The attended pass-through of a watcher that resurfaced unacknowledged
+        # downtime the moment it started: the shape of every host run while
+        # main cannot take a turn.
+        cat <<'SH'
+printf 'pending:downtime:fixture-generation\n' > "$FM_HOME/state/.watcher-down"
+touch "$FM_HOME/state/.last-watcher-beat"
+printf 'check: rearm-resurface\n'
+SH
+        ;;
+      lock-moved)
+        cat <<'SH'
+printf 'pending:downtime:fixture-generation\n' > "$FM_HOME/state/.watcher-down"
+touch "$FM_HOME/state/.last-watcher-beat"
+printf '1\n' > "$FM_HOME/state/.lock"
+printf 'check: rearm-resurface\n'
+SH
+        ;;
       handed-back-many)
         cat <<'SH'
 printf 'pending:downtime:fixture-generation\n' > "$FM_HOME/state/.watcher-down"
@@ -2270,8 +2288,9 @@ test_host_stand_down_is_silent() {
 }
 
 # Main already drained and acknowledged the wake, so the rewake is refused on a
-# marker that is no longer downtime: that refusal stays silent and opens no
-# failure episode.
+# marker that is no longer downtime: that refusal opens no failure episode. The
+# hook re-arms within its attempt bound rather than leave the home unwatched,
+# and a close refused on every attempt still ends silently.
 test_host_benign_rewake_refusal_opens_no_failure_episode() {
   local dir out status
   dir=$(make_primary_dir "$TMP_ROOT/host-benign-refusal")
@@ -2284,7 +2303,92 @@ test_host_benign_rewake_refusal_opens_no_failure_episode() {
   assert_not_contains "$out" "auto-arm FAILED" "a benign refusal must not deliver a failure notice"
   assert_absent "$dir/state/.claude-autoarm-failure-notified" "a benign refusal opened a failure episode"
   [ "$(epoch_outcome "$dir")" != failed ] || fail "a benign refusal must not record outcome=failed"
-  pass "auto-arm: a host rewake refused on an acknowledged marker opens no failure episode"
+  [ "$(wc -l < "$dir/state/host-ran" | tr -d ' ')" -eq 2 ] \
+    || fail "a benign refusal must re-arm once within the two-attempt bound, host ran $(wc -l < "$dir/state/host-ran" | tr -d ' ') time(s)"
+  pass "auto-arm: a host rewake refused on an acknowledged marker re-arms within its bound and opens no failure episode"
+}
+
+# The dead end a paced StopFailure firing can reach (one candidate for the
+# 2026-11-22 gap). A StopFailure firing waits out the cooldown holding an
+# open claim with no watcher running; main's own turn ends inside that wait,
+# its Stop defers to the open claim, and its drain acknowledges the resurfaced
+# wake. The paced commit is then refused on the acknowledged marker. Exiting
+# there left the ledger at arming with a dead owner and nothing scheduled to
+# arm again, so the hook must re-arm and deliver the next close itself.
+test_stopfailure_rewake_refused_during_cooldown_rearms() {
+  local dir status fail_payload rcfile outfile hook_pid out
+  fail_payload='{"session_id":"sess-autoarm","hook_event_name":"StopFailure","error":"rate_limit","transcript_path":"/tmp/sess.jsonl"}'
+  dir=$(make_primary_dir "$TMP_ROOT/stopfailure-acked-during-wait")
+  rm -f "$dir/config/supervision-host-off"
+  : > "$dir/state/task.meta"
+  write_host_fixture "$dir" resurface-pass-through
+  : > "$dir/state/.claude-autoarm-stopfailure-rewake"
+  rcfile="$dir/hook-rc"
+  outfile="$dir/hook-out"
+  ( FM_CLAUDE_STOPFAILURE_REWAKE_COOLDOWN=5 run_autoarm "$dir" "$fail_payload" > "$outfile" 2>/dev/null; echo "$?" > "$rcfile" ) &
+  hook_pid=$!
+  for _ in $(seq 1 100); do
+    [ -e "$dir/state/host-ran" ] && break
+    sleep 0.05
+  done
+  [ -e "$dir/state/host-ran" ] || fail "the paced StopFailure never ran the host"
+  sleep 0.5
+  [ ! -e "$rcfile" ] || fail "the StopFailure inside the cooldown finished before waiting it out"
+  [ "$(epoch_outcome "$dir")" = arming ] || fail "the paced firing must hold its claim open while it waits, got: $(epoch_outcome "$dir")"
+  printf 'acked:downtime:fixture-generation\n' > "$dir/state/.watcher-down"
+  wait "$hook_pid"
+  status=$(cat "$rcfile")
+  out=$(cat "$outfile")
+  expect_code 2 "$status" "a still-owning paced firing whose rewake was refused must re-arm and deliver the next close"
+  [ "$(wc -l < "$dir/state/host-ran" | tr -d ' ')" -eq 2 ] \
+    || fail "the refused rewake must re-arm the host exactly once, host ran $(wc -l < "$dir/state/host-ran" | tr -d ' ') time(s)"
+  [ "$(epoch_outcome "$dir")" = rewake ] || fail "the re-armed close must commit outcome=rewake, got: $(epoch_outcome "$dir")"
+  assert_contains "$out" "auto-arm re-armed" "the rewake must record that an earlier close was refused and re-armed"
+  assert_contains "$out" "check: rearm-resurface" "the re-armed close must carry its reason line"
+  assert_absent "$dir/state/.claude-autoarm-failure-notified" "a refused-then-re-armed rewake opened a failure episode"
+  pass "auto-arm: a StopFailure rewake refused after its cooldown wait re-arms instead of leaving supervision down"
+}
+
+# A rewake refused because this session no longer holds the session lock
+# belongs to whichever session does: the hook stays silent and never re-arms.
+test_rewake_refused_after_lock_moved_never_rearms() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/host-lock-moved")
+  rm -f "$dir/config/supervision-host-off"
+  : > "$dir/state/task.meta"
+  write_host_fixture "$dir" lock-moved
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 0 "$status" "a rewake refused after the lock moved must stay silent"
+  assert_not_contains "$out" "auto-arm re-armed" "a session that lost the lock must not announce a re-arm"
+  [ "$(wc -l < "$dir/state/host-ran" | tr -d ' ')" -eq 1 ] || fail "a session that lost the lock re-armed"
+  assert_absent "$dir/state/.claude-autoarm-failure-notified" "a session that lost the lock opened a failure episode"
+  pass "auto-arm: a rewake refused after the session lock moved stays silent and never re-arms"
+}
+
+# The claim shape the 2026-11-22 gap left behind: generation 632 reads arming
+# under a pid that has already exited, with a ledger entry and beacon too fresh
+# for the stuck proof. Its dead owner alone must make it supersedable, so the
+# next StopFailure firing takes the next generation and arms.
+test_dead_owner_claim_is_superseded_on_stopfailure() {
+  local dir out status fail_payload dead
+  fail_payload='{"session_id":"sess-autoarm","hook_event_name":"StopFailure","error":"rate_limit","transcript_path":"/tmp/sess.jsonl"}'
+  dir=$(make_primary_dir "$TMP_ROOT/dead-owner-stopfailure")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable
+  sh -c 'exit 0' &
+  dead=$!
+  wait "$dead"
+  printf 'epoch=632 owner_pid=%s outcome=arming updated_at=%s\nfixture-exited-owner-identity\n' "$dead" "$(date +%s)" \
+    > "$dir/state/.claude-autoarm-epoch"
+  : > "$dir/state/.last-watcher-beat"
+  out=$(run_autoarm "$dir" "$fail_payload" 2>/dev/null); status=$?
+  expect_code 2 "$status" "a StopFailure firing must supersede an arming claim whose owner exited"
+  [ "$(epoch_field "$dir" epoch)" = 633 ] || fail "the dead owner's claim was not superseded by the next generation: $(head -n 1 "$dir/state/.claude-autoarm-epoch")"
+  [ "$(epoch_field "$dir" owner_pid)" != "$dead" ] || fail "the superseding claim left the exited owner on the ledger"
+  [ "$(epoch_outcome "$dir")" = rewake ] || fail "the superseding generation must commit outcome=rewake, got: $(epoch_outcome "$dir")"
+  [ "$(wc -l < "$dir/state/arm-ran" | tr -d ' ')" -eq 1 ] || fail "the superseding generation must arm exactly once"
+  assert_contains "$out" "stale: fixture-win actionable" "the superseding generation must deliver its close"
+  pass "auto-arm: an arming claim whose owner exited is superseded by the next StopFailure firing"
 }
 
 # The host handed a wake back but left the marker in handling (pending or
@@ -2455,6 +2559,9 @@ test_plain_arm_banner_keeps_its_wake_line_cap
 test_host_handback_carries_every_host_line
 test_host_stand_down_is_silent
 test_host_benign_rewake_refusal_opens_no_failure_episode
+test_stopfailure_rewake_refused_during_cooldown_rearms
+test_rewake_refused_after_lock_moved_never_rearms
+test_dead_owner_claim_is_superseded_on_stopfailure
 test_host_lost_handback_notifies_once_per_episode
 test_host_lost_announced_handback_notifies_once_per_episode
 test_host_crash_is_retried_then_reported
