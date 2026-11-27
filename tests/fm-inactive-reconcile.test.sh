@@ -1507,8 +1507,14 @@ key_lines() { # <file> <verb> <key>
   grep -c "^$2 \\[key=$3\\]" "$1" 2>/dev/null || true
 }
 
+# The relay writes no receipts file until it has a receipt to keep, so an absent
+# file is zero open waits.
 receipt_count() {
-  grep -c . "$MATE/state/.wait-relay" 2>/dev/null || true
+  if [ -f "$MATE/state/.wait-relay" ]; then
+    grep -c . "$MATE/state/.wait-relay" || true
+  else
+    printf '0\n'
+  fi
 }
 
 wait_world() { # <name> [local|remote]
