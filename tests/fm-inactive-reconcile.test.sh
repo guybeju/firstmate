@@ -1477,6 +1477,229 @@ SH
   pass "reconciliation state reads set no-forge mode"
 }
 
+# --- wait relay (bin/fm-wait-relay.sh, run by every scan) -------------------
+#
+# A backlog row held for someone other than the captain is raised to the
+# parent by the poll itself. Rows are written with bare tasks-axi against the
+# home's own file, never through bin/fm-tasks-axi.sh, so the poll under test is
+# the only trigger.
+
+seed_backlog() { # <home>
+  fm_test_tasks_toml "$1/.tasks.toml"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$1/data/backlog.md"
+}
+
+axi() { # <home> <tasks-axi args...>
+  local home=$1
+  shift
+  (cd "$home" && tasks-axi "$@" --file "$home/data/backlog.md") >/dev/null 2>&1 \
+    || fail "tasks-axi $* failed in $home"
+}
+
+parked_row() { # <home> <id> <title> <reason>
+  axi "$1" add "$2" "$3" --repo x
+  axi "$1" hold "$2" --reason "$4" --kind parked
+}
+
+parent_channel() { printf '%s\n' "$MAIN/state/mate.status"; }
+
+key_lines() { # <file> <verb> <key>
+  grep -c "^$2 \\[key=$3\\]" "$1" 2>/dev/null || true
+}
+
+receipt_count() {
+  grep -c . "$MATE/state/.wait-relay" 2>/dev/null || true
+}
+
+wait_world() { # <name> [local|remote]
+  make_world "$1"; bind_secondmate "${2:-local}"; seed_backlog "$MATE"
+}
+
+require_tasks_axi() {
+  command -v tasks-axi >/dev/null 2>&1 && return 0
+  echo "skip: tasks-axi not found ($1)"
+  return 1
+}
+
+test_wait_relay_publishes_once_across_polls() {
+  local out
+  require_tasks_axi "wait relay publication" || return 0
+  wait_world wait-once
+  parked_row "$MATE" route-me "Finding only" "awaiting routing by the main firstmate"
+  out=$(run_reconcile "$MATE")
+  [ -z "$out" ] || fail "the wait relay printed on the scan's stdout, which wakes firstmate: $out"
+  run_reconcile "$MATE" >/dev/null
+  run_reconcile "$MATE" --startup >/dev/null
+  [ "$(key_lines "$(parent_channel)" needs-decision wait-route-me-1)" = 1 ] \
+    || fail "a parked row was not published exactly once across polls: $(cat "$(parent_channel)" 2>/dev/null)"
+  grep -q '^needs-decision \[key=wait-route-me-1\] \[at=[0-9]*\]: parked wait route-me: Finding only: awaiting routing by the main firstmate$' \
+    "$(parent_channel)" || fail "the published wait line lost its kind, id, title or reason"
+  [ "$(receipt_count)" = 1 ] || fail "the open wait has no single receipt"
+  pass "wait relay publishes a parked row once across polls and restarts"
+}
+
+test_wait_relay_resolves_each_exit_with_its_reason() {
+  local channel
+  require_tasks_axi "wait relay resolutions" || return 0
+  wait_world wait-exits
+  parked_row "$MATE" unheld "Released later" r
+  parked_row "$MATE" closed "Closed later" r
+  parked_row "$MATE" carded "Becomes a captain call" r
+  parked_row "$MATE" dated "Dated later" r
+  parked_row "$MATE" blocked "Blocked later" r
+  FM_WAIT_RELAY_NOW=1795737600 run_reconcile "$MATE" >/dev/null
+  [ "$(receipt_count)" = 5 ] || fail "five parked rows did not open five waits"
+  axi "$MATE" unhold unheld
+  axi "$MATE" "done" closed
+  axi "$MATE" hold carded --reason "which option" --kind captain
+  axi "$MATE" hold dated --reason r --kind parked --until 2026-12-31
+  axi "$MATE" add same-home "Same-home work" --repo x
+  axi "$MATE" block blocked --by same-home
+  FM_WAIT_RELAY_NOW=1795737700 run_reconcile "$MATE" >/dev/null
+  channel=$(parent_channel)
+  grep -q '^resolved \[key=wait-unheld-1\] \[at=[0-9]*\]: released$' "$channel" || fail "unhold did not resolve as released"
+  grep -q '^resolved \[key=wait-closed-1\] \[at=[0-9]*\]: closed$' "$channel" || fail "done did not resolve as closed"
+  grep -q '^resolved \[key=wait-carded-1\] \[at=[0-9]*\]: now a captain call$' "$channel" \
+    || fail "a captain re-hold did not resolve as a captain call"
+  grep -q '^resolved \[key=wait-dated-1\] \[at=[0-9]*\]: dated 2026-12-31$' "$channel" || fail "a future date did not resolve as dated"
+  grep -q '^resolved \[key=wait-blocked-1\] \[at=[0-9]*\]: waits on same-home$' "$channel" \
+    || fail "a same-home blocker did not resolve as waiting on it"
+  [ "$(receipt_count)" = 0 ] || fail "resolved waits kept their receipts: $(cat "$MATE/state/.wait-relay")"
+  pass "wait relay resolves each way of leaving the wait with its reason"
+}
+
+test_wait_relay_raises_again_after_the_repeat_window() {
+  local channel
+  require_tasks_axi "wait relay repeat" || return 0
+  wait_world wait-repeat
+  parked_row "$MATE" lingering "Nobody answered" r
+  FM_WAIT_RELAY_NOW=1795737600 run_reconcile "$MATE" >/dev/null
+  FM_WAIT_RELAY_NOW=$((1795737600 + 86399)) run_reconcile "$MATE" >/dev/null
+  channel=$(parent_channel)
+  [ "$(key_lines "$channel" needs-decision wait-lingering-2)" = 0 ] || fail "the wait rose again inside the repeat window"
+  FM_WAIT_RELAY_NOW=$((1795737600 + 86400)) run_reconcile "$MATE" >/dev/null
+  grep -q '^resolved \[key=wait-lingering-1\] \[at=[0-9]*\]: still waiting, raised again as wait-lingering-2$' "$channel" \
+    || fail "the old occurrence was not resolved before the repeat"
+  [ "$(key_lines "$channel" needs-decision wait-lingering-2)" = 1 ] || fail "the repeat did not open the next occurrence"
+  grep -qx 'lingering wait-lingering-2 1795824000' "$MATE/state/.wait-relay" || fail "the receipt did not move to the next occurrence"
+  FM_WAIT_RELAY_REPEAT_SECS=60 FM_WAIT_RELAY_NOW=$((1795737600 + 86460)) run_reconcile "$MATE" >/dev/null
+  [ "$(key_lines "$channel" needs-decision wait-lingering-3)" = 1 ] || fail "FM_WAIT_RELAY_REPEAT_SECS did not set the repeat window"
+  pass "wait relay raises a still-open wait again as the next occurrence after the repeat window"
+}
+
+test_wait_relay_parent_answer_does_not_reopen() {
+  local channel
+  require_tasks_axi "wait relay parent answer" || return 0
+  wait_world wait-answer
+  parked_row "$MATE" answered "Answered upstream" r
+  FM_WAIT_RELAY_NOW=1795737600 run_reconcile "$MATE" >/dev/null
+  channel=$(parent_channel)
+  # The line bin/fm-send.sh --resolve-key appends in the parent's own state.
+  printf 'resolved [key=wait-answered-1] [at=1795737650]: answered: close it, absorbed by the earlier PR\n' >> "$channel"
+  FM_WAIT_RELAY_NOW=1795737700 run_reconcile "$MATE" >/dev/null
+  [ "$(key_lines "$channel" needs-decision wait-answered-1)" = 1 ] || fail "the parent's own answer made the relay reopen the key"
+  [ "$(key_lines "$channel" needs-decision wait-answered-2)" = 0 ] || fail "the parent's answer opened a new occurrence"
+  axi "$MATE" "done" answered
+  FM_WAIT_RELAY_NOW=1795737800 run_reconcile "$MATE" >/dev/null
+  grep -q '^resolved \[key=wait-answered-1\] \[at=[0-9]*\]: closed$' "$channel" \
+    || fail "the applied disposition was not confirmed from the row's state"
+  pass "wait relay ignores the parent's own answer line and confirms the disposition from state"
+}
+
+test_wait_relay_blocked_row_rises_when_its_blocker_lands() {
+  local channel
+  require_tasks_axi "wait relay blockers" || return 0
+  wait_world wait-blocked
+  axi "$MATE" add prerequisite "Same-home build" --repo x
+  parked_row "$MATE" after-build "Needs the build first" r
+  axi "$MATE" block after-build --by prerequisite
+  parked_row "$MATE" cross-home "Waits on another home" r
+  sed 's/^- \[ \] cross-home - Waits on another home/- [ ] cross-home - Waits on another home blocked-by: other-home-task/' \
+    "$MATE/data/backlog.md" > "$MATE/data/backlog.md.new" && mv "$MATE/data/backlog.md.new" "$MATE/data/backlog.md"
+  run_reconcile "$MATE" >/dev/null
+  channel=$(parent_channel)
+  [ "$(key_lines "$channel" needs-decision wait-after-build-1)" = 0 ] || fail "a row with an open same-home blocker was relayed"
+  [ "$(key_lines "$channel" needs-decision wait-cross-home-1)" = 1 ] \
+    || fail "a blocker this home does not carry hid the row"
+  axi "$MATE" "done" prerequisite
+  run_reconcile "$MATE" >/dev/null
+  [ "$(key_lines "$channel" needs-decision wait-after-build-1)" = 1 ] || fail "the row did not rise when its blocker landed"
+  pass "wait relay keeps a same-home-blocked row quiet until the blocker lands, and ignores unknown blockers"
+}
+
+test_wait_relay_skips_kindless_and_captain_holds() {
+  require_tasks_axi "wait relay exclusions" || return 0
+  wait_world wait-kindless
+  axi "$MATE" add board-queue "Topic still in 待辦" --repo x
+  axi "$MATE" hold board-queue --reason "看板佇列：議題 x 在待辦"
+  axi "$MATE" add captain-call "For the captain" --repo x
+  axi "$MATE" hold captain-call --reason "which one" --kind captain
+  run_reconcile "$MATE" >/dev/null
+  [ ! -s "$(parent_channel)" ] || fail "a kindless or captain hold was relayed: $(cat "$(parent_channel)")"
+  [ "$(receipt_count)" = 0 ] || fail "an excluded hold got a receipt"
+  pass "wait relay leaves kindless and captain holds alone"
+}
+
+test_wait_relay_remote_route_writes_parent_replies() {
+  require_tasks_axi "wait relay remote route" || return 0
+  wait_world wait-remote remote
+  parked_row "$MATE" remote-row "Remote mate finding" r
+  run_reconcile "$MATE" >/dev/null
+  [ "$(key_lines "$MATE/state/parent-replies.status" needs-decision wait-remote-row-1)" = 1 ] \
+    || fail "a remote mate's wait did not reach state/parent-replies.status"
+  pass "wait relay uses the remote route's parent-replies channel"
+}
+
+test_wait_relay_main_home_publishes_nothing() {
+  require_tasks_axi "wait relay main home" || return 0
+  make_world wait-main; seed_backlog "$MAIN"
+  parked_row "$MAIN" main-row "Main home's own wait" r
+  run_reconcile "$MAIN" >/dev/null
+  [ ! -e "$MAIN/state/.wait-relay" ] || fail "a main home wrote wait receipts"
+  [ ! -e "$MAIN/state/parent-replies.status" ] || fail "a main home published a wait"
+  pass "wait relay publishes nothing from a main home"
+}
+
+test_wait_relay_failed_read_changes_nothing() {
+  local channel
+  require_tasks_axi "wait relay failed read" || return 0
+  wait_world wait-bad-read
+  parked_row "$MATE" kept "Still waiting" r
+  run_reconcile "$MATE" >/dev/null
+  channel=$(parent_channel)
+  mkdir -p "$WORLD/truncbin"
+  cat > "$WORLD/truncbin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  list) printf 'count: 0 of 3 total\ntasks: 0 tasks in this backlog\n' ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$WORLD/truncbin/tasks-axi"
+  PATH="$WORLD/truncbin:$PATH" run_reconcile "$MATE" >/dev/null
+  [ "$(grep -c '^resolved' "$channel")" = 0 ] || fail "a truncated listing resolved an open wait"
+  grep -q '^kept wait-kept-1 ' "$MATE/state/.wait-relay" || fail "a truncated listing dropped the open receipt"
+  pass "wait relay reads a truncated backlog listing as a failed read and changes nothing"
+}
+
+test_wait_relay_stays_inside_the_scan_budget() {
+  local started elapsed
+  require_tasks_axi "wait relay budget" || return 0
+  wait_world wait-budget
+  write_child "$MATE" child 'failed: tests red'
+  mkdir -p "$WORLD/slowbin"
+  printf '#!/usr/bin/env bash\nsleep 30\n' > "$WORLD/slowbin/tasks-axi"
+  chmod +x "$WORLD/slowbin/tasks-axi"
+  started=$(date +%s)
+  PATH="$WORLD/slowbin:$PATH" FM_INACTIVE_RECONCILE_BUDGET_SECS=2 FM_FAKE_CREW_STATE='failed' \
+    run_reconcile "$MATE" --startup >/dev/null
+  elapsed=$(( $(date +%s) - started ))
+  [ "$elapsed" -le 4 ] || fail "a wedged backlog read pushed the scan past its budget (${elapsed}s)"
+  grep -q 'child child failed' "$(parent_channel)" \
+    || fail "the ledger-first delivery did not run before the bounded relay"
+  pass "a wedged backlog read cannot push the scan past its budget"
+}
+
 test_main_direct_terminal_presentation_receipt
 test_busy_agent_withholds_terminal_outcome
 test_relaunched_idle_agent_withholds_terminal_outcome
@@ -1536,5 +1759,16 @@ test_contradicted_success_is_not_promoted_for_presentation
 test_run_step_failure_is_not_suppressed_by_the_crews_own_word
 test_stale_pause_does_not_suppress_the_failure
 test_uncontradicted_failure_is_still_presented
+
+test_wait_relay_publishes_once_across_polls
+test_wait_relay_resolves_each_exit_with_its_reason
+test_wait_relay_raises_again_after_the_repeat_window
+test_wait_relay_parent_answer_does_not_reopen
+test_wait_relay_blocked_row_rises_when_its_blocker_lands
+test_wait_relay_skips_kindless_and_captain_holds
+test_wait_relay_remote_route_writes_parent_replies
+test_wait_relay_main_home_publishes_nothing
+test_wait_relay_failed_read_changes_nothing
+test_wait_relay_stays_inside_the_scan_budget
 
 echo "all inactive reconciliation tests passed"

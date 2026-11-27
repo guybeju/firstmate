@@ -129,6 +129,24 @@ test_predicate_registered_check_needs_supervision() {
   pass "fm_supervision_needed: a registered custom check needs supervision with no task in flight"
 }
 
+# bin/fm-wait-relay.sh keeps one line per open wait in state/.wait-relay, in a
+# secondmate home only; an idle mate with open waits keeps its watcher so the
+# poll can resolve and re-raise them, and an emptied receipts file stops that.
+test_predicate_open_wait_receipts_need_supervision() {
+  local state="$TMP_ROOT/pred-waits/state"
+  mkdir -p "$state"
+  printf 'route-me wait-route-me-1 1795737600\n' > "$state/.wait-relay"
+  fm_supervision_needed "$state" 300 || fail "an open wait receipt did not register as supervision need"
+  [ "$FM_SUP_IN_FLIGHT" -eq 0 ] || fail "an open wait must not count as an in-flight task"
+  [ "$FM_SUP_WAITS" -eq 1 ] || fail "expected one open wait, got $FM_SUP_WAITS"
+  : > "$state/.wait-relay"
+  if fm_supervision_needed "$state" 300; then
+    fail "an empty receipts file still needs supervision"
+  fi
+  [ "$FM_SUP_WAITS" -eq 0 ] || fail "an empty receipts file counted $FM_SUP_WAITS waits"
+  pass "fm_supervision_needed: open wait receipts need supervision, an emptied file does not"
+}
+
 test_predicate_registered_check_survives_rebinding_drift() {
   local state="$TMP_ROOT/pred-check-drift/state"
   mkdir -p "$state"
@@ -2673,6 +2691,7 @@ test_predicate_source_needs_supervision
 test_predicate_registered_check_needs_supervision
 test_predicate_registered_check_survives_rebinding_drift
 test_predicate_unregistered_check_needs_nothing
+test_predicate_open_wait_receipts_need_supervision
 test_predicate_task_pr_poll_is_not_a_custom_check
 test_predicate_relay_shim_is_not_a_custom_check
 test_hook_silent_when_no_work_in_flight

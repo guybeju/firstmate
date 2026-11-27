@@ -782,6 +782,8 @@ test_secondmate_no_projects_charter() {
     "secondmate charter no longer says the chat is unread"
   assert_grep 'in this home it IS the captain' "$brief" \
     "secondmate charter no longer names the parent channel as the captain"
+  assert_grep 'a row you hold for the main firstmate (any other hold kind) until it leaves that wait' "$brief" \
+    "secondmate charter does not list a row held for the main firstmate among the script-published facts"
   assert_grep 'working [key=<work-slug>]' "$brief" \
     "secondmate charter did not key material routed-work phases"
   assert_grep 'resolved [key=<work-slug>]' "$brief" \

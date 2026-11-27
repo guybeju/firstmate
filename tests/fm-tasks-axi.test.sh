@@ -239,6 +239,62 @@ test_wrapper_single_home() {
   pass "fm-tasks-axi.sh keeps the single-home layout addressing its own code-root backlog"
 }
 
+# Record-time wait relay: in a secondmate home a successful mutating command
+# raises a row held for the parent before the command returns, even with no
+# watcher running, and the home then needs supervision so a watcher keeps
+# raising it. tasks-axi's own exit status survives the relay.
+test_wrapper_relays_a_mate_wait_at_record_time() {
+  local dir main mate expected status
+  dir="$TMP_ROOT/record-time-relay"
+  main="$dir/main"
+  mate="$dir/mate"
+  mkdir -p "$main/state" "$mate/data" "$mate/state"
+  fm_test_tasks_toml "$mate/.tasks.toml"
+  empty_backlog "$mate/data/backlog.md"
+  printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' "$main" > "$mate/.fm-secondmate-parent"
+  printf 'mate\n' > "$mate/.fm-secondmate-home"
+
+  FM_HOME="$mate" "$WRAPPER" add idle-row "Finding only" --repo x >/dev/null \
+    || fail "add in an idle mate failed"
+  [ ! -s "$main/state/mate.status" ] || fail "an unheld row reached the parent channel"
+  FM_HOME="$mate" "$WRAPPER" hold idle-row --reason "awaiting routing by the main firstmate" --kind parked >/dev/null \
+    || fail "hold in an idle mate failed"
+  assert_grep 'needs-decision [key=wait-idle-row-1]' "$main/state/mate.status" \
+    "a parked row written through the wrapper did not reach the parent before the command returned"
+  bash -c '. "$1/bin/fm-supervision-lib.sh"; fm_supervision_needed "$2"' _ "$ROOT" "$mate/state" \
+    || fail "an idle mate with an open wait did not report that it needs supervision"
+
+  (cd "$mate" && tasks-axi hold no-such-row --reason r --kind parked --file "$mate/data/backlog.md") >/dev/null 2>&1
+  expected=$?
+  FM_HOME="$mate" "$WRAPPER" hold no-such-row --reason r --kind parked >/dev/null 2>&1
+  status=$?
+  [ "$expected" -ne 0 ] || fail "the refusal fixture did not refuse"
+  expect_code "$expected" "$status" "the record-time relay changed tasks-axi's exit status"
+
+  FM_HOME="$mate" "$WRAPPER" unhold idle-row >/dev/null || fail "unhold in an idle mate failed"
+  assert_grep 'resolved [key=wait-idle-row-1]' "$main/state/mate.status" \
+    "releasing the row did not resolve its wait at record time"
+  if bash -c '. "$1/bin/fm-supervision-lib.sh"; fm_supervision_needed "$2"' _ "$ROOT" "$mate/state"; then
+    fail "an idle mate with no open wait still reports that it needs supervision"
+  fi
+  pass "fm-tasks-axi.sh relays a mate's wait at record time and keeps tasks-axi's exit status"
+}
+
+# A main home and a read keep the plain pass-through: nothing is relayed.
+test_wrapper_relays_nothing_from_a_main_home_or_a_read() {
+  local dir
+  dir="$TMP_ROOT/record-time-main"
+  mkdir -p "$dir/data" "$dir/state"
+  fm_test_tasks_toml "$dir/.tasks.toml"
+  empty_backlog "$dir/data/backlog.md"
+  FM_HOME="$dir" "$WRAPPER" add main-row "Main row" --repo x >/dev/null || fail "add in a main home failed"
+  FM_HOME="$dir" "$WRAPPER" hold main-row --reason "later" --kind future >/dev/null || fail "hold in a main home failed"
+  FM_HOME="$dir" "$WRAPPER" list >/dev/null || fail "list in a main home failed"
+  assert_absent "$dir/state/.wait-relay" "a main home wrote wait receipts"
+  assert_absent "$dir/state/parent-replies.status" "a main home published a wait"
+  pass "fm-tasks-axi.sh keeps a main home's writes and every read a plain pass-through"
+}
+
 test_guard_reports_regular_code_root_backlog
 test_guard_reports_foreign_link_and_archive
 test_guard_silent_for_single_home
@@ -249,6 +305,8 @@ if [ "$HAVE_TASKS_AXI" = 1 ]; then
   test_wrapper_refusals
   test_wrapper_refuses_add_start
   test_wrapper_single_home
+  test_wrapper_relays_a_mate_wait_at_record_time
+  test_wrapper_relays_nothing_from_a_main_home_or_a_read
 else
   echo "skip: tasks-axi not found; home-addressing cases not run"
 fi
