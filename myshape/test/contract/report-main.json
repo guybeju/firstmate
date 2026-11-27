@@ -29,7 +29,9 @@
       "hold": null,
       "captain": false,
       "blockers": [],
-      "topic_hint": "solo"
+      "topic_hint": "solo",
+      "hold_until": null,
+      "turn": false
     },
     {
       "id": "q-decide",
@@ -38,7 +40,9 @@
       "hold": "要先決定嗎？",
       "captain": true,
       "blockers": [],
-      "topic_hint": "solo"
+      "topic_hint": "solo",
+      "hold_until": null,
+      "turn": false
     },
     {
       "id": "q-parked",
@@ -47,7 +51,9 @@
       "hold": "等 CI 修好",
       "captain": false,
       "blockers": [],
-      "topic_hint": "solo"
+      "topic_hint": "solo",
+      "hold_until": null,
+      "turn": false
     },
     {
       "id": "q-after",
@@ -58,7 +64,9 @@
       "blockers": [
         "t1"
       ],
-      "topic_hint": "solo"
+      "topic_hint": "solo",
+      "hold_until": null,
+      "turn": false
     }
   ],
   "holds": [
@@ -159,5 +167,29 @@
     "label": "first mate",
     "update_hint": "請在主 home 跑 /updatefirstmate。",
     "decisions_at_once": 1
+  },
+  "metrics": {
+    "v": 1,
+    "stale_after_s": 600,
+    "groups": [
+      {
+        "id": "claude:default",
+        "label": "Claude",
+        "state": "ok",
+        "note": ""
+      }
+    ],
+    "items": [
+      {
+        "id": "claude:default.five_hour",
+        "group": "claude:default",
+        "label": "5 小時",
+        "value": 37,
+        "unit": "%",
+        "severity": "normal",
+        "measured_at": "2026-11-19T00:00:00Z",
+        "resets_at": "2026-11-19T05:00:00Z"
+      }
+    ]
   }
 }

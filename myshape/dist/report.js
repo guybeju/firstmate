@@ -1,6 +1,8 @@
 // The JSON report the aggregator's feed prints for one home (contracts
 // section 4), parsed and checked once where it enters the service.
 import { isRecord, stringField, stringRecord, textField } from "./files.js";
+import { isValidItemId } from "./todos.js";
+import { parseMetrics } from "./metrics.js";
 export const REPORT_SCHEMA = 1;
 const ON_ANSWER = ["close", "release"];
 export const HOLD_BUCKETS = ["live", "aged", "dated", "blocked"];
@@ -20,20 +22,33 @@ function onAnswerOf(value) {
     const found = ON_ANSWER.find((name) => name === value);
     return found === undefined ? null : found;
 }
-/** A hold with no bucket is due now; an unknown word drops the hold. */
+/** A value the board could not read, as it shows it: the JSON it got, cut to 64 characters. */
+function shownValue(value) {
+    return String(JSON.stringify(value)).slice(0, 64);
+}
+/** A hold with no bucket is due now; any other word the board does not know is unreadable. */
 function bucketOf(value) {
     if (value === undefined || value === null)
         return "live";
-    const found = HOLD_BUCKETS.find((name) => name === value);
-    return found === undefined ? null : found;
+    return HOLD_BUCKETS.find((name) => name === value) ?? "unknown";
+}
+/**
+ * The record's `id` when it is a task id the board can use (the id grammar,
+ * at most 128 characters); null for any other value, so that entry is dropped.
+ */
+function taskIdOf(raw) {
+    const id = stringField(raw, "id");
+    return id !== null && isValidItemId(id) ? id : null;
 }
 function parseHold(raw) {
-    const id = stringField(raw, "id");
-    const bucket = bucketOf(raw["hold_bucket"]);
-    if (id === null || bucket === null)
+    const id = taskIdOf(raw);
+    if (id === null)
         return null;
+    const word = raw["hold_bucket"];
+    const bucket = bucketOf(word);
     const age = raw["hold_age_days"];
     return {
+        ...(bucket === "unknown" ? { unreadable: shownValue(word) } : {}),
         id,
         title: textField(raw, "title"),
         question: textField(raw, "question"),
@@ -50,7 +65,7 @@ function epochOrNull(value) {
     return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 function parseClosedHold(raw) {
-    const id = stringField(raw, "id");
+    const id = taskIdOf(raw);
     const digest = stringField(raw, "digest");
     const occurrence = raw["occurrence"];
     if (id === null || digest === null || typeof occurrence !== "number")
@@ -98,9 +113,9 @@ function parseLedger(raw) {
         lines: strings(raw["lines"]),
     };
 }
-/** Builds an entry from a record that must carry a string `id`. */
+/** Builds an entry from a record that must carry a valid task `id`. */
 function withId(raw, build) {
-    const id = stringField(raw, "id");
+    const id = taskIdOf(raw);
     return id === null ? null : build(id);
 }
 /** A task's crew state; a report that omits it means the state is not known. */
@@ -118,16 +133,42 @@ function parseTask(raw) {
         unstarted: raw["unstarted"] === true,
     }));
 }
+/** A date (YYYY-MM-DD) or a time in ISO 8601 with its zone. */
+const UNTIL = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}))?$/;
+/** A queued item's `hold_until`: absent or null is none; anything but a real date or time is unreadable. */
+function queuedUntil(value) {
+    if (value === undefined || value === null)
+        return { value: null };
+    if (typeof value === "string" && UNTIL.test(value) && !Number.isNaN(Date.parse(value)))
+        return { value };
+    return { unreadable: `hold_until: ${shownValue(value)}` };
+}
+/** A queued item's `turn`: absent or null is false; anything but a boolean is unreadable. */
+function queuedTurn(value) {
+    if (value === undefined || value === null)
+        return { value: false };
+    if (typeof value === "boolean")
+        return { value };
+    return { unreadable: `turn: ${shownValue(value)}` };
+}
 function parseQueued(raw) {
-    return withId(raw, (id) => ({
-        id,
-        kind: textField(raw, "kind"),
-        title: textField(raw, "title"),
-        hold: stringField(raw, "hold"),
-        captain: raw["captain"] === true,
-        blockers: strings(raw["blockers"]),
-        topic_hint: stringField(raw, "topic_hint"),
-    }));
+    return withId(raw, (id) => {
+        const until = queuedUntil(raw["hold_until"]);
+        const turn = queuedTurn(raw["turn"]);
+        const unreadable = [until, turn].flatMap((field) => "unreadable" in field ? [field.unreadable] : []);
+        return {
+            id,
+            kind: textField(raw, "kind"),
+            title: textField(raw, "title"),
+            hold: stringField(raw, "hold"),
+            captain: raw["captain"] === true,
+            blockers: strings(raw["blockers"]),
+            topic_hint: stringField(raw, "topic_hint"),
+            hold_until: "value" in until ? until.value : null,
+            turn: "value" in turn ? turn.value : false,
+            ...(unreadable.length === 0 ? {} : { unreadable: unreadable.join("；") }),
+        };
+    });
 }
 /** A number of seconds within `bounds`, or null when `value` is not a finite number. */
 function seconds(value, bounds) {
@@ -202,6 +243,7 @@ export function parseReport(stdout) {
             secondmates: records(raw["secondmates"]).map(parseFeedHome).filter(present),
             closed_holds: records(raw["closed_holds"]).map(parseClosedHold).filter(present),
             closed_cursor: parseClosedCursor(raw["closed_cursor"]),
+            metrics: parseMetrics(raw["metrics"]),
         },
     };
 }

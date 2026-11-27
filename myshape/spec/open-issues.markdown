@@ -516,6 +516,22 @@ C58、C59 合併時留下的三個後續（guybeju/firstmate#63、guybeju/firstm
 - 都只改顯示與讀取的比對：沒有新的操作、不改存的資料與 `commitChange`。
 - 防呆：`view.test.ts` 的 closed decisions、`decisions.test.ts` 的 across a change of the reader's code、`poller.test.ts`（換程式時失敗的讀取不交出去）、`stage-5-page.mjs`（兩個摺疊）、`stage-7-upgrade.sh` 從 `cbe6e42a` 升上來的那一步。
 
+### C62　卡停在沒有人負責的狀態，只靠 agent 發現
+
+使用者 2026-11-27：「每一張卡要有正式的狀態機，不要讓 agent 的能力決定這件事」。議題、排隊中停著的項目、待決事項可以停在沒有人負責的狀態：沒有工作的議題沒有任何狀態、停著沒有日期的項目沒有期限、`aged` 的待決事項掉出一次一個的佇列再也輪不到、不認得的 `hold_bucket` 讓待決事項整張不見、狀態不認得的要你動手被略過；之前的修補（wait relay、規則）都要 agent 那一側先發現。
+使用者在設計報告 `board-card-state-machine-design` 的五個決定都選了：1 A（混合：看板存的卡用存下來的狀態機，讀來的卡從資料推導，期限到了放到使用者的一次一個佇列）、2 A（期限照逐種的表，而且要能在設定裡調）、3 A（「高」「一般」裡沒有工作的議題有期限，待辦的不計時）、4 A（一條佇列：待決事項、提議關閉、沒人處理的議題、沒人接）、5 B（按了做完了沒驗證的項目，使用者不能自己關，逾期併進沒人接）。另外使用者定了看板從不提議關閉：沒有工作的議題逾期是一張「沒人處理的議題」，不是提議關閉。
+**做法**（[lifecycle](lifecycle.markdown)）：
+
+- 每種卡的狀態是一張規則表（`lifecycle.ts` 的 `LIFECYCLE`），每個狀態有負責人，aggregator 負責的有期限，少一個編譯不過；讀來的卡每次從資料推導，讀不懂的有自己的狀態，不消失。
+- 期限是使用者的設定，存在 `data/myshape/lifecycle.json`，頁面的「期限設定」調；第一次看到卡在計時的狀態時記下時間，重啟不歸零；讀不好的 home 的卡不交給使用者。
+- 逾期的卡只放到使用者面前，按鈕都是看板既有的操作（封存、移動）或只改看板自己的檔（先不關、延到）；看板不派工、不答、不關、不提議關閉。
+- 要你動手的每個操作只能從表上的狀態出發；不在任何佇列的議題啟動時放回「一般」。
+- 防呆：`lifecycle.test.ts`（每種卡的規則、計時、交給使用者、一條佇列、轉移、設定，與固定種子的不變式性質測試）、`stalls.test.ts`、`ops.test.ts`、`storage.test.ts`、`view.test.ts`、`decisions.test.ts` 的 `hold.vanished`、`check-state-writers.sh` 認得 `lifecycle.json`、`stage-5-http.sh` 的新路由。
+- 第二步：提醒期限一到看板提醒 aggregator 一次（`stall.nudge`，同一次判斷到期的合成一則、固定的 id、提醒過了記在計時上）；「沒人接」卡上的〔請 <aggregator> 處理〕（N3，一張卡一次，期限設定的 N3 之後退回，預設 1 天，沒有提醒）與沒有議題成員的歸併選單（送 `tag`）；讀取契約的 `queued[].hold_until` 與 `turn`（Q6 延到某天、Q1 排到就做、Q9 讀不懂，[contracts](contracts.markdown) C14），first mate 的 `turn` 是 hold kind `load`，claude-agg 的是「等空位」；沒有人看頁面時每 15 分鐘（遠端 60 分鐘）讀一次，過期門檻是間隔的兩倍；規則範本 v14 一句「收到看板的提醒時」。
+- D8 改成送達之後才開始的一次好讀取仍看到待決事項才算：送達時在途的讀取（或送達時併進的那一次）可能早於答案，提醒又是立刻的，第一步的寫法會誤報。
+- 防呆（第二步）：`report.test.ts` 的新欄位、`lifecycle.test.ts` 的 Q6／Q9／`turn` 與提醒、`stalls.test.ts` 的 N3 與兩種固定句子、`ops.test.ts` 的〔請 <aggregator> 處理〕、`poller.test.ts` 的慢讀（假時間）與過期門檻、`writes.test.ts` 的送達時間；`stage-7-aggregator.sh` 的 `test_plain_lifecycle_fields`、`stage-2-deliver.sh` 的 `test_lifecycle_notices_are_notes`、`stage-1-feed.sh` 的新欄位。
+- 不在這一條（下一個 PR）：同步進 `carry`。
+
 ### C28　使用者的 ub-mode 與全域規範裡沒有做到的
 
 - 測試不是每一步都先寫：第一段與之後的修正是測試先行；第二段起多半是程式與測試一起寫，再用測試把問題找出來（找到的都記在上面）。單元測試是全部寫完之後才補的。

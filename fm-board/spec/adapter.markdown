@@ -101,11 +101,19 @@ fork 補上的方法：把 `carry` 的這個修正移植過去，也就是 `bin/
   `decisions_at_once` 是 1：看板一次只顯示一個要使用者回答的決定，其他的排隊，輪到時才顯示（contracts C10）。只有 captain hold（`holds[]`）是決定；等別人的 hold（`parked`、`external` 等）不是，不進 `holds[]`，不算在這個數字裡。
 - `ledger_enabled` 是 `false` 的 home 加 `ledger_hint`，一行「home <id> 的帳本未開，它的 task 不會有更新。在主 home 的終端機跑 <指令>」；指令是 `bin/fm-board.sh setup`（主 home）、`bin/fm-board.sh --in-home <id> setup`（同機）或 `bin/fm-on.sh <id> fm-board.sh setup`（遠端）。
 - `secondmates[]` 裡遠端的 secondmate 加 `read_every_s: 60`、`read_timeout_s: 400`，所以遠端的 home 讀得和以前一樣慢；`remote` 與 `home` 兩個欄位照舊留著，給還在直接讀彙整腳本的舊版看板。
+- 主 home 的回報加 `metrics`（[contracts](../../myshape/spec/contracts.markdown) 第 4.1 節）：這台機器的 Claude 用量，彙整腳本成功之後才讀，`bin/fm-board-io-lib.sh` 的 `fmb_usage_metrics`。
+  quota-axi 是唯一的來源，跑一次 `quota-axi --provider claude --json --no-credential-refresh --max-age 300`，stdin 是 `/dev/null`，最多 10 秒（`fm_run_timed`）；從不加 `--allow-keychain-prompt`、`--allow-claude-inference` 或 `--full`，這一側也不讀任何憑證或 token。
+  quota-axi 回報的每個 Claude lane 一組：`id` 是 `claude:<accountKey>`，名稱是「Claude」（`default`）或「Claude · <accountKey>」，只有新鮮的讀數是 `ok`，quota-axi 說 `stale` 的是 `stale`，其他是 `unavailable`，說明是「quota-axi：<status>（<error>）」。
+  `ok` 的組裡每個有 `percentRemaining` 的時段一筆：`id` 是 `<組的 id>.<時段 id>`，名稱是「5 小時」「7 天」或 quota-axi 的名稱，值是用了的百分比（100 減 `percentRemaining`，到小數一位），`resets_at` 是它的 `resetsAt`，`measured_at` 是 lane 的 `state.refreshedAt`（沒有時是報告的 `generatedAt`），用了 80% 起是 `warn`、95% 起是 `critical`；`stale_after_s` 是 600。
+  quota-axi 的其他輸出（例如 `remedyCommand`，裡面有路徑）不交出去。
+  沒有 quota-axi、10 秒內沒回答、exit 不是 0 或 1（1 是每個 provider 都讀不到，報告照印）、輸出讀不懂時，`metrics` 只有一個 `unavailable` 的組 `claude`，說明寫原因；回報的其他部分照樣交出，exit code 不變。
+  secondmate 的 home 不帶，也不跑 quota-axi：同機的和主 home 是同一組帳號，遠端的這一版不推。看板只給程式五個環境變數，所以 `QUOTA_AXI_CLAUDE_PROFILES` 到不了 quota-axi，看板上只有這台機器預設的那一個 Claude 帳號（[狀態數字](../../myshape/spec/status-metrics.markdown)「已知的限制」）。
 
 彙整腳本 `fm-topic-board-read.sh` 的輸出（contracts 第 4 節的形狀）：
 
 - `tasks[]`、`holds[]` 取自 `fm-fleet-snapshot.sh`：它的參數解析有 `--board-input` 這個 case 標籤時（某一行以 `--board-input)` 或 `--json|--board-input)` 這樣的標籤開頭；只出現在註解或 usage 文字裡不算）用 `--board-input`，沒有時用 `--json`（`fm-board-lib.sh` 的 `tb_snapshot_mode`）；`tasks` 與 `backlog.records[]`。`holds[]` 只收 `hold_kind` 是 captain 的紀錄，原因以 `動手：` 開頭的也收（第 3.3 節）。`origin` 從 hold 內文的 `Captain hold origin:` 那一行取出，取不到就是空字串。`on_answer` 取自 `Captain hold on answer:` 那一行（`fm-captain-hold.sh hold --on-answer` 寫的），沒有那一行或值不是 `close`、`release` 就是 `null`。
 - `holds[].hold_set` 取自 snapshot 的 `hold_set`（`Captain hold set:` 那一行）。
+- `queued[]` 是 snapshot 的每一筆排隊中的 backlog 項目：`hold` 是 hold 的原因原文，`captain` 是 hold kind 是不是 `captain`，`blockers` 是 `unresolved_blocker_ids`，`topic_hint` 取自內文的 `topic:` 那一行；`hold_until` 是 hold 的日期（`tasks-axi hold --until`，沒有是 `null`），`turn` 只在 hold kind 是 `load` 時是 `true`：等容量的項目，有空位 first mate 照 `order` 派，看板把它當成排到就做（contracts C14）。其他 kind（`external`、`parked`、`future`）與派工計畫的 `看板佇列：` hold 都是 `false`。
 - `closed_holds[]` 是每一筆最新的 Resolution 紀錄（`Resolution recorded by fm-captain-hold.`，或已經退役的 `fm-decision-hold` 寫的），來自 snapshot 的每一筆 backlog 項目（放行的還在佇列裡，也算），加上 `--closed-since` 的游標之後 Done 的保留搬進封存檔的。
   封存檔是 backlog 根目錄的 `.tasks.toml` 的 `[markdown] archive`，沒寫就是 backlog 旁的 `done-archive.md`；backend 不是 markdown 時沒有封存（`absent`）。
   `mode`、`digest` 取自 `Resolution mode:`、`Decision digest:`；`Captain decision:` 下第一行是 `Captain answered this call through <來源>.` 時，`source`、`answer`、`label` 取自那一行與 `Answer:`、`Answer as shown to the captain:`，其他的 `source` 是空字串，`answer` 是第一行（最多 300 字）。`occurrence` 是那一筆的 Resolution 紀錄數。
@@ -116,7 +124,7 @@ fork 補上的方法：把 `carry` 的這個修正移植過去，也就是 `bin/
 - `secondmates[]` 只在主 home 的輸出裡有，資料取自上游的 `fm-secondmate-registry-lib.sh` 逐行解析 `data/secondmates.md`。
 - 腳本自己設 `FM_CREW_STATE_NO_FORGE=1`。
 
-測試：`fm-board/test/stage-1-feed.sh`（每個欄位、和 `myshape/test/contract/report-main.json` 一樣的欄位結構、三種 home、exit 4、`test_a_missing_capability_is_exit_4` 的三種 home 缺封存 blocker 修正、`test_closed_decisions` 的游標與封存）；彙整腳本的能力檢查不執行 snapshot、不寫 home：`stage-1-read.sh` 的 `test_a_snapshot_without_the_archive_fix_is_exit_4`。
+測試：`fm-board/test/stage-1-feed.sh`（每個欄位、和 `myshape/test/contract/report-main.json` 一樣的欄位結構、三種 home、exit 4、`test_a_missing_capability_is_exit_4` 的三種 home 缺封存 blocker 修正、`test_closed_decisions` 的游標與封存，`test_the_main_report_carries_this_machines_claude_usage` 等四個測 `metrics`）；彙整腳本的能力檢查不執行 snapshot、不寫 home：`stage-1-read.sh` 的 `test_a_snapshot_without_the_archive_fix_is_exit_4`。
 
 ### 3.2 `deliver`
 
@@ -126,7 +134,8 @@ fork 補上的方法：把 `carry` 的這個修正移植過去，也就是 `bin/
 | --- | --- | --- | --- |
 | `message` | — | `fm-inbox.sh note --request-id tb-<id> -`，stdin「［議題：<名稱>（<id>）］」換行後接文字 | exit 0 已送達；3 重試（存了但沒叫醒 first mate，同一個 id 重放會補叫醒）；其他失敗 |
 | `notice` | — | 同上，stdin 是 `text` | 同上 |
-| `notice`，`event` 是 `decision.front` | — | 照 `notice`：一則筆記，stdin 是 `text`（「看板上輪到 <home>/<task> 的決定了（…）」），request id 是 `tb-w-d-<16 位十六進位>` | 照 `notice` |
+| `notice`，`event` 是 `decision.front` | — | 照 `notice`：一則筆記，stdin 是 `text`（「看板上輪到 <home>/<task> 的決定了（…）」，或輪到提議關閉、「沒人處理的議題」、「沒人接」卡的同一種句子），request id 是 `tb-w-d-<16 位十六進位>` | 照 `notice` |
+| `notice`，`event` 是 `stall.nudge` | — | 照 `notice`：一則筆記，stdin 是 `text`（「看板提醒：這些卡沒有人接手…」），request id 是 `tb-w-n-<16 位十六進位>` | 照 `notice` |
 | `notice`，`event` 是 `todo.closed` | — | 使用者按的照 `notice`；aggregator 自己關的什麼都不跑；不看 `item.ref` | 使用者按的照 `notice`；aggregator 自己關的已送達；`item.id` 格式不對是失敗 |
 | `direct` | `main` | `fm-send.sh <task> <文字>` | 0 已送達；輸出有 `is not resolvable` 是失敗「這個 worker 已經結束或找不到，訊息沒有送出。」；其他失敗 |
 | `direct` | secondmate | `fm-send.sh <id> --fire-and-forget <id 的 SHA-256 前 16 位> 轉給 <task>：<文字>` | 0 已送達；3 而且是遠端的是重試；其他失敗 |
@@ -139,7 +148,8 @@ fork 補上的方法：把 `carry` 的這個修正移植過去，也就是 `bin/
 - `home` 不是 `main` 也不是登記的 secondmate、紀錄不是合法的 JSON、`kind` 不認得、欄位不完整：結果都是失敗。
 - 給 worker 的文字以 `/`、`$`、`!` 或 `-` 開頭也是失敗；看板本來就擋，這裡再擋一次，因為 `fm-send.sh` 不收 `--` 終止符。
 
-`decision.front` 是看板在排隊的決定輪到時送的（contracts 第 7.1 節）；這一側不另外處理，和其他通知一樣是一則筆記。
+`decision.front` 是看板在排隊的卡輪到時送的（contracts 第 7.1 節；那條佇列也排提議關閉與看板的「沒人處理的議題」「沒人接」卡，[lifecycle](../../myshape/spec/lifecycle.markdown) 第 4 節）；這一側不另外處理，和其他通知一樣是一則筆記。
+`stall.nudge` 是看板的提醒：有卡過了提醒期限還沒有人接手（lifecycle 第 1 節）；使用者在「沒人接」卡上按的〔請 first mate 處理〕是一則 `message`，request id 是 `tb-w-a-<16 位十六進位>`。兩者這一側都不另外處理，是一則筆記；first mate 怎麼處置寫在規則範本（第 6 節）。
 這些通知的內容和改版前一樣（contracts 第 7 節改版前是看板自己跑這些指令）；差別只有「議題變成可派」的通知改成說發生了什麼（「議題「X」離開「待辦」，排在「一般」第 3，現在可派」，規則第 5 行「看板通知議題可派時也重新評估」照樣適用），不再寫「請跑 order 重新評估」，和每一個頁面上的決定各送一則。
 
 測試：`fm-board/test/stage-2-deliver.sh`（每一種紀錄對三種 home 跑的指令、參數、stdin 與 `FM_HOME`，每一種結果，通知的內容逐位元組，`decision.front` 的也是；裝了 `tasks-axi` 時用真的 `fm-captain-hold.sh` 作答一次）；第三到五段的看板測試經 `tb_make_fake_root` 跑真的 `fm-board.sh`。
@@ -224,7 +234,8 @@ second mate 的 home 讀不到那一份時（沒有檔或副本、讀不懂、�
 | `config/fleet-ledger` 存在與否 | `fm-topic-board-read.sh` | 檔案存在就是這個 home 的帳本開著（由 first mate 這一側的 `fm-board.sh setup` 建立） | `stage-3-data.sh` 的 `test_home_status` |
 | `bin/fm-primary-scope-lib.sh` 的 `fm_root_is_secondmate_home <home>` | `fm-topic-board-read.sh`、`fm-topic-session-start.sh` | 回傳值分辨 secondmate home（標記檔 `.fm-secondmate-home`） | 真的：`stage-1-read.sh` 的 `test_secondmates_and_in_home`；`stage-2-startup.sh` 的 `test_secondmate_home_gets_nothing` |
 | `bin/fm-secondmate-registry-lib.sh` 的 `secondmate_registry_parse_line`（設 `SECONDMATE_REGISTRY_ID`、`_HOME`、`_REMOTE`）與 `secondmate_registry_field <登記檔> <id> remote\|home` | `fm-topic-board-read.sh`，經 `fm-board-lib.sh` | `data/secondmates.md` 每個 `- ` 開頭的行解析出 id、home、是不是遠端 | 真的：`stage-1-read.sh` 的 `test_secondmates_and_in_home` |
-| `bin/fm-timeout-lib.sh` 的 `fm_run_timed <秒> <指令…>` 與 `fm_timed_out <exit code>` | `fm-topic-session-start.sh` | 指令超過秒數就被停下，回 `fm_timed_out` 認得的 exit code；其他時候回指令自己的 exit code | 真的：`stage-2-startup.sh` 全部（沒有逾時的情況） |
+| `bin/fm-timeout-lib.sh` 的 `fm_run_timed <秒> <指令…>` 與 `fm_timed_out <exit code>` | `fm-topic-session-start.sh`、`fm-board.sh feed main`（quota-axi） | 指令超過秒數就被停下，回 `fm_timed_out` 認得的 exit code；其他時候回指令自己的 exit code | 真的：`stage-2-startup.sh` 全部（沒有逾時的情況）；`stage-1-feed.sh` 的 `test_usage_that_cannot_be_read_shows_as_such`（替身 quota-axi 逾時） |
+| `quota-axi --provider claude --json --no-credential-refresh --max-age 300`（不是框架的指令，是上游工具清單裡的工具；沒有也照常回報） | `fm-board.sh feed main` | exit 0 或 1 時 stdout 是一個 JSON 物件：`generatedAt`，`providers[]` 的 `provider`、`accountKey` 或 `accountKeys[0]`、`state.status`、`state.stale`、`state.refreshedAt`、`state.error`，`windows[]` 的 `id`、`label`、`percentRemaining`、`resetsAt`（0.1.69 的 `--json`，schema 5 與 6）；其他 exit 是失敗 | 替身：`fm-board/test/quota-axi/quota-axi`，答的是 0.1.69 照 snapshot 檔印出的輸出（`stage-1-feed.sh`、`stage-5-page.mjs`）。quota-axi 改了 `--json` 的形狀，測試不會失敗 |
 | `data/backlog.md` 的項目行格式 | 經 snapshot 間接讀；看板自己不解析 | 測試的 backlog 是照這個格式手寫的；hold 的原因用 `fm-hold-v1:<base64>` 編碼時由 snapshot 解回原文 | `stage-4-writes.sh` 的 `test_hands_on_items`（編碼過的原因）；`stage-5-page.sh` |
 
 snapshot 的 JSON 裡用到的欄位（少了哪一個，對應的東西就從看板上消失或顯示成未知，不會報錯；`fm-topic-board-read.sh` 讀它們）：
@@ -235,7 +246,7 @@ snapshot 的 JSON 裡用到的欄位（少了哪一個，對應的東西就從�
 | `tasks[].id`、`.kind`、`.current_state.state`、`.current_state.source`、`.current_state.detail` | agent 的燈號。`state` 是 `working` 且 `detail` 剛好是 `harness busy (fm-spawn)` 時當成「還沒開始」（C32） |
 | `tasks[].hints.open_decisions[]` 的 `verb`（只取 `needs-decision`）、`key`、`summary` | worker 提問 |
 | `backlog.records[]` 的 `structured`、`state`（`queued`、`done`）、`id`、`title`、`kind` | 排隊中的項目 |
-| `backlog.records[]` 的 `hold_kind`（`captain`）、`hold_reason`、`hold_bucket`（`live`、`aged`、`dated`、`blocked`）、`hold_until`、`hold_age_days`、`unresolved_blocker_ids` | 待決事項、排隊項目在等什麼 |
+| `backlog.records[]` 的 `hold_kind`（`captain`；排隊項目另看 `load`）、`hold_reason`、`hold_bucket`（`live`、`aged`、`dated`、`blocked`）、`hold_until`、`hold_age_days`、`unresolved_blocker_ids` | 待決事項、排隊項目在等什麼；排隊項目的 `hold_until` 與 `turn`（第 3.1 節） |
 | `backlog.records[].body_lines[]` 裡 `Captain hold origin: <id>` 那一行 | 待決事項沒有自己的議題標記時，跟著來源 task 的議題 |
 | `backlog.records[].body_lines[]` 裡 `Captain hold on answer: close\|release` 那一行 | 作答時送 `done` 還是 `release`（第 8 節） |
 | `backlog.records[].body_lines[]` 裡 `topic: <議題 id>` 那一行 | 排隊中的項目沒有議題標記時用它（C51）；first mate 轉交項目時寫的 |

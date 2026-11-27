@@ -1,13 +1,26 @@
 import { getJson, postJson, takeToken, tokenInHash } from "./api.js";
 import { h, replaceChildren } from "./dom.js";
-import { dropAnchor } from "./drop.js";
+import { dropAnchor, timeDropAnchor } from "./drop.js";
 import { frame } from "./frame.js";
 import { NO_FILTER, filterHash, parseFilterHash, viewFilter } from "./filter.js";
-import { QUEUES, agentName, setAgentLabel } from "./state.js";
+import { ORDER_KEY, parseOrder } from "./sort.js";
+import { QUEUES, agentName, currentTopic, setAgentLabel } from "./state.js";
 const POLL_MS = 5000;
+/** How often the 用量 panel is redrawn so its times stay current. */
+const USAGE_REDRAW_MS = 30_000;
 const TOAST_MS = 6000;
 const NOTIFY_SECONDS = 30;
 const FAILURES_BEFORE_DOWN = 3;
+/** The page's own card order; a browser that will not lend its storage lists by priority. */
+function storedOrder() {
+    try {
+        return parseOrder(localStorage.getItem(ORDER_KEY));
+    }
+    catch (error) {
+        console.warn("myshape: localStorage cannot be read, so the cards are listed by priority", error);
+        return "priority";
+    }
+}
 const app = document.getElementById("app");
 const toastBox = document.getElementById("toast");
 const token = takeToken();
@@ -21,6 +34,7 @@ const page = {
     panel: null,
     notice: null,
     filter: parseFilterHash(location.hash) ?? NO_FILTER,
+    order: storedOrder(),
     tagPanel: null,
     schedulePanel: null,
     open: new Set(),
@@ -274,6 +288,18 @@ const actions = {
     ignore: (write) => void post("writes/ignore", { write_id: write.id }),
     send: (path, body) => void post(path, body),
     setFilter,
+    setOrder: (order) => {
+        // A chosen saved view keeps its own order; otherwise this page does (spec/card-sort.markdown).
+        const saved = page.view?.hashtags.views.find((entry) => entry.id === page.filter.view);
+        if (saved !== undefined) {
+            const { id, name, any, none, text, untagged } = saved;
+            void post("views/save", { id, name, any, none, text, untagged, order });
+            return;
+        }
+        page.order = order;
+        render();
+        localStorage.setItem(ORDER_KEY, order);
+    },
     setTagPanel: (panel) => {
         page.tagPanel = panel;
         render();
@@ -315,6 +341,9 @@ function dragOver(event) {
     if (card === null || queue === null)
         return;
     event.preventDefault();
+    // Listed by creation time, a place in the list is no priority: the card stays where it was.
+    if (queue.dataset["byTime"] === "true")
+        return;
     const over = topicCardAt(event);
     const list = queue.querySelector(".list");
     if (over === null)
@@ -324,19 +353,33 @@ function dragOver(event) {
         over.parentElement?.insertBefore(card, event.clientY < box.top + box.height / 2 ? over : over.nextSibling);
     }
 }
-/** Under a filter the drop is placed among the cards shown (spec/drag-under-filter.markdown). */
+/**
+ * The queue a drop lands in and where (null: nowhere). Under a filter it is
+ * placed among the cards shown (spec/drag-under-filter.markdown); listed by
+ * creation time, only a move to another queue counts (spec/card-sort.markdown).
+ */
+function placeOf(event, card, start) {
+    if (card.closest(".queue")?.dataset["byTime"] === "true") {
+        const box = event.target.closest(".queue");
+        const queue = box?.dataset["queue"];
+        return queue === undefined ? null : { queue, anchor: timeDropAnchor(start.queue, queue) };
+    }
+    const slot = slotOf(card);
+    if (slot === null)
+        return null;
+    const filtered = card.closest(".queue")?.dataset["filtered"] === "true";
+    return { queue: slot.queue, anchor: dropAnchor(start, slot, filtered) };
+}
 function drop(event) {
     const card = app.querySelector(".topic.dragging");
     if (dragged === null || card === null)
         return;
-    const slot = slotOf(card);
-    if (slot === null)
+    const place = placeOf(event, card, dragged.start);
+    if (place === null)
         return;
     event.preventDefault();
-    const filtered = card.closest(".queue")?.dataset["filtered"] === "true";
-    const anchor = dropAnchor(dragged.start, slot, filtered);
-    if (anchor !== null)
-        actions.move(dragged.id, slot.queue, anchor);
+    if (place.anchor !== null)
+        actions.move(dragged.id, place.queue, place.anchor);
 }
 app.addEventListener("dragstart", (event) => {
     const card = topicCardAt(event);
@@ -375,6 +418,12 @@ window.addEventListener("hashchange", () => {
 });
 document.addEventListener("visibilitychange", () => void poll());
 window.setInterval(() => void poll(), POLL_MS);
+window.setInterval(() => {
+    // The 用量 panel writes its times relative to now; nothing the board sends changes them.
+    if (document.hidden || currentTopic() !== null || (page.view?.metrics.length ?? 0) === 0)
+        return;
+    render();
+}, USAGE_REDRAW_MS);
 window.setInterval(() => {
     // Keeps the confirmation countdown current and drops confirmations that ran out.
     if (page.pending.size === 0)

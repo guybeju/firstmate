@@ -23,7 +23,7 @@
 
 ### 輪詢
 
-- 輪詢只在「最近 2 分鐘內有人要過看板狀態」時進行。這一段的觸發來源是 `dump`；第五段接上頁面的輪詢。停了之後服務照常留著，下次從存好的 offset 接續。
+- 輪詢只在「最近 2 分鐘內有人要過看板狀態」時進行。這一段的觸發來源是 `dump`；第五段接上頁面的輪詢。停了之後服務照常留著，下次從存好的 offset 接續。後來（C62）沒有人要狀態時改成慢慢讀：每個 home 上一次讀完後 900 秒、遠端的 3600 秒（[contracts](contracts.markdown) 第 10 節），讓沒有人看頁面時生命週期照常判斷。
 - 主 home：每 10 秒執行白名單的 R1。它的 `secondmates[]` 決定還有哪些 home。
 - 同機的 secondmate home：每 10 秒執行 R2。
 - 遠端 home：每 60 秒執行 R3，各 home 錯開起始時間。
@@ -67,12 +67,13 @@
 - **PR 連結**：`task.pr_ready`、`task.merged` 事件自己帶的網址。`ready` 與 `landed` 的摘要接上同一個 (home, task) 在摘要時間之前最近一筆 `task.pr_ready` 或 `task.merged` 的連結；`report` 與 `failed` 不接。
 - **燈號**：照 [contracts](contracts.markdown) 第 5 節。
   什麼算 agent 照 contracts 第 1 節：secondmate 自己不列為 agent，只列它派出的 worker，並標明所在的 home；home 已經沒有的 task 標成已結束（`finished`）。
-- **待決事項**：每個 hold 屬於哪個議題：先看被 hold 的 task 自己的標記，沒有就看 `origin` 那個 task 的標記，都沒有就是未分類。排序：`live` 在前，`aged`、`dated`、`blocked`（合稱暫緩）在後；同一組裡依議題的佇列順序（高、一般、待辦，同佇列照陣列順序），同一議題內最舊的在前，未分類排最後。暫緩的寫出原因：「已放超過 14 天」「延到 YYYY-MM-DD」「等 <id> 完成」。
-  根 home 回報的 `aggregator.decisions_at_once`（[contracts](contracts.markdown) C10）設了時，照這個順序的前那麼多個 live 待決事項在前面，其他 live 的標成在排隊（`waits_turn`），暫緩的不算；跨所有 home 一起算。有一個在排隊的待決事項、而 backlog 項目在等它時，那個項目寫「決定排隊」，不寫「等你決定」。
+- **待決事項**：每個 hold 屬於哪個議題：先看被 hold 的 task 自己的標記，沒有就看 `origin` 那個 task 的標記，都沒有就是未分類。排序：`live` 在前，`aged` 與日期已到的 `dated` 也算在這一組（卡上標「已放超過 14 天」「延到 …，日期到了」），還沒到的 `dated`、`blocked` 與讀不懂的（合稱暫緩）在後；同一組裡依議題的佇列順序（高、一般、待辦，同佇列照陣列順序），同一議題內最舊的在前，未分類排最後。暫緩的寫出原因：「延到 YYYY-MM-DD」「等 <id> 完成」「讀不懂的分類：<讀到的字>」。等看板看不到的工作的 `blocked` 過了期限也進前一組（[lifecycle](lifecycle.markdown) D5）。
+  這一組之後是 aggregator 的提議關閉、看板的「沒人處理的議題」與「沒人接」卡，合成一條佇列（[lifecycle](lifecycle.markdown) 第 4 節）。根 home 回報的 `aggregator.decisions_at_once`（[contracts](contracts.markdown) C10）設了時，照這個順序的前那麼多張在前面，其他的標成在排隊（`waits_turn`），暫緩的不算；跨所有 home 一起算。沒有設時待決事項都在前面，後三種一次一張。有一個在排隊的待決事項、而 backlog 項目在等它時，那個項目寫「決定排隊」，不寫「等你決定」。
 - **選項**：問題最後一行裡最後一個 `選項：`（全形冒號）之後的文字，以 ` | ` 分隔，至少兩個、每個都不是空的，才解析成按鈕；否則沒有按鈕。文字框一律有。不要求 `選項：` 在行首：上游把 hold reason 存在 backlog 項目的標題行，寫成多行的 reason 到看板時可能已經是一行。
 - **worker 提問**：`status_decisions[]`（彙整腳本只收 `needs-decision`，不收 `blocked`）依 task 的議題歸位，標「first mate 處理中」，不能作答。
   `kind` 是 secondmate 的 task 的那一行是 secondmate 給 first mate 的回報，不算 worker 提問（C53）。
-- **提議關閉**：有 `close_proposal` 的議題。
+- **提議關閉**：有 `close_proposal` 的議題（只有 aggregator 提的）。
+- **生命週期**：每次讀好一個 home 之後，看板照 [lifecycle](lifecycle.markdown) 判斷每張卡的狀態、存下計時、把過了期限的卡放到使用者面前。
 
 ### `summary` 與 `which`
 
@@ -109,7 +110,7 @@
    - 燈號五種，含「已清理的 task 由最後一筆事件推出」與「有 live hold 時優先」。
    - 待決事項的歸屬（自己的標記、origin 的標記、未分類）與排序；選項行的解析（符合、少一個空白、不在最後一行）。
    - `summary`：存檔、去重、超過 600 碼位被拒、三種回印；`--home` 不在 `secondmates[]` 被拒；冷啟動時會先讀一次主 home。
-   - 2 分鐘沒有人要狀態之後不再執行讀取；再要一次就恢復。
+   - 2 分鐘沒有人要狀態之後不再照各 home 的間隔讀取（後來改成慢讀，C62）；再要一次就恢復。
    - 執行層拒絕白名單以外的 argv。
 2. 第二段的驗收第 2 到 4 條、第一段的第 2 到 5 條再跑一次。
 3. 先驗項目 3-4 的數字寫進 PR。
