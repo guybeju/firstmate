@@ -60,17 +60,20 @@ jobs:
         lane:
           - portable-parallel-1
           - portable-parallel-2
-          - portable-serial-1of11
-          - portable-serial-2of11
-          - portable-serial-3of11
-          - portable-serial-4of11
-          - portable-serial-5of11
-          - portable-serial-6of11
-          - portable-serial-7of11
-          - portable-serial-8of11
-          - portable-serial-9of11
-          - portable-serial-10of11
-          - portable-serial-11of11
+          - portable-serial-1of14
+          - portable-serial-2of14
+          - portable-serial-3of14
+          - portable-serial-4of14
+          - portable-serial-5of14
+          - portable-serial-6of14
+          - portable-serial-7of14
+          - portable-serial-8of14
+          - portable-serial-9of14
+          - portable-serial-10of14
+          - portable-serial-11of14
+          - portable-serial-12of14
+          - portable-serial-13of14
+          - portable-serial-14of14
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
         with:
