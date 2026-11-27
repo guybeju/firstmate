@@ -238,7 +238,7 @@ bin/fm-board.sh install-rules
 - **看板改由設定檔接上 first mate 的那一次更新**（只有一次）：更新之前就設好的主 home 沒有 `config/myshape-aggregator.json`。
   更新後第一次開 session、或第一個 `bin/fm-board.sh tag`、`split`（first mate 派工與歸併時會跑）先到的那一個替它寫好；開 session 時換掉在跑的看板，印 `看板服務：已接上 firstmate，換上新的看板`，指令則在 stderr 印一行「看板的 aggregator 設定原本不在，已寫好：firstmate…」。不用手動做什麼。
   在那之前，舊的看板服務照舊執行 `bin/fm-board.sh`，要送出的照常送出。
-  更新之後到那一刻之前，若先跑了 `bin/myshape.sh` 的指令（例如 first mate 照規則跑的 `summary`、`which`），看板會換成新版但還沒有設定檔：頁面上只多一行「沒有接上 aggregator（沒有 config/myshape-aggregator.json）…」，要送出的等著，`summary`、`which` 回「議題不明」；設定檔一寫好，下一個看板指令換上接上的看板，等著的各送一次（排程的通知過了期限的不送，頁面的寫入歷史記成「過期沒送」），自己就好了。
+  更新之後到那一刻之前，若先跑了 `bin/myshape.sh` 的指令（例如 first mate 照規則跑的 `summary`、`which`），看板會換成新版但還沒有設定檔：頁面上只多一行「沒有接上 aggregator（沒有 config/myshape-aggregator.json）…」，要送出的等著，`summary`、`which` 回「議題待查」；設定檔一寫好，下一個看板指令換上接上的看板，等著的各送一次（排程的通知過了期限的不送，頁面的寫入歷史記成「過期沒送」），自己就好了。
   **確認**：`bin/myshape.sh status` 有 `aggregator：已接上（first mate）` 與 `aggregator 設定：firstmate，feed bin/fm-board.sh，deliver bin/fm-board.sh`。
 - **拿掉舊的要你動手的那一次更新**（只有一次）：看板自己存「要你動手」的項目之前，first mate 的要你動手是原因以 `動手：` 開頭的 captain hold；舊版的 first mate 把還開著的這種 hold 搬上看板，項目關掉時也關掉它的 hold。
   這一版兩件都拿掉了，連同檢查還有沒有這種 hold 的那個指令，所以要在更新之前檢查。
