@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Behavior tests for fm-check-unregister.sh: refuse empty-variable retirement,
-# and remove only the two named custom-check files on the happy path.
+# treat an empty state override as FM_HOME/state, and remove only the two
+# named custom-check files on the happy path.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -115,21 +116,39 @@ test_empty_id_and_empty_state_refuse_without_stray_rm() {
   assert_present "$canary_sibling" "bad state override deleted a sibling"
   assert_rm_not_invoked "$log"
 
-  write_registered_check "$home" override-empty
-  status=0
-  : > "$log"
-  PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE='' \
-    "$UNREGISTER" override-empty >"$out" 2>"$err" || status=$?
-  expect_code 1 "$status" "unregister with explicitly empty state override"
-  assert_contains "$(cat "$err")" "state directory is unavailable" \
-    "empty state override refusal used the wrong stderr"
-  assert_present "$home/state/override-empty.check.sh" \
-    "empty state override deleted the home state check"
-  assert_present "$home/state/override-empty.check-trust" \
-    "empty state override deleted the home state trust binding"
-  assert_rm_not_invoked "$log"
-
   pass "empty id or missing state dir refuses loudly and never rms a stray path"
+}
+
+test_empty_state_override_retires_from_home_state() {
+  local home out err status sibling
+  home=$(make_home override-empty)
+  out="$home/out.txt"
+  err="$home/err.txt"
+  sibling="$home/state/keep.check.sh"
+  cat > "$home/state/override-empty.check.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'custom-ready\n'
+SH
+  chmod 0700 "$home/state/override-empty.check.sh"
+  FM_HOME="$home" FM_STATE_OVERRIDE='' "$REGISTER" override-empty >/dev/null \
+    || fail "could not register custom check under an empty state override"
+  printf 'sibling\n' > "$sibling"
+  assert_present "$home/state/override-empty.check-trust" \
+    "empty-override registration did not bind trust in FM_HOME/state"
+
+  status=0
+  FM_HOME="$home" FM_STATE_OVERRIDE='' \
+    "$UNREGISTER" override-empty >"$out" 2>"$err" || status=$?
+  expect_code 0 "$status" "unregister with explicitly empty state override"
+  assert_contains "$(cat "$out")" "unregistered: state/override-empty.check.sh" \
+    "empty state override did not report unregistration"
+  assert_absent "$home/state/override-empty.check.sh" \
+    "empty state override left the home state check behind"
+  assert_absent "$home/state/override-empty.check-trust" \
+    "empty state override left the home state trust binding behind"
+  assert_present "$sibling" "empty state override deleted a sibling check file"
+
+  pass "empty state override resolves to FM_HOME/state like registration"
 }
 
 test_happy_path_removes_only_check_and_trust() {
@@ -194,5 +213,6 @@ test_unsafe_hardlink_or_symlink_is_refused() {
 }
 
 test_empty_id_and_empty_state_refuse_without_stray_rm
+test_empty_state_override_retires_from_home_state
 test_happy_path_removes_only_check_and_trust
 test_unsafe_hardlink_or_symlink_is_refused
