@@ -34,6 +34,11 @@
 # and failure outcomes from depending on the mate model appending them
 # (docs/secondmate-parent-channel.md). A main home has no parent channel and
 # skips this path: its watcher already signals every child status line.
+# Right after that delivery, in a secondmate home only, every `scan` (so every
+# poll and `scan --startup`) runs bin/fm-wait-relay.sh relay, which raises the
+# home's unowned backlog waits to the parent; it is bounded by half the scan
+# budget (rounded up), its time comes out of the cadence scan's deadline below,
+# its output is discarded, and its failure never fails the scan.
 # `report <task-id>` runs that same delivery for one child on behalf of a
 # caller that already holds the child's meta lock, which bin/fm-teardown.sh
 # does before it removes the child's record; it exits 0 when the line is
@@ -757,13 +762,25 @@ scan_pass() { # <cursor> <after|through> <deadline> <secondmate-id-or-empty>
   done
 }
 
+# The wait relay (header): bounded, silent, best-effort. Prints the whole
+# seconds it spent, which the caller deducts from its own deadline.
+wait_relay_pass() {
+  local started
+  started=$(date +%s)
+  fm_run_timed $(( (FM_INACTIVE_RECONCILE_BUDGET_SECS + 1) / 2 )) \
+    env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    "$SCRIPT_DIR/fm-wait-relay.sh" relay >/dev/null 2>&1 || true
+  printf '%s\n' $(( $(date +%s) - started ))
+}
+
 scan() {
-  local startup=${1:-0} self='' cursor deadline rc=0 marker_rc=0
+  local startup=${1:-0} self='' cursor deadline rc=0 marker_rc=0 relay_spent=0
   mkdir -p "$STATE" "$OUTCOME_DIR" || return 1
   [ ! -L "$OUTCOME_DIR" ] || return 1
   if self=$(home_secondmate_id); then
     # The ledger-first delivery is per poll, not per cadence.
     ledger_pass
+    relay_spent=$(wait_relay_pass)
   else
     marker_rc=$?
     self=''
@@ -779,7 +796,7 @@ scan() {
       "inactive terminal outcomes remain unreconciled: invalid .fm-secondmate-home marker" || true
     return 0
   fi
-  deadline=$(( $(date +%s) + FM_INACTIVE_RECONCILE_BUDGET_SECS ))
+  deadline=$(( $(date +%s) + FM_INACTIVE_RECONCILE_BUDGET_SECS - relay_spent ))
   SCAN_FIRST_VISIT_PENDING=1
   scan_pass "$cursor" after "$deadline" "$self" || rc=$?
   if [ "$rc" -eq 0 ] && [ -n "$cursor" ]; then
@@ -858,7 +875,7 @@ case "$mode" in
     acknowledge_notice "$2"
     ;;
   -h|--help)
-    sed -n '2,40{s/^# \{0,1\}//;p;}' "$0"
+    sed -n '2,46{s/^# \{0,1\}//;p;}' "$0"
     ;;
   *)
     printf 'usage: fm-inactive-reconcile.sh scan [--startup]\n' >&2

@@ -1690,6 +1690,9 @@ parent_evidence_reconciliation_json() {  # <summary-json-file> <activities-json>
     ($summary[0]) as $summary
     |
     def keyed: . != null and . != "" and . != "default";
+    # A wait-<id>-<n> key is bin/fm-wait-relay.sh relaying backlog row <id>,
+    # which the mate summary carries among its holds, not its decisions.
+    def wait_row: if (. | type) == "string" then ((capture("^wait-(?<id>.+)-[0-9]+$") | .id) // null) else null end;
     def result($e; $matches; $complete; $surface):
       $e + {
         verdict:(if ($e.key | keyed | not) then "inconclusive"
@@ -1718,7 +1721,15 @@ parent_evidence_reconciliation_json() {  # <summary-json-file> <activities-json>
            $e + {verdict:"inconclusive",compared_to:null,matched:null}
          end ]) as $activity_results
     | ([ $decisions[] as $e
-         | if $e.verb == "needs-decision" then
+         | if $e.verb == "needs-decision" and ($e.key | wait_row) != null then
+             ($e.key | wait_row) as $row
+             | ([ $summary.holds[]
+                  | select(.id == $row)
+                  | {surface:"holds",id,key:null,verb:"needs-decision"}]) as $matches
+             | result($e; $matches;
+                 $summary.counts.holds == ($summary.holds | length);
+                 "holds")
+           elif $e.verb == "needs-decision" then
              ([ $summary.decisions_open[]
                 | select(.verb == "needs-decision")
                 | select(if ($e.key | keyed) then .key == $e.key else true end)

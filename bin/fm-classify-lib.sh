@@ -1058,15 +1058,19 @@ EOF
 # reserved-namespace key is raised by a supervisor library about the task (a
 # pending-reply escalation), a `remote-reply-continuity-` key is the parent's
 # own blocker about a broken remote reply mirror
-# (bin/fm-procevent-remote-reply.sh), and a `captain-hold-` key relays a child
+# (bin/fm-procevent-remote-reply.sh), a `captain-hold-` key relays a child
 # decision a secondmate escalated to the captain (bin/fm-captain-hold.sh) while
-# it keeps working, so the task is not waiting on any of them. Pending-reply
+# it keeps working, and a `wait-` key relays a backlog row the secondmate holds
+# for its parent (bin/fm-wait-relay.sh) while it keeps working, so the task is
+# not waiting on any of them. `wait-` is an extra literal prefix here, never a
+# reserved one: a reserved prefix would make bin/fm-send.sh refuse the
+# parent's `--resolve-key wait-...` answer. Pending-reply
 # recovery and a fire-and-forget retry ring consult this set and leave a task
 # alone while it is non-empty.
 status_own_open_decisions() {  # <status-file>
   local line prefix
   status_open_decisions "$1" | while IFS= read -r line || [ -n "$line" ]; do
-    for prefix in ${FM_CLASSIFY_RESERVED_KEY_PREFIXES:-$FM_CLASSIFY_RESERVED_KEY_PREFIXES_DEFAULT} remote-reply-continuity- captain-hold-; do
+    for prefix in ${FM_CLASSIFY_RESERVED_KEY_PREFIXES:-$FM_CLASSIFY_RESERVED_KEY_PREFIXES_DEFAULT} remote-reply-continuity- captain-hold- wait-; do
       case "$line" in "$prefix"*) continue 2 ;; esac
     done
     printf '%s\n' "$line"

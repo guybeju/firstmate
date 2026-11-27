@@ -1,7 +1,7 @@
 ---
 name: captain-hold-lifecycle
 description: >-
-  Load before treating an investigation, scout report, structured review, or Lavish review as complete, before ending a visual review that exposed a captain decision, when recording or routing the captain's answer, and on any RECORD DIVERGENCE line the wake drain prints.
+  Load before treating an investigation, scout report, structured review, or Lavish review as complete, before ending a visual review that exposed a captain decision, when recording or routing the captain's answer, on any RECORD DIVERGENCE line the wake drain prints, and on any `wait-` keyed decision from a secondmate or a `WAITS ON FIRSTMATE` drain section.
 user-invocable: false
 metadata:
   internal: true
@@ -21,6 +21,7 @@ Prefer holding the work item the question gates over minting a new row; create a
 The originating investigation or review is never its own inventory entry, so hold a separate task for the call and pass `--origin <origin-id>` so `complete` can check it.
 Put the question and its options in the hold reason, and keep one held task per genuine gate: a multi-question review is one held task pointing at its report, not a row per question. Represent that task with exactly one board card that consolidates its questions and options; never fan one task id into duplicate same-key cards.
 Register or re-hold through `bin/fm-captain-hold.sh hold`, which is idempotent per task id.
+Hold every captain call when it arises; the presentation surface shows them one at a time; never park a call to wait its turn.
 After inventorying the whole report and review surface, firstmate runs `bin/fm-captain-hold.sh complete` with every captain-held task id, or with `--none` when nothing waits on the captain.
 A scout may attest its own empty inventory only through the narrow command exception in its generated brief's Definition of done.
 For a non-empty inventory or a refused command, the scout reports to firstmate rather than writing metadata or backlog records.
@@ -56,7 +57,8 @@ A retirement failure makes the command fail without reversing the already-durabl
 `reconcile list` names every request still outstanding.
 Never use `answer` for an evidence-only moot call: `answer` records what the captain said, while `reconcile close` records verified evidence.
 A captain-held task closed outside this owner leaves no durable answer, so the completion gate keeps failing until `answer` records the decision the captain actually gave.
-Resolved findings, recommendations that need no captain choice, and prose that merely sounds decision-like do not create held tasks.
+Resolved findings, recommendations that need no captain choice, and prose that merely sounds decision-like do not create captain-held tasks.
+A finding that needs routing the home may not do itself is a row held with a non-captain kind such as `parked`, which reaches its owner through Waits on firstmate below.
 Bearings reads the resulting structured state and must never compensate by scraping historical reports, visual-review artifacts, terminal output, chat, or other prose.
 
 A captain call can be written down twice - as the keyed status decision the fold reads, and as the backlog task held for the captain - and those two records can disagree without either surface saying so.
@@ -64,6 +66,21 @@ A captain call can be written down twice - as the keyed status decision the fold
 Read such a line as "these two records disagree", never as "the captain ruled and someone forgot to file it": a call can dissolve because its premise was false, or turn out to have been a question of fact rather than the captain's to answer.
 Reconcile it with what actually happened - `answer` when the captain's own words exist to record, and a fresh `needs-decision` line re-opening the status decision when that resolution was not the captain's word.
 The absence of a routed work item is not a divergence and the guard never requires one: when the decision IS the deliverable there is nothing to route.
+
+## Waits on firstmate
+
+A backlog row held with any kind other than `captain` waits on the home's supervising firstmate, never on the captain, and `bin/fm-wait-relay.sh` is the single owner of which rows count and how they are raised.
+A secondmate's such rows arrive as `wait-<id>-<n>` decisions on its parent channel and come back each day until they leave the class; a main home's own appear in the drain's `WAITS ON FIRSTMATE` section.
+Give every one exactly one disposition, applied in the home that owns the row:
+
+- **D1 start it:** dispatch it as approved work; when it is trivial or one option is clearly better, decide it yourself, record why in the row, and tell the captain in one line afterwards.
+- **D2 captain's call:** re-hold the same row in place with `bin/fm-captain-hold.sh hold <id> --reason "<question, current state, example, verdict, options>"` and the fitting `--on-answer`; never a second row in another home.
+- **D3 date it:** re-hold it with `--until <date>`; it rises again on that date.
+- **D4 tie it to same-home work:** block it on a task in the same backlog; it rises again when that lands. A wait on another home (a consult, a verification) takes D3 with the date it is due, because a blocker this home cannot see does not hold the row back.
+- **D5 close it:** it no longer holds, was absorbed, or is declined; close it with the evidence (a PR URL, a decision id), keeping a declined finding in the archive and its report.
+
+Answer a secondmate's wait with `bin/fm-send.sh <mate> --resolve-key wait-<id>-<n> '<disposition>'`; the mate applies it to the row, and the relay confirms it from the row's state, so a disposition that was never applied is raised again the next day.
+A wait you mean to leave open takes D3 or D4; an undated wait is raised daily by design.
 
 ## Operating sequence
 
