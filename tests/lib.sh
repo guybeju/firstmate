@@ -317,9 +317,10 @@ fm_test_reap_procevent_homes() {
 # tracked state directory: it reads the home that watcher recorded in its own
 # lock and drives the arm's home-scoped --stop against it, which identity-checks
 # the pid before signalling, so it never matches on a script or process name and
-# never reaches another home's watcher. A tracked state directory a test already
-# deleted has no lock and is skipped; that watcher exits on its own home-gone
-# check within one poll.
+# never reaches another home's watcher. The stop is driven only when both the
+# lock's home and the tracked state directory are under this run's temp roots.
+# A tracked state directory a test already deleted has no lock and is skipped;
+# that watcher exits on its own home-gone check within one poll.
 
 FM_TEST_WATCHER_REGISTRY=$(mktemp "$FM_TEST_TMPDIR/.fm-test-watcher.$$.XXXXXX") || return 1
 
@@ -346,6 +347,10 @@ fm_test_reap_watchers() {
     lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
     if ! fm_test_under_run_root "$lock_home"; then
       fm_test_signal_note "source=fm_test_cleanup | product stop not called: fm-watch-arm.sh --stop for home $lock_home, which is not under this run's temp roots | lock pid=${lock_pid:--}"
+      continue
+    fi
+    if ! fm_test_under_run_root "$state"; then
+      fm_test_signal_note "source=fm_test_cleanup | product stop not called: fm-watch-arm.sh --stop for state $state, which is not under this run's temp roots | home=$lock_home lock pid=${lock_pid:--}"
       continue
     fi
     fm_test_signal_note "source=fm_test_cleanup | product stop: fm-watch-arm.sh --stop | home=$lock_home state=$state lock pid=${lock_pid:--} command=$(ps -ww -o args= -p "${lock_pid:-0}" 2>/dev/null || true)"

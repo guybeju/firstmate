@@ -22,7 +22,10 @@
 # (nothing is sent to a refused target), 2 on a usage error, and 3 when an
 # accepted target was gone by the time of the send. In log-only mode
 # (FM_TEST_SIGNAL_DRY_RUN set, FM_TEST_SIGNAL_LOG an absolute path) it sends
-# nothing and appends its record to FM_TEST_SIGNAL_LOG.
+# nothing and appends its record to FM_TEST_SIGNAL_LOG. Outside log-only mode
+# it also appends its record, written before the send, to FM_TEST_SIGNAL_LOG
+# when that is an absolute path. With FM_TEST_SUITE_PID empty, --send refuses
+# every target.
 #
 # Every form refuses pid 1 or less, the test script FM_TEST_SUITE_PID, its
 # parent FM_TEST_SUITE_PARENT, the signalling shell, every ancestor of the
@@ -102,11 +105,12 @@ if [ "${1-}" = --send ]; then
   shift
   self=$PPID
   log=
-  if [ -n "${FM_TEST_SIGNAL_DRY_RUN:-}" ]; then
-    case "${FM_TEST_SIGNAL_LOG:-}" in
-      /*) log=$FM_TEST_SIGNAL_LOG ;;
-      *) echo "refused: log-only mode needs FM_TEST_SIGNAL_LOG, an absolute path" >&2; exit 2 ;;
-    esac
+  case "${FM_TEST_SIGNAL_LOG:-}" in
+    /*) log=$FM_TEST_SIGNAL_LOG ;;
+  esac
+  if [ -n "${FM_TEST_SIGNAL_DRY_RUN:-}" ] && [ -z "$log" ]; then
+    echo "refused: log-only mode needs FM_TEST_SIGNAL_LOG, an absolute path" >&2
+    exit 2
   fi
   if [ "$#" -lt 2 ]; then
     echo "usage: tests/signal-guard.sh --send <source> <signal> <form>" >&2
@@ -394,7 +398,9 @@ parse_pid() {  # <arg>: sets pid_error when the argument is not one positive pid
 }
 
 sent_rc=0 refused=0
-if [ "$signal_ok" -eq 0 ]; then
+if [ "$mode" = send ] && [ -z "${FM_TEST_SUITE_PID:-}" ]; then
+  verdict="refused: FM_TEST_SUITE_PID is empty, so the test script is unknown"
+elif [ "$signal_ok" -eq 0 ]; then
   verdict="refused: '$signal' is not one of the signal names TERM KILL STOP CONT INT HUP QUIT"
 elif [ "${1-}" = --members ]; then
   shift
