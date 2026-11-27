@@ -864,24 +864,112 @@ test_unpushed_named_head_refuses_registration() {
   pass "fm-pr-check refuses to register a PR whose named head is only in the worker copy"
 }
 
-# A direct-PR worker pushes from its own copy: the forge still reports the
-# head pushed when the PR opened, but a later fix committed only in the copy
-# is the named head, so registration is refused.
-test_direct_pr_unpushed_commit_refuses_registration() {
-  local dir pushed later
-  dir=$(make_case direct-pr-unpushed)
+write_direct_pr_meta() {  # <dir> [extra field=value...]
+  local dir=$1
+  shift
   fm_write_meta "$dir/home/state/task-a.meta" \
     "window=firstmate:fm-task-a" "endpoint_task_id=task-a" "worktree=$dir/wt" \
-    "project=$dir/project" "kind=ship" "mode=direct-PR"
+    "project=$dir/project" "kind=ship" "mode=direct-PR" "$@"
+}
+
+# The worker's own done: against the task metadata registration left behind.
+accept_worker_done() {  # <dir> <url>
+  # shellcheck disable=SC2016 # The inner script expands after bash -c receives positional args.
+  bash -c '. "$1/bin/fm-dod-lib.sh"
+    fm_dod_accept_ship_done ship direct-PR "$2/wt" "$2/project" "done: PR $3" "$2/home/state" task-a "$2/home/state/task-a.meta"' \
+    _ "$ROOT" "$1" "$2"
+}
+
+# A direct-PR worker pushes from its own copy and may hold a later commit back
+# on purpose. While the forge's PR head is pushed and the copy's HEAD descends
+# from it, registration arms on that forge head and never names the held commit.
+# The worker's done: stays refused and the merge-time re-record still refuses,
+# because both still test the copy's HEAD itself.
+test_direct_pr_registration_names_the_pushed_forge_head() {
+  local dir pushed later url=https://github.com/o/r/pull/4 reason
+  dir=$(make_case direct-pr-forge-head)
+  write_direct_pr_meta "$dir"
   pushed=$(git -C "$dir/wt" rev-parse HEAD)
-  git -C "$dir/wt" commit -q --allow-empty -m 'fix only in the copy'
+  git -C "$dir/wt" commit -q --allow-empty -m 'part held back in the copy'
   later=$(git -C "$dir/wt" rev-parse HEAD)
-  FM_TEST_GH_HEAD=$pushed run_check_entry "$dir" task-a https://github.com/o/r/pull/4 \
-    > "$dir/stdout" 2> "$dir/stderr" && fail "direct-PR head with an unpushed later commit was registered"
+  FM_TEST_GH_HEAD=$pushed run_check_entry "$dir" task-a "$url" \
+    > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "direct-PR registration refused a pushed forge head under a held commit: $(cat "$dir/stderr")"
+  grep -qxF "pr=$url" "$dir/home/state/task-a.meta" || fail "direct-PR registration did not record pr="
+  grep -qxF "pr_head=$pushed" "$dir/home/state/task-a.meta" \
+    || fail "direct-PR registration did not record the forge head: $(cat "$dir/home/state/task-a.meta")"
+  ! grep -qF "$later" "$dir/home/state/task-a.meta" || fail "direct-PR registration recorded the unpushed commit"
+  fm_pr_poll_artifacts_valid "$dir/home/state" task-a "$POLL" || fail "direct-PR registration did not arm the merge poll"
+
+  reason=$(accept_worker_done "$dir" "$url") && fail "the worker's done: was accepted with its HEAD unpushed"
+  case "$reason" in
+    *"named head $later is unreachable outside the worker copy") ;;
+    *) fail "the worker's done: refusal did not name the unpushed HEAD: $reason" ;;
+  esac
+
+  cp "$dir/home/state/task-a.meta" "$dir/meta.before"
+  FM_TEST_GH_HEAD=$pushed FM_PR_CHECK_MERGE=1 run_check_entry "$dir" task-a "$url" \
+    > "$dir/stdout" 2> "$dir/stderr" && fail "the merge-time re-record accepted an unpushed HEAD"
   grep -Fq "named head $later is unreachable outside the worker copy" "$dir/stderr" \
-    || fail "direct-PR refusal did not name the unpushed commit: $(cat "$dir/stderr")"
-  [ ! -e "$dir/home/state/task-a.check.sh" ] || fail "direct-PR unpushed commit still armed a poll"
-  pass "fm-pr-check refuses a direct-PR registration while a later commit is only in the copy"
+    || fail "the merge-time refusal did not name the unpushed HEAD: $(cat "$dir/stderr")"
+  cmp -s "$dir/meta.before" "$dir/home/state/task-a.meta" || fail "the refused merge-time re-record changed the metadata"
+  pass "direct-PR registration arms on the pushed forge head; the done and the merge-time re-record still refuse the unpushed HEAD"
+}
+
+# The forge head is accepted only as a base the copy's HEAD builds on. A forge
+# head on another line of history, one the copy cannot resolve, and a
+# forge=external task each keep today's refusal of the copy's HEAD.
+test_direct_pr_registration_refuses_a_head_not_built_on_the_forge_head() {
+  local dir base sibling later case_name forge_head
+  for case_name in sibling absent external; do
+    dir=$(make_case "direct-pr-not-descended-$case_name")
+    base=$(git -C "$dir/wt" rev-parse HEAD)
+    case "$case_name" in
+      external) write_direct_pr_meta "$dir" forge=external ;;
+      *) write_direct_pr_meta "$dir" ;;
+    esac
+    git -C "$dir/wt" commit -q --allow-empty -m 'pushed on another line'
+    sibling=$(git -C "$dir/wt" rev-parse HEAD)
+    git -C "$dir/wt" update-ref refs/remotes/origin/fm/task-a "$sibling"
+    git -C "$dir/wt" reset -q --hard "$base"
+    git -C "$dir/wt" commit -q --allow-empty -m 'local work beside the forge head'
+    later=$(git -C "$dir/wt" rev-parse HEAD)
+    case "$case_name" in
+      sibling) forge_head=$sibling ;;
+      absent) forge_head=0123456789abcdef0123456789abcdef01234567 ;;
+      external)
+        git -C "$dir/wt" update-ref refs/remotes/origin/fm/task-a "$base"
+        forge_head=$base ;;
+    esac
+    FM_TEST_GH_HEAD=$forge_head run_check_entry "$dir" task-a https://github.com/o/r/pull/4 \
+      > "$dir/stdout" 2> "$dir/stderr" && fail "$case_name: direct-PR registration accepted a HEAD not built on the forge head"
+    case "$case_name" in
+      external) grep -Fq 'ships through an external review tool' "$dir/stderr" \
+        || fail "$case_name: refusal did not keep the external-review reason: $(cat "$dir/stderr")" ;;
+      *) grep -Fq "named head $later is unreachable outside the worker copy" "$dir/stderr" \
+        || fail "$case_name: refusal did not name the copy's HEAD: $(cat "$dir/stderr")" ;;
+    esac
+    ! grep -q '^pr=' "$dir/home/state/task-a.meta" || fail "$case_name: a refused registration recorded pr="
+    [ ! -e "$dir/home/state/task-a.check.sh" ] || fail "$case_name: a refused registration armed a poll"
+  done
+  pass "direct-PR registration refuses a HEAD that does not build on a forge head it can resolve, and a forge=external task"
+}
+
+# With no forge-reported head there is nothing to build on, so a direct-PR
+# HEAD that exists only in the copy is refused as before.
+test_direct_pr_unpushed_head_without_forge_head_refuses() {
+  local dir sha
+  dir=$(make_case direct-pr-no-forge-head)
+  write_direct_pr_meta "$dir"
+  git -C "$dir/wt" commit -q --allow-empty -m 'only in the copy'
+  sha=$(git -C "$dir/wt" rev-parse HEAD)
+  FM_TEST_GH_HEAD=unavailable run_check_entry "$dir" task-a https://github.com/o/r/pull/4 \
+    > "$dir/stdout" 2> "$dir/stderr" && fail "direct-PR unpushed head with no forge head was registered"
+  grep -Fq "named head $sha is unreachable outside the worker copy" "$dir/stderr" \
+    || fail "refusal did not name the unreachable head: $(cat "$dir/stderr")"
+  ! grep -q '^pr=' "$dir/home/state/task-a.meta" || fail "direct-PR unpushed head still recorded pr="
+  [ ! -e "$dir/home/state/task-a.check.sh" ] || fail "direct-PR unpushed head still armed a poll"
+  pass "fm-pr-check refuses a direct-PR registration with no forge head while HEAD is only in the copy"
 }
 
 # bin/fm-pr-merge.sh re-records through fm-pr-check.sh (FM_PR_CHECK_MERGE=1).
@@ -5744,7 +5832,9 @@ test_invalid_entrypoints_have_zero_side_effects
 test_draft_pull_request_is_not_armed
 test_secondmate_record_refuses_a_pr_watch
 test_unpushed_named_head_refuses_registration
-test_direct_pr_unpushed_commit_refuses_registration
+test_direct_pr_registration_names_the_pushed_forge_head
+test_direct_pr_registration_refuses_a_head_not_built_on_the_forge_head
+test_direct_pr_unpushed_head_without_forge_head_refuses
 test_merge_rerecord_refreshes_before_refusing
 test_scan_records_a_pr_reported_in_a_done_line
 test_scan_reports_a_refusal_once_and_retries

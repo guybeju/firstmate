@@ -41,7 +41,10 @@
 # Only PR registration, including the merge-time re-record bin/fm-pr-merge.sh
 # makes through it, refreshes remote-tracking refs before it refuses
 # (fm_dod_named_head_reachable_outside_worktree); the other callers read the
-# refs as that refresh left them.
+# refs as that refresh left them. Arming registration alone may also accept a
+# direct-PR copy whose HEAD builds on the forge's pushed PR head
+# (fm_dod_copy_head_builds_on_forge_head); the claim it records is that forge
+# head, never the copy's unpushed commit.
 # The check tests that head, not whether some branch moved. In no-mistakes
 # mode the pre-validation `done: {summary}` is the pipeline handoff and is
 # not gated; only the later CI-ready `done: PR <url> checks green` is, or on a
@@ -1038,6 +1041,26 @@ fm_dod_forge_head_is_named_head() {  # <mode>
     no-mistakes|'') return 0 ;;
   esac
   return 1
+}
+
+# 0 when a direct-PR arming registration may record <forge-head>, the head the
+# forge reports for the PR, although the gate refused the copy's HEAD: that
+# forge head is reachable outside the worker copy (the same refresh the gate
+# makes) and the copy's HEAD descends from it, so the copy only holds commits
+# not yet pushed on top of the PR. A HEAD that does not build on the forge head,
+# a forge head this copy cannot resolve, a forge=external task (whose gate
+# refuses any PR report), and every other mode refuse. This
+# accepts no done: claim: the worker's done is still gated on the copy's HEAD,
+# and bin/fm-pr-check.sh does not ask this for the merge-time re-record, so a
+# merge still requires the copy's HEAD to be pushed.
+fm_dod_copy_head_builds_on_forge_head() {  # <mode> <worktree> <project> <forge-head> <meta>
+  local mode=$1 wt=$2 project=$3 forge_head=$4 meta=$5
+  [ "$mode" = direct-PR ] || return 1
+  [ "$(fm_dod_meta_value "$meta" forge)" != external ] || return 1
+  fm_pr_head_valid "$forge_head" || return 1
+  [ -n "$wt" ] && [ -d "$wt" ] || return 1
+  fm_dod_named_head_reachable_outside_worktree "$wt" "$project" "$mode" "$forge_head" || return 1
+  git -C "$wt" merge-base --is-ancestor "$forge_head" HEAD 2>/dev/null
 }
 
 # 0 when <url> is the task's recorded pr= and the forge holds its head:
