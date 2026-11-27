@@ -597,6 +597,9 @@ EOF
 print_waits_on_firstmate_section() {
   local waits task state kind title reason line shown=0 omitted=0
   local output='' used=0 bytes item_bytes=220 global_bytes=2000
+  # The backlog read must belong to the same home as these status logs, the
+  # pairing bin/fm-captain-hold.sh's `diverged` also requires.
+  [ "$STATE" = "$FM_HOME/state" ] || return 0
   [ ! -e "$FM_HOME/.fm-secondmate-home" ] && [ ! -L "$FM_HOME/.fm-secondmate-home" ] || return 0
   waits=$(fm_run_timed 20 env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
     "$SCRIPT_DIR/fm-wait-relay.sh" list 2>/dev/null) || return 0
