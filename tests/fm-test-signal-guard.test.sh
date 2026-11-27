@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Behaviour tests for signal policy P-010's guard: tests/signal-guard.sh's
 # verdicts and tests/lib.sh's fm_test_signal, fm_test_record_child,
-# fm_fake_crash_point and fm_test_crash_at.
+# fm_fake_crash_point, fm_test_crash_at and fm_test_reap_watchers' run-root
+# check.
 #
 # Every child these cases start ends by itself, except the one that
 # fm_test_signal ends in the last two cases. With FM_TEST_SIGNAL_DRY_RUN=1 and
@@ -145,6 +146,10 @@ test_fm_test_signal_refuses_without_sending() {
     assert_grep "signal guard: refused: pid $$ is the test script itself" "$TMP_ROOT/refusal.err" \
       "fm_test_signal did not name the refusal"
   fi
+  ( FM_TEST_SIGNAL_DRY_RUN=1 FM_TEST_SIGNAL_LOG="$TMP_ROOT/forced-log-only.log" fm_test_signal TERM "$$" ) \
+    2> "$TMP_ROOT/forced-log-only.err"
+  assert_grep "# log-only: the signal guard refused, the case is not failed: refused: pid $$ is the test script itself" \
+    "$TMP_ROOT/forced-log-only.err" "a log-only refusal was not printed to stderr"
   pass "fm_test_signal refuses a target the guard refuses and sends it nothing"
 }
 
@@ -477,12 +482,81 @@ test_send_logs_only_in_log_only_mode() {
   pass "--send records and sends nothing in log-only mode, and exits 1 on a refusal"
 }
 
+# Outside log-only mode --send still appends its record when FM_TEST_SIGNAL_LOG
+# is an absolute path. The target is an empty pid, refused before any process
+# is looked up, so nothing can be sent.
+test_send_logs_outside_log_only_mode() {
+  local log="$TMP_ROOT/real-send.log" rc=0
+  env -u FM_TEST_SIGNAL_DRY_RUN FM_TEST_SIGNAL_LOG="$log" \
+    "$GUARD" --send real-send-case TERM --identity "" >/dev/null || rc=$?
+  expect_code 1 "$rc" "a refused target outside log-only mode"
+  assert_grep "source=real-send-case | raw: argc=3 [TERM] [--identity] []" "$log" \
+    "a send outside log-only mode did not record its raw arguments"
+  assert_grep "refused: the pid is empty" "$log" "a send outside log-only mode did not record its verdict"
+  pass "--send records each call outside log-only mode when FM_TEST_SIGNAL_LOG is an absolute path"
+}
+
+# With FM_TEST_SUITE_PID empty the guard cannot tell the test script apart, so
+# --send refuses every form before judging it. Log-only mode is forced, so even
+# an accepted target would be sent nothing.
+test_send_refuses_every_target_without_the_suite_pid() {
+  local release child out="$TMP_ROOT/no-suite.out" rc
+  release="$TMP_ROOT/no-suite.release"
+  # shellcheck disable=SC2016 # $1 expands in the child's own shell.
+  sh -c 'i=0; while [ ! -e "$1" ] && [ "$i" -lt 600 ]; do sleep 0.05; i=$((i + 1)); done' _ "$release" &
+  child=$!
+  rc=0
+  FM_TEST_SUITE_PID='' FM_TEST_RECORDED_CHILDREN=" $child" FM_TEST_SIGNAL_DRY_RUN=1 \
+    FM_TEST_SIGNAL_LOG="$TMP_ROOT/no-suite.log" "$GUARD" --send no-suite-case TERM "$child" > "$out" || rc=$?
+  expect_code 1 "$rc" "a recorded child with FM_TEST_SUITE_PID empty"
+  assert_grep "refused: FM_TEST_SUITE_PID is empty" "$out" "a recorded child was not refused for the empty suite pid"
+  rc=0
+  FM_TEST_SUITE_PID='' FM_TEST_SIGNAL_DRY_RUN=1 FM_TEST_SIGNAL_LOG="$TMP_ROOT/no-suite.log" \
+    "$GUARD" --send no-suite-case TERM --members "$child" > "$out" || rc=$?
+  expect_code 1 "$rc" "--members with FM_TEST_SUITE_PID empty"
+  assert_grep "refused: FM_TEST_SUITE_PID is empty" "$out" "--members was not refused for the empty suite pid"
+  case "$(fm_test_process_state "$child")" in
+    '' | Z*) fail "the child ended before its release" ;;
+  esac
+  : > "$release"
+  wait "$child" 2>/dev/null || true
+  pass "--send refuses every target when FM_TEST_SUITE_PID is empty"
+}
+
+# fm_test_reap_watchers drives a product stop only when the tracked state
+# directory, not just the lock's home, is under a run root. The lock names no
+# live pid, so the stop would find nothing to signal even if it were driven.
+test_watcher_reap_needs_the_state_dir_under_a_run_root() {
+  local dir="$TMP_ROOT/watcher-reap" state log
+  state="$dir/outside/state"
+  log="$dir/reap.log"
+  mkdir -p "$dir/run-root/home" "$state/.watch.lock"
+  printf 'none\n' > "$state/.watch.lock/pid"
+  printf '%s\n' "$dir/run-root/home" > "$state/.watch.lock/fm-home"
+  printf '%s\n' "$state" > "$dir/watchers"
+  printf '%s\n' "$dir/run-root" > "$dir/roots"
+  (
+    FM_TEST_WATCHER_REGISTRY="$dir/watchers"
+    FM_TEST_CLEANUP_REGISTRY="$dir/roots"
+    FM_TEST_SIGNAL_DRY_RUN=1
+    FM_TEST_SIGNAL_LOG=$log
+    fm_test_reap_watchers
+  )
+  assert_grep "product stop not called: fm-watch-arm.sh --stop for state $state, which is not under this run's temp roots" \
+    "$log" "the reap did not refuse a tracked state directory outside the run roots"
+  assert_no_grep "product stop: fm-watch-arm.sh --stop" "$log" "the reap drove a stop for a state directory outside the run roots"
+  pass "the watcher reap stops nothing for a tracked state directory outside the run roots"
+}
+
 fm_test_run \
   test_forms_without_one_explicit_pid_are_refused \
   test_identity_needs_evidence_of_this_run \
   test_groups_and_members_are_judged_by_their_leader_and_members \
   test_env_path_reads_only_a_listed_variable_under_a_run_root \
   test_send_logs_only_in_log_only_mode \
+  test_send_logs_outside_log_only_mode \
+  test_send_refuses_every_target_without_the_suite_pid \
+  test_watcher_reap_needs_the_state_dir_under_a_run_root \
   test_the_suite_its_parent_and_the_user_manager_are_refused \
   test_only_a_recorded_child_of_the_signalling_shell_is_accepted \
   test_the_log_shows_raw_arguments_target_and_ancestry \

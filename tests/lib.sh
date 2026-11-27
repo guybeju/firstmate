@@ -317,9 +317,10 @@ fm_test_reap_procevent_homes() {
 # tracked state directory: it reads the home that watcher recorded in its own
 # lock and drives the arm's home-scoped --stop against it, which identity-checks
 # the pid before signalling, so it never matches on a script or process name and
-# never reaches another home's watcher. A tracked state directory a test already
-# deleted has no lock and is skipped; that watcher exits on its own home-gone
-# check within one poll.
+# never reaches another home's watcher. The stop is driven only when both the
+# lock's home and the tracked state directory are under this run's temp roots.
+# A tracked state directory a test already deleted has no lock and is skipped;
+# that watcher exits on its own home-gone check within one poll.
 
 FM_TEST_WATCHER_REGISTRY=$(mktemp "$FM_TEST_TMPDIR/.fm-test-watcher.$$.XXXXXX") || return 1
 
@@ -346,6 +347,10 @@ fm_test_reap_watchers() {
     lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
     if ! fm_test_under_run_root "$lock_home"; then
       fm_test_signal_note "source=fm_test_cleanup | product stop not called: fm-watch-arm.sh --stop for home $lock_home, which is not under this run's temp roots | lock pid=${lock_pid:--}"
+      continue
+    fi
+    if ! fm_test_under_run_root "$state"; then
+      fm_test_signal_note "source=fm_test_cleanup | product stop not called: fm-watch-arm.sh --stop for state $state, which is not under this run's temp roots | home=$lock_home lock pid=${lock_pid:--}"
       continue
     fi
     fm_test_signal_note "source=fm_test_cleanup | product stop: fm-watch-arm.sh --stop | home=$lock_home state=$state lock pid=${lock_pid:--} command=$(ps -ww -o args= -p "${lock_pid:-0}" 2>/dev/null || true)"
@@ -842,7 +847,8 @@ fm_test_record_child() {  # <pid that $! just gave>
 # checks and sends at once, so it verifies the target live (fm_test_crash_at
 # is the --below caller). Anything the guard refuses fails the test unsent
 # (with --members, any refused member fails it, and accepted members are still
-# signalled); in log-only mode nothing is sent at all. Sets
+# signalled); in log-only mode nothing is sent at all, and a refusal is
+# printed to stderr instead of failing the test. Sets
 # FM_TEST_SIGNALLED_PID to the pid or group leader signalled. A recorded child
 # this shell has not waited for cannot have been reused.
 fm_test_signal() {
@@ -861,7 +867,11 @@ fm_test_signal_try() {
   done
   FM_TEST_SIGNAL_VERDICT=$(FM_TEST_RECORDED_CHILDREN=$FM_TEST_RECORDED_CHILDREN \
     "$ROOT/tests/signal-guard.sh" --send "$source" "$@") || rc=$?
-  ! fm_test_signal_dry_run || return 0
+  if fm_test_signal_dry_run; then
+    [ "$rc" -eq 0 ] ||
+      printf '# log-only: the signal guard refused, the case is not failed: %s\n' "$FM_TEST_SIGNAL_VERDICT" >&2
+    return 0
+  fi
   accepted=${FM_TEST_SIGNAL_VERDICT%%$'\n'*}
   case "$accepted" in
     "accepted group "*) accepted=${accepted#accepted group } ;;
