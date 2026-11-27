@@ -936,15 +936,15 @@ test_herdr_install_requires_manual_action() {
   pass "bootstrap: Herdr manual-install guidance is never executed as a shell command"
 }
 
-# The pinned lint tools are on the tool list, so `install` names their listed
+# The pinned tools are on the tool list, so `install` names their listed
 # line instead of calling them unknown. The run starts in an empty directory
 # so the relative installer path in that line cannot resolve to a real script.
-test_lint_tools_have_listed_install_lines() {
+test_pinned_tools_have_listed_install_lines() {
   local case_dir tool out first
-  case_dir="$TMP_ROOT/lint-tools-install-lines"
+  case_dir="$TMP_ROOT/pinned-tools-install-lines"
   mkdir -p "$case_dir/home/config" "$case_dir/cwd"
   printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
-  for tool in shellcheck actionlint; do
+  for tool in shellcheck actionlint osv-scanner; do
     out=$(cd "$case_dir/cwd" && FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
       "$ROOT/bin/fm-bootstrap.sh" install "$tool" 2>&1)
     first=${out%%$'\n'*}
@@ -952,24 +952,24 @@ test_lint_tools_have_listed_install_lines() {
       || fail "install $tool should name its listed install line, got: $out"
     assert_not_contains "$out" "unknown tool" "install $tool should be on the tool list"
   done
-  pass "bootstrap: pinned ShellCheck and actionlint have listed install lines"
+  pass "bootstrap: pinned ShellCheck, actionlint, and osv-scanner have listed install lines"
 }
 
-# A lint tool is not needed by every home: being on the tool list must not make
-# startup report either pinned lint tool missing or outdated.
-test_lint_tools_are_not_required_at_startup() {
+# A pinned tool is not needed by every home: being on the tool list must not make
+# startup report any pinned tool missing or outdated.
+test_pinned_tools_are_not_required_at_startup() {
   local case_dir fakebin out tool
-  case_dir="$TMP_ROOT/lint-tools-not-required"
+  case_dir="$TMP_ROOT/pinned-tools-not-required"
   mkdir -p "$case_dir/home/config"
   printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
   fakebin=$(make_fake_toolchain "$case_dir")
-  out=$(PATH="$fakebin:$(fm_test_base_path_sans "$BASE_PATH" shellcheck actionlint)" \
+  out=$(PATH="$fakebin:$(fm_test_base_path_sans "$BASE_PATH" shellcheck actionlint osv-scanner)" \
     FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
-  for tool in shellcheck actionlint; do
+  for tool in shellcheck actionlint osv-scanner; do
     assert_not_contains "$out" "$tool" "startup must not report $tool, which not every home needs"
   done
-  pass "bootstrap: startup never reports the pinned lint tools missing"
+  pass "bootstrap: startup never reports the pinned tools missing"
 }
 
 test_cmux_bundled_cli_satisfies_dependency() {
@@ -1969,8 +1969,8 @@ test_orca_backend_gates_orca_tool_only_when_selected
 test_session_provider_backends_do_not_require_tmux
 test_session_provider_backends_gate_own_cli_not_tmux
 test_herdr_install_requires_manual_action
-test_lint_tools_have_listed_install_lines
-test_lint_tools_are_not_required_at_startup
+test_pinned_tools_have_listed_install_lines
+test_pinned_tools_are_not_required_at_startup
 test_cmux_bundled_cli_satisfies_dependency
 test_unknown_backend_reports_invalid_configuration
 test_json_backends_require_jq_not_tmux
