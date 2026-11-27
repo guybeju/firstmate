@@ -214,8 +214,8 @@ bin/fm-board.sh install-rules
 規則是 first mate 的，所以安裝的指令與範本（`fm-board/rules/`）都在 first mate 這一側。
 它們在 guybeju/myshape 的 `adapters/firstmate/fm-board/rules/` 寫，跟著釘住的副本進來。
 
-**確認**：輸出有 `captain.md：新增（v12）` 與 `captain-shared.md：新增（v5）`（已經裝過的是 `已更新` 或 `已是最新`）。
-之後 `bin/fm-board.sh rules` 印出 `規則：captain.md 和範本相同（v12）；captain-shared.md 和範本相同（v5）`。
+**確認**：輸出有 `captain.md：新增（v13）` 與 `captain-shared.md：新增（v5）`（已經裝過的是 `已更新` 或 `已是最新`）。
+之後 `bin/fm-board.sh rules` 印出 `規則：captain.md 和範本相同（v13）；captain-shared.md 和範本相同（v5）`。
 裝完重開主 first mate 的 session：規則在下一次 session 開始或下一次壓縮之後才生效（`install-rules` 自己也會印這一句）。
 重開的 session 的啟動摘要裡會有第 5 步說的那一行；服務一直開著時是 `看板服務：在跑`。
 
