@@ -1,11 +1,14 @@
 import { h } from "./dom.js";
-import { agentRow, closedFold, closedTodoEntries, holdCard, inFront, liveTodos, todoCard, needsCaptain, queuedRow, questionRow, summaryRow, topicLink, topicName, turnFold, untaggedQueued, } from "./parts.js";
-import { BAD_WRITES, LIGHT_LABEL, QUEUES, QUEUE_LABEL, agentName } from "./state.js";
+import { agentRow, closedFold, closedTodoEntries, fileMenu, holdCard, inFront, liveTodos, todoCard, needsCaptain, queuedRow, questionRow, summaryRow, topicLink, topicName, untaggedQueued, } from "./parts.js";
+import { BAD_WRITES, LIGHT_LABEL, QUEUES, QUEUE_LABEL } from "./state.js";
 import { dropHint } from "./drop.js";
 import { isShown, resolveFilter, shownTopics } from "./filter.js";
+import { cardOrder, sortCards } from "./sort.js";
 import { filterBar, mergeTagNote, topicChips } from "./tags.js";
 import { nowStrip, scheduleBar, scheduleColumn } from "./schedule-parts.js";
 import { scheduledTopics } from "./schedules.js";
+import { lifecycleSettings, queueCards, undelivered } from "./cards.js";
+import { usagePanel } from "./usage.js";
 function shownOf(page, view) {
     return shownTopics(view, resolveFilter(page.filter, view.hashtags.hashtags));
 }
@@ -44,38 +47,49 @@ function queueTopics(view, queue, shown) {
     const scheduled = scheduledTopics(view.schedules);
     return view.queues[queue].filter((id) => isShown(shown, id) && !scheduled.has(id));
 }
-/** A queue's box; `data-filtered` says whether a filter is on, which the drop reads. */
-function queueBox(view, actions, queue, shown) {
-    const listed = queueTopics(view, queue, shown);
+/**
+ * A queue's box, its cards in `order`. `data-filtered` says whether a filter
+ * is on and `data-by-time` whether the cards are listed by creation time,
+ * which the drop reads.
+ */
+function queueBox(view, actions, queue, shown, order) {
+    const createdAt = (id) => view.topics[id]?.created_at ?? "";
+    const listed = sortCards(queueTopics(view, queue, shown), order, createdAt);
     const unlisted = view.queues[queue].length - listed.length;
-    return h("div", { class: "queue", "data-queue": queue, "data-filtered": String(shown !== null) }, h("h3", {}, queue === "later" ? "待辦（不自動開工）" : QUEUE_LABEL[queue]), h("div", { class: "list" }, listed.map((id) => topicCard(view, actions, id, shown)), h("div", { class: "empty" }, dropHint(listed.length, unlisted, shown !== null))));
+    const byTime = order !== "priority";
+    return h("div", {
+        class: "queue",
+        "data-queue": queue,
+        "data-filtered": String(shown !== null),
+        "data-by-time": String(byTime),
+    }, h("h3", {}, queue === "later" ? "待辦（不自動開工）" : QUEUE_LABEL[queue]), h("div", { class: "list" }, listed.map((id) => topicCard(view, actions, id, shown)), h("div", { class: "empty" }, dropHint(listed.length, unlisted, shown !== null, byTime))));
 }
 function archivedBox(view, actions, shown) {
     const archived = Object.entries(view.topics).filter(([id, topic]) => topic.status === "archived" && isShown(shown, id));
     return h("details", { "data-key": "archived" }, h("summary", {}, `已封存 ${archived.length}`), archived.map(([id, topic]) => h("div", { class: "card" }, h("button", { class: "link", onclick: () => actions.open(id) }, topic.name), h("div", { class: "goal" }, topic.goal), h("div", { class: "btns" }, h("button", { onclick: () => actions.topic("reopen", { id }) }, "重開（放「一般」）")))));
 }
+const ORDER_LABEL = {
+    priority: "照優先順序",
+    newest: "新的在上",
+    oldest: "舊的在上",
+};
+/** The three orders the queues' cards can be listed in, and what the chosen one means. */
+function orderButtons(page, view, actions, order) {
+    const saved = view.hashtags.views.find((entry) => entry.id === page.filter.view);
+    return h("div", { class: "order" }, h("div", { class: "btns" }, h("span", { class: "note" }, "排列："), Object.keys(ORDER_LABEL).map((entry) => h("button", { class: entry === order ? "primary" : "", onclick: () => actions.setOrder(entry) }, ORDER_LABEL[entry]))), order === "priority"
+        ? null
+        : h("p", { class: "note" }, "照建立時間排列只改顯示的順序，優先順序與派工不變；拖到別的佇列會排在那裡的最後。"), saved === undefined ? null : h("p", { class: "note" }, `排列記在視圖「${saved.name}」`));
+}
 export function sidebar(page, view, actions) {
     const shown = shownOf(page, view);
-    return h("div", { id: "sidebar" }, h("h2", {}, "優先順序"), nowStrip(page, view, actions), QUEUES.map((queue) => queueBox(view, actions, queue, shown)), scheduleColumn(view, actions, (id) => isShown(shown, id) && view.topics[id]?.status !== "archived"), archivedBox(view, actions, shown));
-}
-function closeProposals(view, actions, shown) {
-    return Object.entries(view.topics)
-        .filter(([id, topic]) => topic.close_reason !== null && isShown(shown, id))
-        .map(([id, topic]) => h("div", { class: "card" }, h("div", { class: "meta" }, topicLink(view, id, actions), h("span", { class: "pill warn" }, "提議關閉")), h("div", {}, `${agentName()} 認為這個議題可以關了：${topic.close_reason ?? ""}`), h("div", { class: "btns" }, h("button", { onclick: () => actions.topic("archive", { id }) }, "關閉並封存"), h("button", { onclick: () => actions.topic("keep", { id }) }, "先不關"))));
+    const order = cardOrder(page, view.hashtags.views);
+    return h("div", { id: "sidebar" }, usagePanel(view.metrics, Date.now()), h("h2", {}, "優先順序"), orderButtons(page, view, actions, order), nowStrip(page, view, actions), QUEUES.map((queue) => queueBox(view, actions, queue, shown, order)), scheduleColumn(view, actions, (id) => isShown(shown, id) && view.topics[id]?.status !== "archived"), archivedBox(view, actions, shown));
 }
 function section(title, ...children) {
     const content = children
         .flat(4)
         .filter((child) => child !== null && child !== undefined && child !== false);
     return h("section", {}, h("h2", {}, title), content.length > 0 ? content : h("p", { class: "note" }, "目前沒有。"));
-}
-function tagMenu(view, actions, agent) {
-    const choose = (event) => {
-        const topic = event.target.value;
-        if (topic !== "")
-            actions.tag(agent.home, agent.task, topic);
-    };
-    return h("select", { class: "auto", onchange: choose }, h("option", { value: "" }, "歸併到…"), QUEUES.flatMap((queue) => view.queues[queue]).map((id) => h("option", { value: id }, topicName(view, id))));
 }
 const UNSORTED_REASON = {
     "no-tag": "沒有標記",
@@ -101,7 +115,7 @@ export function mergeConfirm(page, view, actions, key) {
     return h("div", { class: "confirm" }, `併入之後不能拆開，「${from}」的 agent 與更新都會顯示在「${into}」底下。`, mergeTagNote(view, String(pending.body["from"]), String(pending.body["into"])), h("div", { class: "btns" }, h("button", { class: "danger", onclick: () => actions.confirm(key) }, `併入「${into}」`), h("button", { onclick: () => actions.cancel(key) }, "取消")));
 }
 function unsortedRow(view, actions, agent) {
-    return h("div", { class: "row" }, h("span", { class: "grow" }, h("b", {}, agent.task), " ", h("span", { class: "note" }, UNSORTED_REASON[agent.unsorted_reason ?? ""] ?? "")), h("span", { class: "pill" }, agent.home), tagMenu(view, actions, agent));
+    return h("div", { class: "row" }, h("span", { class: "grow" }, h("b", {}, agent.task), " ", h("span", { class: "note" }, UNSORTED_REASON[agent.unsorted_reason ?? ""] ?? "")), h("span", { class: "pill" }, agent.home), fileMenu(view, actions, agent, "歸併到…"));
 }
 /** The agents with no valid topic, split into running and finished. */
 function untaggedAgents(view) {
@@ -156,13 +170,13 @@ export function home(page, view, actions) {
     return [
         filterBar(page, view, actions, shown),
         scheduleBar(page, view, actions),
+        lifecycleSettings(page, actions, view),
         todos.length === 0
             ? null
             : section("要你動手", todos.map((todo) => todoCard(page, view, actions, todo, true))),
         shown === null ? noTopic(view) : null,
-        section("等你決定", closeProposals(view, actions, shown), mine(view.holds)
-            .filter(inFront)
-            .map((hold) => holdCard(page, view, actions, hold, true)), turnFold(mine(view.holds))),
+        section("等你決定", queueCards(page, view, actions, (topic) => isShown(shown, topic))),
+        undelivered(page, actions),
         section("最近的結果", mine(view.summaries)
             .slice(0, RECENT_SUMMARIES)
             .map((summary) => summaryRow(view, actions, summary, true))),

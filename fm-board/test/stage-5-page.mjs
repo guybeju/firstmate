@@ -47,6 +47,17 @@ export default async function run(page) {
   }
   await page.waitFor("the milestone summary", has("PR 開好了"));
 
+  // The 用量 panel shows the Claude usage the stand-in quota-axi reported, measured long
+  // ago: the numbers are there, and marked as no longer current.
+  const usage = `(document.querySelector("#sidebar .usage")?.innerText ?? "")`;
+  await page.waitFor("the 用量 panel", `${usage}.includes("用量") && ${usage}.includes("5 小時") && ${usage}.includes("37%")`);
+  for (const text of ["7 天", "12.5%", "已經過時", "後重置"]) {
+    if (!(await page.evaluate(`${usage}.includes(${JSON.stringify(text)})`)))
+      throw new Error(`the 用量 panel must show ${text}`);
+  }
+  if ((await page.evaluate(`document.querySelectorAll("#sidebar .usage-item.stale").length`)) !== 2)
+    throw new Error("both of the stand-in's metrics are old and must read as stale");
+
   // Queued work nobody tagged with a topic is listed under 未分類, folded. A captain hold
   // without a topic already has its card, so it is not listed a second time.
   const untagged = `document.querySelector('details[data-key="queued:untagged"]')`;
@@ -193,7 +204,7 @@ export default async function run(page) {
   // first mate puts the answered call off until December, so the loose call's turn comes.
   const backlog = `${process.env.TB_MAIN}/data/backlog.md`;
   const held = "(hold: 要合併嗎？ 選項：合併 | 先不要) (hold-kind: captain)";
-  fs.writeFileSync(backlog, fs.readFileSync(backlog, "utf8").replace(held, `${held} (hold-until: 2026-12-01)`));
+  fs.writeFileSync(backlog, fs.readFileSync(backlog, "utf8").replace(held, `${held} (hold-until: 2099-12-01)`));
   await page.waitFor("the loose call's turn", has("這個要不要做？"), 15000);
   if (await page.evaluate(has("個決定排隊，輪到時才顯示"))) throw new Error("no decision waits once the loose call is in front");
   // A decision that records no outcome: a typed answer says it will be released by default.
@@ -257,6 +268,24 @@ export default async function run(page) {
     await page.evaluate(`(() => { const d = ${drag(name, queue, onto, half)}; d.fire(d.onto, "drop", 0); d.fire(d.card, "dragend", 0); return true; })()`);
     await page.waitFor(`a drag ${what}: ${expected}`, `${queueOrder} === ${JSON.stringify(expected)}`);
   }
+
+  // Listed by creation time (myshape/spec/card-sort.markdown) only the display changes: a drop
+  // in the card's own queue sends nothing, a drop in another queue lands last there. Back under
+  // 照優先順序 the queues show what the board kept; a last drag restores the walk's order.
+  const dropOn = (name, queue, onto, half) => `(() => { const d = ${drag(name, queue, onto, half)}; d.fire(d.onto, "drop", 0); d.fire(d.card, "dragend", 0); return true; })()`;
+  // The one-at-a-time cards keep their own order rules: 等你決定 and 要你動手 read the same.
+  const oneAtATime = `JSON.stringify(["等你決定", "要你動手"].map((title) => [...document.querySelectorAll("section")].find((box) => box.querySelector("h2")?.textContent === title)?.innerText ?? ""))`;
+  const before = await page.evaluate(oneAtATime);
+  await page.click("#sidebar .order button", "新的在上");
+  await page.waitFor("the cards listed by creation time", `document.querySelector('.queue[data-queue="normal"]').dataset.byTime === "true" && document.querySelector('.queue[data-queue="high"] .empty').textContent.startsWith("照建立時間排列中：拖到別的佇列會排在那裡的最後") && ${has("照建立時間排列只改顯示的順序")}`);
+  if ((await page.evaluate(oneAtATime)) !== before) throw new Error("the card order must not touch 等你決定 or 要你動手");
+  await page.evaluate(dropOn("Idea", "normal", "Billing", "upper"));
+  await page.evaluate(dropOn("Login", "normal", "Billing", "upper"));
+  await page.waitFor("the drop into another queue", queueHas("normal", "Login"));
+  await page.click("#sidebar .order button", "照優先順序");
+  await page.waitFor("the priority the two drops left", `${queueOrder} === "Parked|Billing,Idea,Login|"`);
+  await page.evaluate(dropOn("Login", "high", "Parked", "lower"));
+  await page.waitFor("the walk's order back", `${queueOrder} === "Parked,Login|Billing,Idea|"`);
 
   // The topic page: rename, message firstmate, direct message.
   // Work that is queued but not dispatched yet: counted on the card, listed on the topic page.

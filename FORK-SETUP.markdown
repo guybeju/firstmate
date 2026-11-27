@@ -64,6 +64,8 @@ firstmate 本身的需求只在上游的文件寫一次，照那裡準備：
   看板只跑編譯好的 `dist/`，不需要 TypeScript 支援。
 - 開看板的瀏覽器要在主 home 這台機器上：服務只綁 `127.0.0.1`（[contracts](myshape/spec/contracts.markdown) 第 6.2 節）。
 - 遠端 second mate 的機器：只要 `jq`，不需要 `node`（第 8 節）。
+- `quota-axi` 對看板是選用的：主 home 沒有它時，「用量」面板寫「這台機器沒有 quota-axi，看不到 Claude 的用量。」，其他照常（[adapter](fm-board/spec/adapter.markdown) 第 3.1 節）。
+  看板只顯示這台機器預設的那一個 Claude 帳號：在 shell 設的 `QUOTA_AXI_CLAUDE_PROFILES` 傳不到看板的 feed，遠端 second mate 那台的帳號也不顯示（[狀態數字](myshape/spec/status-metrics.markdown)「已知的限制」）。
 - `pnpm` 只有在 guybeju/myshape 開發看板時才要；`firefox` 只有跑 first mate 這一側的頁面測試時才要（[這一側的 handover](fm-board/spec/handover.markdown) 第 1 節）。裝起來用兩個都不需要。
 
 **確認**：`node --version` 印出 22 以上，`jq --version` 有輸出；firstmate 自己的工具在第 4 步由啟動檢查確認。
@@ -167,7 +169,9 @@ bin/myshape.sh open
 它在需要時啟動看板服務，印出 `http://127.0.0.1:<埠>/#t=<token>`。
 這個 home 第一次 `open` 之前，看板其他的指令（`create`、`list`、`status` 等）都會回 1，說這裡沒有看板、要先跑 `open`：服務第一次啟動時寫下的 `state/myshape/token` 是看板認這個 home 的依據。
 在這台機器的瀏覽器打開那個網址，停留一分鐘以上。
-服務只在最近 2 分鐘內有人要過看板狀態時才輪詢各個 home（[stage-3-data](myshape/spec/stage-3-data.markdown)「輪詢」），頁面在前景時每 5 秒要一次（contracts 第 10 節）。
+服務在最近 2 分鐘內有人要過看板狀態時照各個 home 的間隔輪詢（[stage-3-data](myshape/spec/stage-3-data.markdown)「輪詢」），頁面在前景時每 5 秒要一次（contracts 第 10 節）。
+沒有人看時改成慢慢讀：每個 home 上一次讀完後 900 秒、遠端的 3600 秒，讓卡的期限照常判斷。
+頁面首頁側欄的最上面是「用量」面板：這台機器 Claude 帳號的用量與重置時間（[狀態數字](myshape/spec/status-metrics.markdown)）。
 然後：
 
 ```
@@ -183,6 +187,10 @@ bin/myshape.sh status
 剛打開時 `home main：` 那一行可能是 `還沒讀到`，等一下再看。
 除了頁面上的動作，看板也照自己的排程時鐘送排程的通知（`schedule.upcoming`、`schedule.due`、`schedule.missed`），不用人按：服務在跑時每 30 秒檢查一次，服務啟動時也檢查一次（[contracts](myshape/spec/contracts.markdown) 第 3.9 節）。
 所以服務停過之後再啟動時，還在時段裡的場次照常開、通知寫明晚了多久，時段整個過去了的照排程設定的 `missed` 處理，預設是每個排程送一則 `schedule.missed`。
+看板也替每張卡計時（[lifecycle](myshape/spec/lifecycle.markdown)）：一張卡過了提醒期限還沒有人接手，看板送 first mate 一則提醒（`stall.nudge`）；過了交給使用者的期限，看板把它放到使用者面前，成為「沒人處理的議題」或「沒人接」卡。
+這兩種卡和 first mate 的提議關閉排在待決事項後面，同一條佇列一次一張，輪到時看板送一則 `decision.front` 通知；有議題的「沒人接」卡上的〔請 first mate 處理〕送 first mate 一則訊息。
+每個期限都在首頁的「期限設定」調；期限設定與每張卡開始計時的時間存在 `data/myshape/lifecycle.json`，服務重啟不歸零。
+看板只把卡放到使用者面前，從不自己派工、回答或關閉待決事項、自動封存議題（lifecycle 的不變式 I）。
 
 服務第一次成功啟動之後，主 first mate 每次開 session 都會檢查它：沒在跑就啟動，並在啟動摘要 fleet state 那一段的最後印一行 `看板服務：在跑`、`看板服務：原本沒在跑，已啟動`、`看板服務：原本沒有回應，已重新啟動`、`看板服務：已接上 firstmate，換上新的看板` 或 `看板服務：無法啟動：<原因>`（[`bin/fm-topic-session-start.sh`](bin/fm-topic-session-start.sh)）。
 少了 `config/myshape-aggregator.json` 時它先寫好（同 `bin/fm-board.sh bind`），在跑的看板就換掉，印的是 `看板服務：已接上 firstmate，換上新的看板`。
@@ -214,8 +222,8 @@ bin/fm-board.sh install-rules
 規則是 first mate 的，所以安裝的指令與範本（`fm-board/rules/`）都在 first mate 這一側。
 它們在 guybeju/myshape 的 `adapters/firstmate/fm-board/rules/` 寫，跟著釘住的副本進來。
 
-**確認**：輸出有 `captain.md：新增（v13）` 與 `captain-shared.md：新增（v5）`（已經裝過的是 `已更新` 或 `已是最新`）。
-之後 `bin/fm-board.sh rules` 印出 `規則：captain.md 和範本相同（v13）；captain-shared.md 和範本相同（v5）`。
+**確認**：輸出有 `captain.md：新增（v14）` 與 `captain-shared.md：新增（v5）`（已經裝過的是 `已更新` 或 `已是最新`）。
+之後 `bin/fm-board.sh rules` 印出 `規則：captain.md 和範本相同（v14）；captain-shared.md 和範本相同（v5）`。
 裝完重開主 first mate 的 session：規則在下一次 session 開始或下一次壓縮之後才生效（`install-rules` 自己也會印這一句）。
 重開的 session 的啟動摘要裡會有第 5 步說的那一行；服務一直開著時是 `看板服務：在跑`。
 
@@ -274,6 +282,8 @@ bin/fm-board.sh install-rules
   不想讓看板執行任何程式時，在 `config/myshape-aggregator.json` 放一個空檔（`: > config/myshape-aggregator.json`）再跑 `bin/myshape.sh restart`：看板照常顯示與存檔，要送出的等著；只刪掉那個檔不夠，下一次開 session 或下一個 `bin/fm-board.sh tag`、`split` 會把它寫回來，而它們從不換掉已經在那裡的檔。要接回去，刪掉空檔、跑 `bin/fm-board.sh bind`，再 restart，等著的各送一次（排程的通知過了期限的不送，頁面的寫入歷史記成「過期沒送」）。
   退回看板經設定檔接上 aggregator 之前的程式時，看板又只執行寫死的 `bin/fm-board.sh`；`config/myshape-aggregator.json` 與 `data/myshape/confirmations.json` 留著，舊版不讀。
   退回看板有 hashtag 之前的程式時，舊版不讀 `data/myshape/hashtags.json`，所以什麼都不會丟；檔案留著，回到新版時 hashtag 又會出現。
+  退回視圖沒有 `order` 之前的版本時，舊版下一次存 `hashtags.json` 會丟掉每個視圖的排列，回到新版時那些視圖是照優先順序；頁面記在 `localStorage` 的不受影響。
+  退回看板替卡計時之前的程式時，舊版不讀 `data/myshape/lifecycle.json`；檔案留著，回到新版時照檔裡的接著算（[lifecycle](myshape/spec/lifecycle.markdown) 第 6 節）。
   退回看板有排程之前的程式時，舊版不讀 `data/myshape/schedules.json`，有排程的議題在那裡只是「待辦」裡的一般議題，所以什麼都不會丟；檔案留著，回到新版時排程又會出現。
   退回看板有排程的時鐘之前的程式時，時鐘跟著停了，看板不再自己送排程的通知；寫入歷史裡記成 `expired`（過期沒送）的那幾筆，舊版不認得，頁面上顯示原文 `expired`，也不會接著送。
   回到這一版時，時鐘從上一次檢查到的那一刻往後看，每個排程只看最近的那一場：時段整個過去了的照 `missed` 設定處理，預設是每個排程送一則 `schedule.missed`（[contracts](myshape/spec/contracts.markdown) 第 3.9 節）。
