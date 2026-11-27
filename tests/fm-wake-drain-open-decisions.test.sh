@@ -215,6 +215,90 @@ test_over_long_decision_note_is_capped_with_a_marker() {
   pass "an over-long open decision is cut to its per-item budget with the shared truncation marker"
 }
 
+# --- WAITS ON FIRSTMATE (bin/fm-wait-relay.sh list, main home only) --------
+
+wait_home() { # <case-name>; prints the home, whose backlog tasks-axi seeds
+  local dir
+  dir=$(make_case "$1")
+  mkdir -p "$dir/data"
+  fm_test_tasks_toml "$dir/.tasks.toml"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$dir/data/backlog.md"
+  printf '%s\n' "$dir"
+}
+
+home_axi() { # <home> <tasks-axi args...>
+  local home=$1
+  shift
+  (cd "$home" && tasks-axi "$@" --file "$home/data/backlog.md") >/dev/null 2>&1 \
+    || fail "tasks-axi $* failed in $home"
+}
+
+drain_home() { # <home> <out>
+  FM_HOME="$1" FM_STATE_OVERRIDE="$1/state" "$DRAIN" > "$2" || fail "drain failed in $1"
+}
+
+test_waits_on_firstmate_lists_a_main_home_wait() {
+  local dir out
+  command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found (waits section)"; return 0; }
+  dir=$(wait_home waits-main)
+  out="$dir/drain.out"
+  home_axi "$dir" add later-maybe "Revisit the probe" --repo x
+  home_axi "$dir" hold later-maybe --reason "decide after the next release" --kind future
+  home_axi "$dir" add captain-call "For the captain" --repo x
+  home_axi "$dir" hold captain-call --reason "which one" --kind captain
+  drain_home "$dir" "$out"
+  grep -Fx 'WAITS ON FIRSTMATE (backlog rows held for someone other than the captain, with nobody else to raise them):' "$out" >/dev/null \
+    || fail "a main-home wait printed no WAITS ON FIRSTMATE section, even with no status log: $(cat "$out")"
+  grep -Fx 'later-maybe (future, queued): Revisit the probe: decide after the next release' "$out" >/dev/null \
+    || fail "the wait row lost its id, kind, state, title or reason: $(cat "$out")"
+  if grep -F 'captain-call' "$out" >/dev/null; then
+    fail "a captain hold was listed as a wait on firstmate"
+  fi
+  grep -F 'WAITS ON FIRSTMATE: give each one disposition' "$out" >/dev/null || fail "the section has no disposition hint"
+  pass "WAITS ON FIRSTMATE lists a main home's own unowned wait, independent of status logs"
+}
+
+test_waits_on_firstmate_is_silent_without_waits() {
+  local dir out
+  command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found (waits section)"; return 0; }
+  dir=$(wait_home waits-none)
+  out="$dir/drain.out"
+  home_axi "$dir" add plain "Ordinary queued work" --repo x
+  drain_home "$dir" "$out"
+  if grep -F 'WAITS ON FIRSTMATE' "$out" >/dev/null; then
+    fail "the waits section printed with no wait: $(cat "$out")"
+  fi
+  printf 'mate\n' > "$dir/.fm-secondmate-home"
+  home_axi "$dir" hold plain --reason "for the parent" --kind parked
+  drain_home "$dir" "$out"
+  if grep -F 'WAITS ON FIRSTMATE' "$out" >/dev/null; then
+    fail "a secondmate home printed the main-home waits section"
+  fi
+  pass "WAITS ON FIRSTMATE is silent with no wait and in a secondmate home"
+}
+
+test_waits_on_firstmate_respects_the_byte_cap() {
+  local dir out i long shown
+  command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found (waits section)"; return 0; }
+  dir=$(wait_home waits-cap)
+  out="$dir/drain.out"
+  long=$(printf 'x%.0s' $(seq 1 150))
+  i=1
+  while [ "$i" -le 14 ]; do
+    home_axi "$dir" add "wait-$i" "Title $i $long" --repo x
+    home_axi "$dir" hold "wait-$i" --reason "reason $i" --kind parked
+    i=$((i + 1))
+  done
+  drain_home "$dir" "$out"
+  shown=$(grep -c '^wait-[0-9]* (parked, queued): ' "$out" || true)
+  [ "$shown" -ge 1 ] && [ "$shown" -lt 14 ] || fail "the waits section did not stop at its byte cap (shown=$shown)"
+  grep -Fx "WAITS ON FIRSTMATE: $((14 - shown)) more omitted (byte cap)" "$out" >/dev/null \
+    || fail "the omitted waits were not counted: $(cat "$out")"
+  awk '/^wait-[0-9]* \(parked, queued\): / && length($0) > 219 { exit 1 }' "$out" \
+    || fail "a wait line exceeded its per-item cap"
+  pass "WAITS ON FIRSTMATE stays inside its per-item and section byte caps"
+}
+
 test_buried_decision_still_surfaces
 test_over_long_decision_note_is_capped_with_a_marker
 test_explicit_resolution_closes_it
@@ -224,3 +308,6 @@ test_no_open_decisions_prints_nothing
 test_open_decision_surfaces_even_with_an_unrelated_queued_wake
 test_buried_decision_surfaces_on_the_empty_queue_fast_path
 test_status_symlink_is_not_followed
+test_waits_on_firstmate_lists_a_main_home_wait
+test_waits_on_firstmate_is_silent_without_waits
+test_waits_on_firstmate_respects_the_byte_cap

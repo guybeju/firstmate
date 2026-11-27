@@ -604,3 +604,30 @@ test_recorded_line_stays_recorded_across_a_resolve() {
 }
 
 test_recorded_line_stays_recorded_across_a_resolve
+
+# A `wait-<id>-<n>` key is a backlog row a secondmate relays to its parent
+# (bin/fm-wait-relay.sh) while it keeps working, so like a relayed
+# `captain-hold-` key it is not one of the task's own open decisions. It stays
+# an ordinary key in the whole fold, which is what lets the parent's
+# `fm-send.sh --resolve-key wait-...` answer close it.
+test_wait_keys_are_not_the_tasks_own_decisions() {
+  local dir own expected
+  dir=$(case_dir wait-keys)
+  {
+    printf 'needs-decision [key=wait-route-me-1]: parked wait route-me: Finding only: awaiting routing\n'
+    printf 'needs-decision [key=captain-hold-api-1]: captain hold api: pick one\n'
+    printf 'needs-decision [key=own-question]: which shape\n'
+  } > "$dir/mate.status"
+  expected=$(printf 'wait-route-me-1\tneeds-decision\tparked wait route-me: Finding only: awaiting routing\ncaptain-hold-api-1\tneeds-decision\tcaptain hold api: pick one\nown-question\tneeds-decision\twhich shape\n')
+  assert_fold "$dir/mate.status" "$expected" "wait keys stay ordinary open decisions"
+  own=$(status_own_open_decisions "$dir/mate.status")
+  [ "$own" = "$(printf 'own-question\tneeds-decision\twhich shape')" ] \
+    || fail "a relayed wait key counted as the task's own decision: '$own'"
+  printf 'resolved [key=wait-route-me-1]: answered: close it\n' >> "$dir/mate.status"
+  case "$(status_open_decisions "$dir/mate.status")" in
+    *wait-route-me-1*) fail "an ordinary resolved line did not close the wait key" ;;
+  esac
+  pass "a relayed wait- key is excluded from the task's own open decisions and closes like any key"
+}
+
+test_wait_keys_are_not_the_tasks_own_decisions

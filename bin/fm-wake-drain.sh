@@ -586,6 +586,52 @@ EOF
   printf 'RECORD DIVERGENCE: reconcile each one - record the captain'"'"'s own words with bin/fm-captain-hold.sh answer <task> --decision-file <path>, or re-open the status decision when that resolution was not the captain'"'"'s word.\n' || return 1
 }
 
+# Print the WAITS ON FIRSTMATE section, main home only: every row of this
+# home's own backlog that waits on someone other than the captain with no
+# mechanism to raise it, which here means on this firstmate itself.
+# bin/fm-wait-relay.sh `list` owns that class; a secondmate home's waits reach
+# its parent through that script's `relay` instead, so a mate prints nothing.
+# Bounded and silent like RECORD DIVERGENCE above, and independent of the
+# status logs: it reads the backlog, so a home with no status log still shows
+# it. A failed read prints nothing and never changes the drain's exit status.
+print_waits_on_firstmate_section() {
+  local waits task state kind title reason line shown=0 omitted=0
+  local output='' used=0 bytes item_bytes=220 global_bytes=2000
+  # The backlog read must belong to the same home as these status logs, the
+  # pairing bin/fm-captain-hold.sh's `diverged` also requires.
+  [ "$STATE" = "$FM_HOME/state" ] || return 0
+  [ ! -e "$FM_HOME/.fm-secondmate-home" ] && [ ! -L "$FM_HOME/.fm-secondmate-home" ] || return 0
+  waits=$(fm_run_timed 20 env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    "$SCRIPT_DIR/fm-wait-relay.sh" list 2>/dev/null) || return 0
+  [ -n "$waits" ] || return 0
+
+  while IFS=$(printf '\t') read -r task state kind title reason; do
+    [ -n "$task" ] || continue
+    line="$task ($kind, $state): $title: $reason"
+    fm_cap_line_var "$line" $((item_bytes - 1))
+    line=$FM_LINE_CAP_LINE
+    bytes=$(( ${#line} + 1 ))
+    if [ $((used + bytes)) -gt "$global_bytes" ]; then
+      omitted=$((omitted + 1))
+      continue
+    fi
+    output="$output$line
+"
+    used=$((used + bytes))
+    shown=$((shown + 1))
+  done <<EOF
+$waits
+EOF
+
+  [ "$shown" -gt 0 ] || [ "$omitted" -gt 0 ] || return 0
+  printf 'WAITS ON FIRSTMATE (backlog rows held for someone other than the captain, with nobody else to raise them):\n' || return 1
+  printf '%s' "$output" || return 1
+  if [ "$omitted" -gt 0 ]; then
+    printf 'WAITS ON FIRSTMATE: %d more omitted (byte cap)\n' "$omitted" || return 1
+  fi
+  printf 'WAITS ON FIRSTMATE: give each one disposition - start it, hold it for the captain, date it, block it on same-home work, or close it with evidence (captain-hold-lifecycle "Waits on firstmate").\n' || return 1
+}
+
 # Print BRANCH OUTCOMES: what the supervision host's session recorded since
 # main last drained (docs/supervision-host.md "Captain outcomes"). Off Pi this
 # presentation is what the Pi branch's transcript entries are. It runs only for
@@ -819,6 +865,7 @@ print_status_presentation() {  # [<deduped-raw-rows>]
     fi
   fi
   if [ "$rc" -eq 0 ] && [ -n "$snapshot" ]; then print_status_sections "$snapshot" "$fully_presented" || rc=1; fi
+  [ "$rc" -ne 0 ] || print_waits_on_firstmate_section || rc=1
   fm_lock_release "$lock"
   return "$rc"
 }

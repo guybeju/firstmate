@@ -455,6 +455,8 @@ autoarm_alarm_banner() {
     need_desc="$FM_SUP_SOURCES process-event source(s) registered"
   elif [ "${FM_SUP_CHECKS:-0}" -gt 0 ]; then
     need_desc="$FM_SUP_CHECKS registered custom check(s)"
+  elif [ "${FM_SUP_WAITS:-0}" -gt 0 ]; then
+    need_desc="$FM_SUP_WAITS open wait(s) on the parent firstmate"
   else
     need_desc="X-mode relay polling active"
   fi

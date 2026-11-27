@@ -52,6 +52,15 @@
 #     this command exists to prevent. Lifecycle transitions refuse the same file.
 # Otherwise the exit status is tasks-axi's own, unless decoding a read fails;
 # in that case the decoder's nonzero status is returned.
+#
+# Record-time wait relay (fork-only): in a secondmate home (a
+# .fm-secondmate-home marker), a mutating command (add, create, start, done,
+# reopen, update, rm, block, unblock, hold, unhold, mv, prune) that tasks-axi
+# completed successfully is followed by bin/fm-wait-relay.sh relay, bounded
+# at 10 seconds, its output discarded and its failure ignored, so a row held
+# for someone other than the captain reaches the parent before this command
+# returns; the exit status stays tasks-axi's. Reads, `--help`, every other
+# command, and a main home keep the plain pass-through.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -143,6 +152,18 @@ else
   unset TASKS_AXI_FILE
 fi
 
+relays_waits() {  # <args...>: 0 when this run takes the record-time relay
+  local arg
+  [ -f "$FM_HOME/.fm-secondmate-home" ] || return 1
+  case "${1:-}" in
+    add|create|start|done|reopen|update|rm|block|unblock|hold|unhold|mv|prune) ;;
+    *) return 1 ;;
+  esac
+  for arg in "$@"; do
+    case "$arg" in -h|--help) return 1 ;; esac
+  done
+}
+
 cd "$FM_BACKLOG_AXI_ROOT" || fail "cannot enter the backlog root $FM_BACKLOG_AXI_ROOT"
 case "${1:-}" in
   show|view|list)
@@ -151,4 +172,15 @@ case "${1:-}" in
     exit $?
     ;;
 esac
-exec tasks-axi ${ARGS[@]+"${ARGS[@]}"}
+relays_waits "$@" || exec tasks-axi ${ARGS[@]+"${ARGS[@]}"}
+tasks_axi_status=0
+tasks-axi ${ARGS[@]+"${ARGS[@]}"} || tasks_axi_status=$?
+if [ "$tasks_axi_status" -eq 0 ]; then
+  # shellcheck source=bin/fm-timeout-lib.sh disable=SC1091
+  . "$SCRIPT_DIR/fm-timeout-lib.sh"
+  # From the caller's directory, so a relative FM_HOME or data override
+  # names the same home this command just wrote.
+  (cd "$CALLER_DIR" && fm_run_timed 10 env FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" \
+    "$SCRIPT_DIR/fm-wait-relay.sh" relay) >/dev/null 2>&1 || true
+fi
+exit "$tasks_axi_status"

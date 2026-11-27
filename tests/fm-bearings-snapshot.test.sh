@@ -857,6 +857,42 @@ EOF
   pass "parent evidence reconciliation distinguishes matching holds, blocks, and decisions"
 }
 
+test_relayed_wait_key_corroborates_against_mate_holds() {
+  local home mate fakebin canonical
+  home=$(make_home relayed-wait-evidence)
+  mate="$TMP_ROOT/relayed-wait-home"
+  make_valid_secondmate_home waiter "$mate"
+  append_secondmate_registry "$home" waiter "$mate"
+  fm_write_secondmate_meta "$home/state/waiter.meta" "$mate" "firstmate:fm-waiter" sample
+  # The lines bin/fm-wait-relay.sh publishes: one for a row the mate still
+  # holds, one for a row it no longer carries.
+  printf 'needs-decision [key=wait-route-me-2]: parked wait route-me: Finding only: awaiting routing\n' \
+    > "$home/state/waiter.status"
+  printf 'needs-decision [key=wait-gone-1]: parked wait gone: Already closed: absorbed\n' \
+    >> "$home/state/waiter.status"
+  cat > "$mate/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] route-me - Finding only (repo: sample) (kind: ship) (since 2026-07-11) (hold: awaiting routing) (hold-kind: parked)
+
+## Done
+EOF
+  fakebin=$(make_fakebin "$home")
+  refresh_local_secondmate_ledgers "$home"
+  canonical=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z \
+    "$ROOT/bin/fm-fleet-snapshot.sh" --json)
+  printf '%s' "$canonical" | jq -e '
+    .secondmate_current.records[] | select(.id == "waiter")
+    | (.parent_event.reconciliation.decisions
+        | any(.verb == "needs-decision" and .key == "wait-route-me-2" and .verdict == "corroborates"
+              and .compared_to == "holds" and .matched.id == "route-me"))
+      and (.parent_event.reconciliation.decisions
+        | any(.verb == "needs-decision" and .key == "wait-gone-1" and .verdict == "contradicts"))
+  ' >/dev/null || fail "a relayed wait key was not reconciled against the mate's holds: $canonical"
+  pass "a relayed wait-<id>-<n> key corroborates when the mate summary holds <id>"
+}
+
 test_nonprogressing_child_states_are_explicit() {
   local home mate fakebin canonical
   home=$(make_home child-state-classification)
@@ -3471,6 +3507,7 @@ fm_test_run \
   test_secondmate_and_child_bounds_are_disclosed \
   test_parent_decision_is_untrusted_contradiction_only \
   test_parent_evidence_reconciles_by_verb_and_key \
+  test_relayed_wait_key_corroborates_against_mate_holds \
   test_nonprogressing_child_states_are_explicit \
   test_registry_unavailability_and_bounds_are_explicit \
   test_current_landed_baseline_is_repeatable_and_prior_report_independent \

@@ -29,6 +29,10 @@ The command addresses the active home's configured data directory.
 As a result, the existing backlog remains the only durable work database, and a secondmate-owned captain call stays in the secondmate home.
 It never reads report bodies, review artifacts, terminal output, or chat.
 
+A row held with any other hold kind is not a captain call and is never a decision card: it waits on the home's supervising firstmate.
+`bin/fm-wait-relay.sh` owns that class of unowned waits and its mechanics: in a secondmate home it raises each such row on the parent channel as a `wait-<id>-<n>` decision, resolves the key with its reason once the row leaves the class, and raises it again each day while it stays, and in a main home `bin/fm-wake-drain.sh` shows the same rows as `WAITS ON FIRSTMATE`.
+Its key is an ordinary key, so the parent answers it with `bin/fm-send.sh --resolve-key`, and the relay confirms the disposition from the row's own state rather than from that answer.
+
 ### Subcommands at a glance
 
 | Subcommand | What it does | Details |
