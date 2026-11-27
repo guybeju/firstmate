@@ -9,7 +9,11 @@
 # to fix it; the merged wake itself is unchanged.
 # Refuses when bin/fm-dod-lib.sh will not accept the named head as reachable
 # outside the worker's disposable copy; in no-mistakes mode a forge-reported
-# head is that named head and is already stored on the forge. Registration is
+# head is that named head and is already stored on the forge. A direct-PR copy
+# whose HEAD descends from the forge's pushed PR head still arms, recording that
+# forge head (fm_dod_copy_head_builds_on_forge_head), so a commit held back in
+# the copy does not block the merge watch; the merge-time re-record below keeps
+# the plain gate, so a merge still waits for the copy's HEAD. Registration is
 # the gate caller that refreshes the copy's remote-tracking refs before it
 # refuses (FM_DOD_REFRESH_REMOTES), because a no-mistakes pipeline pushes from
 # its own gate clone and nothing else fetches that push into the copy; the
@@ -338,8 +342,11 @@ esac
 FM_DOD_REFRESH_REMOTES=1
 if { [ -z "$PR_HEAD" ] || ! fm_dod_forge_head_is_named_head "$MODE"; } \
   && ! GATE_REASON=$(fm_dod_accept_ship_done "${KIND:-ship}" "$MODE" "$WT" "$PROJECT" "$DONE_LINE" "$STATE" "$ID" "$META"); then
-  echo "error: $GATE_REASON" >&2
-  exit 1
+  if [ "${FM_PR_CHECK_MERGE:-}" = 1 ] \
+    || ! fm_dod_copy_head_builds_on_forge_head "$MODE" "$WT" "$PROJECT" "$PR_HEAD" "$META"; then
+    echo "error: $GATE_REASON" >&2
+    exit 1
+  fi
 fi
 
 META_TMP=

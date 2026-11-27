@@ -830,6 +830,48 @@ test_verified_merge_records_pr_and_head() {
   pass "fm-pr-merge records pr= and pr_head= for a verified GitHub merge"
 }
 
+# A direct-PR task armed on its pushed forge head while the copy holds a later
+# commit (bin/fm-pr-check.sh records that forge head) still cannot merge: the
+# merge-time re-record tests the copy's HEAD, so nothing reaches the forge. Once
+# that HEAD is pushed and is the PR's head, the merge binds exactly that head,
+# the one the re-record checked and recorded.
+test_direct_pr_merge_binds_the_checked_head() {
+  local case_dir pushed later rc
+  case_dir=$(make_case direct-pr-held-commit)
+  fm_write_meta "$case_dir/state/task-x1.meta" \
+    "window=fm-task-x1" "worktree=$case_dir/wt" "project=$case_dir/project" \
+    "kind=ship" "mode=direct-PR"
+  pushed=$(git -C "$case_dir/wt" rev-parse HEAD)
+  git -C "$case_dir/wt" commit -q --allow-empty -m 'part held back in the copy'
+  later=$(git -C "$case_dir/wt" rev-parse HEAD)
+  add_gh_mocks "$case_dir" "$pushed"
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/9 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "direct-pr-held-commit: the merge proceeded while the copy's HEAD was unpushed"
+  assert_grep "named head $later is unreachable outside the worker copy" "$case_dir/stderr" \
+    "direct-pr-held-commit: the refusal did not name the unpushed HEAD"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "direct-pr-held-commit: the forge merge ran while the copy's HEAD was unpushed"
+
+  git -C "$case_dir/wt" update-ref refs/remotes/origin/fm/task-x1 "$later"
+  write_github_live_json "$case_dir" "$later"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/9 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "direct-pr-held-commit: the merge of the pushed HEAD should succeed"
+  assert_grep "pr_head=$later" "$case_dir/state/task-x1.meta" \
+    "direct-pr-held-commit: the re-record did not record the checked head"
+  assert_logged_gh_merge "$case_dir" 9 example/repo --squash
+  pass "a direct-PR merge waits for the copy's HEAD and then binds the head it checked"
+}
+
 # The forge call is the point of no return: once gh-axi has merged, nothing this
 # script does afterwards can un-merge it. Proving pr= is already in the task's
 # meta at that moment is what makes a later failure unable to lose the merge.
@@ -3557,6 +3599,7 @@ test_github_closed_unqueued_outcome_omits_retry_flags
 test_github_agreeing_queue_rules_keep_retry_guidance
 test_github_conflicting_queue_rules_report_ambiguity
 test_verified_merge_records_pr_and_head
+test_direct_pr_merge_binds_the_checked_head
 test_pr_metadata_is_recorded_before_the_forge_call
 test_merge_failure_propagates_after_recording
 test_github_open_unqueued_outcome_refuses
