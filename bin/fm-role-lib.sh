@@ -33,9 +33,10 @@
 #
 # Self-repository detection compares the task's project dir against the running
 # code root by repository lineage, offline: a shared git common dir covers
-# linked worktrees and the code root itself, and a project holding a root commit
-# of the code root's history covers any fork, the parent, and any clone of
-# either. Lineage that cannot be determined (no code root history, or a shallow
+# linked worktrees and the code root itself, and a project whose refs reach a
+# root commit of the code root's history covers any fork, the parent, and any
+# clone of either; an object no ref reaches proves nothing. Lineage that cannot
+# be determined (no code root history, unreadable project refs, or a shallow
 # side sharing no root) refuses rather than permits. The publication target is
 # compared only against a maintainer scope or task consent: the first remote
 # whose remote.<name>.gh-resolved is base, otherwise the first remote named
@@ -255,13 +256,19 @@ fm_role_shallow() {
 
 # fm_role_self_repo <project-dir> <code-root> - rc 0 when the task's project
 # shares firstmate's lineage: a shared git common dir (the code root itself or
-# a linked worktree of it), or a project holding a root commit of the code
-# root's history. rc 1 when the project is not a git repository or provably
-# shares no root. rc 2 when lineage cannot be determined: the code root has no
-# history, or either side is shallow and no root matched. Offline only; lazy
-# fetching of missing objects is disabled.
+# a linked worktree of it), or a root commit of the code root's history that a
+# counted ref of the project reaches. Counted refs are `git rev-list --all`'s:
+# everything under refs/ (branches, tags, remote-tracking refs, stash, notes)
+# plus HEAD of the project and of each of its linked worktrees, detached or
+# not. FETCH_HEAD, ORIG_HEAD and the other pseudo-refs, reflog entries, and
+# objects or packs no counted ref reaches do not count. rc 1 when the project
+# is not a git repository or provably reaches no root. rc 2 when lineage cannot
+# be determined: the code root has no history, the project holds a root's
+# object but its refs cannot be walked, or either side is shallow and no root
+# matched. A project lacking every root's object is never walked. Offline only;
+# lazy fetching of missing objects is disabled.
 fm_role_self_repo() {
-  local proj=$1 root=$2 pa pb roots c
+  local proj=$1 root=$2 pa pb roots c reached walked=
   pa=$(fm_role_git_common_dir "$proj")
   [ -n "$pa" ] || return 1
   pb=$(fm_role_git_common_dir "$root")
@@ -269,7 +276,15 @@ fm_role_self_repo() {
   roots=$(git -C "$root" rev-list --max-parents=0 HEAD 2>/dev/null) || roots=
   [ -n "$roots" ] || return 2
   for c in $roots; do
-    GIT_NO_LAZY_FETCH=1 git -C "$proj" cat-file -e "$c^{commit}" 2>/dev/null && return 0
+    GIT_NO_LAZY_FETCH=1 git -C "$proj" cat-file -e "$c^{commit}" 2>/dev/null || continue
+    if [ -z "$walked" ]; then
+      reached=$(GIT_NO_LAZY_FETCH=1 git -C "$proj" rev-list --max-parents=0 --all 2>/dev/null) \
+        || return 2
+      walked=1
+    fi
+    case $'\n'"$reached"$'\n' in
+    *$'\n'"$c"$'\n'*) return 0 ;;
+    esac
   done
   if fm_role_shallow "$root" || fm_role_shallow "$proj"; then
     return 2
@@ -511,7 +526,7 @@ fm_role_gate_self_publish() {
   FM_ROLE_PUB_TARGET=$(fm_role_publication_target "$proj")
   if [ "$lineage" -eq 2 ]; then
     # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
-    FM_ROLE_PUB_DENIAL="cannot determine whether $proj shares firstmate's history (the code root $root has no readable history, or a shallow clone shares no root commit); fetch full history (git fetch --unshallow) before dispatching publishing work"
+    FM_ROLE_PUB_DENIAL="cannot determine whether $proj shares firstmate's history (the code root $root has no readable history, the refs of $proj cannot be walked, or a shallow clone shares no root commit); repair the refs or fetch full history (git fetch --unshallow) before dispatching publishing work"
     return 1
   fi
   fm_role_resolve "$home" "$config"

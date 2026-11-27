@@ -323,7 +323,7 @@ test_check_gh_resolved_base_selects_fork() {
 # Lineage that cannot be determined refuses, and a firstmate-lineage project
 # with no determinable publication target is refused even under consent.
 test_check_undeterminable_lineage_and_target_refuse() {
-  local root shallow bare home out rc
+  local root shallow broken bare home out rc
   root=$(make_lineage_root undet-root https://github.com/kunchenguid/firstmate)
   home=$(make_role_home undet-user)
   shallow="$TMP_ROOT/undet-shallow"
@@ -333,12 +333,91 @@ test_check_undeterminable_lineage_and_target_refuse() {
   expect_code 1 "$rc" "a shallow clone sharing no root commit must be refused (got: $out)"
   assert_contains "$out" "cannot determine whether" "the refusal must name undeterminable lineage"
 
+  broken=$(clone_with_origin "$root" undet-broken-ref https://github.com/kunchenguid/firstmate)
+  printf '%s\n' 1111111111111111111111111111111111111111 \
+    > "$(git -C "$broken" rev-parse --absolute-git-dir)/refs/heads/broken"
+  if git -C "$broken" rev-list --all >/dev/null 2>&1; then
+    fail "the broken-ref fixture's refs must fail to walk"
+  fi
+  out=$(check_as "$root" "$home" "$broken"); rc=$?
+  expect_code 1 "$rc" "unwalkable refs over a firstmate root must be refused (got: $out)"
+  assert_contains "$out" "cannot determine whether" "unwalkable refs must read as undeterminable"
+
   bare=$(clone_with_origin "$root" undet-no-remote https://github.com/kunchenguid/firstmate)
   git -C "$bare" remote remove origin
   out=$(check_as "$root" "$home" "$bare" upstream-consent github.com/kunchenguid/firstmate); rc=$?
   expect_code 1 "$rc" "consent must not authorize an undeterminable publication target (got: $out)"
   assert_contains "$out" "no publication target can be determined" "the refusal must name the missing target"
   pass "fm-role.sh check: undeterminable lineage or publication target refuses"
+}
+
+# Lineage follows the root commits the project's refs reach, not the objects
+# its store happens to hold: a firstmate root that arrived by a fetch into
+# FETCH_HEAD or in a pack no ref reaches does not make a project firstmate's
+# own, while a clone, a detached worktree of a clone, and a clone reaching
+# firstmate only through a remote-tracking ref are all still gated.
+test_check_lineage_follows_counted_refs() {
+  local root fmroot home proj clone wt out rc
+  root=$(make_lineage_root refs-root https://github.com/kunchenguid/firstmate)
+  fmroot=$(git -C "$root" rev-list --max-parents=0 HEAD)
+  home=$(make_role_home refs-user)
+
+  proj="$TMP_ROOT/refs-fetch-head"
+  git init -q "$proj" || fail "could not initialize fetch-head fixture"
+  git_commit "$proj" unrelated
+  git -C "$proj" remote add origin https://github.com/someone/elseware
+  git -C "$proj" fetch -q "$root" HEAD || fail "could not fetch the root into FETCH_HEAD"
+  git -C "$proj" cat-file -e "$fmroot^{commit}" \
+    || fail "the fetch-head fixture must hold firstmate's root object"
+  [ -s "$(git -C "$proj" rev-parse --absolute-git-dir)/FETCH_HEAD" ] \
+    || fail "the fetch-head fixture must record FETCH_HEAD"
+  out=$(check_as "$root" "$home" "$proj"); rc=$?
+  expect_code 2 "$rc" "a FETCH_HEAD-only root must not make firstmate (got: $out)"
+  assert_contains "$out" "not a self-repository task" \
+    "a FETCH_HEAD-only root must stay outside the boundary"
+
+  proj="$TMP_ROOT/refs-stray-pack"
+  git init -q "$proj" || fail "could not initialize stray-pack fixture"
+  git_commit "$proj" unrelated
+  git -C "$proj" remote add origin https://github.com/someone/elseware
+  printf 'HEAD\n' | git -C "$root" pack-objects -q --revs --stdout \
+    | git -C "$proj" index-pack --stdin >/dev/null || fail "could not install the stray pack"
+  git -C "$proj" cat-file -e "$fmroot^{commit}" \
+    || fail "the stray-pack fixture must hold firstmate's root object"
+  out=$(check_as "$root" "$home" "$proj"); rc=$?
+  expect_code 2 "$rc" "an unreferenced pack must not make firstmate (got: $out)"
+
+  clone=$(clone_with_origin "$root" refs-clone https://github.com/kunchenguid/firstmate)
+  out=$(check_as "$root" "$home" "$clone"); rc=$?
+  expect_code 1 "$rc" "a firstmate clone must be gated (got: $out)"
+  assert_contains "$out" "no publication authority" "a firstmate clone must meet the role gate"
+
+  wt="$TMP_ROOT/refs-clone-wt"
+  git -C "$clone" worktree add -q --detach "$wt" HEAD || fail "could not add a detached worktree"
+  git -C "$clone" symbolic-ref HEAD refs/heads/unborn
+  git -C "$clone" for-each-ref --format='delete %(refname)' \
+    | git -C "$clone" update-ref --no-deref --stdin || fail "could not drop the clone's refs"
+  [ -z "$(git -C "$clone" for-each-ref)" ] \
+    || fail "the clone must keep no ref but the worktree HEAD"
+  out=$(check_as "$root" "$home" "$wt"); rc=$?
+  expect_code 1 "$rc" "a worktree whose detached HEAD reaches firstmate must be gated (got: $out)"
+  out=$(check_as "$root" "$home" "$clone"); rc=$?
+  expect_code 1 "$rc" "a clone reached via a worktree HEAD must be gated (got: $out)"
+
+  proj="$TMP_ROOT/refs-remote-tracking"
+  git init -q "$proj" || fail "could not initialize remote-tracking fixture"
+  git_commit "$proj" unrelated
+  git -C "$proj" remote add origin https://github.com/kunchenguid/firstmate
+  git -C "$proj" remote add fixture "$root"
+  git -C "$proj" fetch -q fixture || fail "could not fetch the fixture remote"
+  if git -C "$proj" merge-base --is-ancestor "$fmroot" HEAD 2>/dev/null; then
+    fail "the remote-tracking fixture's own branch must not reach firstmate's root"
+  fi
+  out=$(check_as "$root" "$home" "$proj"); rc=$?
+  expect_code 1 "$rc" "a root reached only from a remote-tracking ref must be gated (got: $out)"
+  assert_contains "$out" "no publication authority for github.com/kunchenguid/firstmate" \
+    "a remote-tracking-only clone must meet the role gate"
+  pass "fm-role.sh check: lineage follows the roots the project's refs reach"
 }
 
 test_check_task_consent_authorizes_one_task() {
@@ -727,6 +806,7 @@ test_check_equivalent_remote_spellings_are_one_repo
 test_check_fork_lineage_reaches_the_gate
 test_check_gh_resolved_base_selects_fork
 test_check_undeterminable_lineage_and_target_refuse
+test_check_lineage_follows_counted_refs
 test_check_task_consent_authorizes_one_task
 test_secondmate_cannot_self_grant
 test_secondmate_inheritance_receipt_lifecycle
