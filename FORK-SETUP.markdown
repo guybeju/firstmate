@@ -244,9 +244,10 @@ bin/fm-board.sh install-rules
   這一版兩件都拿掉了，連同檢查還有沒有這種 hold 的那個指令，所以要在更新之前檢查。
   更新之前，在還沒更新的主 home 跑舊版 `bin/fm-board.sh` 的 `adopt` 子命令（不帶參數），最後一行要是 `ok adopt 放上 0 個舊項目，還開著的舊 hold 0 個`。
   回 `fm-board.sh: 不認得的子命令：adopt（fm-board.sh --help 看用法）` 表示這台還在看板自己存項目之前的版本，從來沒搬過，它的這種 hold 更新之後照下面處理。
-  更新之後還開著的這種 hold 不會消失：看板在「等你決定」顯示它，問題是 `動手：` 開頭的原文；舊版搬上看板的項目照舊在「要你動手」，關掉它不再關它的 hold，那個 hold 就留在「等你決定」。
+  更新之後還開著的這種 hold 不會消失：它是一個待決事項，輪到它時看板在「等你決定」顯示它，問題是 `動手：` 開頭的原文；舊版搬上看板的項目照舊在「要你動手」，關掉它不再關它的 hold，那個 hold 就留在「等你決定」。
+  first mate 讓看板一次只顯示一個待決事項，其他的摺成一行「還有 N 個決定排隊，輪到時才顯示」，不寫問題（[contracts](myshape/spec/contracts.markdown) C10）。
   手動處理：做完那件事之後在看板上回答那個待決事項，答了就關掉；或請 first mate 用 `bin/myshape.sh todo add` 把它放成要你動手的項目，再回答那個待決事項。
-  **確認**：「等你決定」裡沒有 `動手：` 開頭的待決事項；更新後的 `bin/fm-board.sh --help` 不再列 `adopt`。
+  **確認**：「等你決定」裡沒有 `動手：` 開頭的待決事項，也沒有「還有 N 個決定排隊」那一行（排隊的看不到問題，要等它們輪到）；更新後的 `bin/fm-board.sh --help` 不再列 `adopt`。
   退回這一版之前的程式時，舊版又把還開著的這種 hold 搬上看板（[rollout「之後怎麼更新」](fm-board/spec/rollout.markdown)）。
 - **規則範本有變**：更新後 `bin/fm-board.sh rules` 會印 `和範本不同`；由使用者決定之後再跑一次 `bin/fm-board.sh install-rules`，再重開 session。
   有 second mate 時，先和第 8 節第 4 點一樣確認每個 home 都是 `相同` 再裝：新的規則可能用到只有新版程式才有的指令，例如共用規則從 v3 起叫 second mate 跑 `bin/fm-board.sh tag`，還沒更新的 home 沒有這支指令。
