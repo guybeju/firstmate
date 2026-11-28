@@ -8,7 +8,9 @@
 #   - every "myshape.sh <sub>", "fm-board.sh <sub>" (also after
 #     "--in-home <id>") and "fm-dispatch-plan.sh <sub>" names a subcommand
 #     listed in that script's usage header;
-#   - every config/<name> it names appears in some script under bin/;
+#   - every config/<name> it names, extension included, appears in some
+#     script under bin/ or is read from the config directory by the board's
+#     built code in myshape/dist/;
 #   - every `/<skill>` and every `<skill>` 技能 has .agents/skills/<skill>/SKILL.md;
 #   - every version written after captain.md or captain-shared.md, such as
 #     "（v11）", equals the version on the first line of its template in
@@ -82,12 +84,15 @@ check_subcommands() {
   done <<< "$(cited "${script//./\\.}( --in-home <[^>]*>)? [a-z][a-z-]*")"
 }
 
+# The board's built code reads a config file as path.join(config.config, "<name>").
 check_config_files() {
   local file
   while IFS= read -r file; do
     [ -n "$file" ] || continue
-    grep -rqF "$file" "$ROOT/bin" || problem "no script under bin/ mentions $file"
-  done <<< "$(cited 'config/[a-z][a-z0-9-]*')"
+    grep -rqF "$file" "$ROOT/bin" ||
+      grep -rqF "config.config, \"${file#config/}\")" "$ROOT/myshape/dist" ||
+      problem "no script under bin/ mentions $file and myshape/dist/ does not read it"
+  done <<< "$(cited 'config/[a-z][a-z0-9-]*(\.[a-z0-9]+)*')"
 }
 
 check_skills() {

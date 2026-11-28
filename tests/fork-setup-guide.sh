@@ -49,6 +49,16 @@ test_catches_wrong_names() {
   pass "a wrong link, script, subcommand, config file, or skill fails the check"
 }
 
+test_config_file_read_by_the_board() {
+  local out
+  out=$(check_copy board-config '在主 home 的 `config/myshape-remote.json` 寫遠端名稱。') ||
+    fail "a config file the board's built code reads must pass: $out"
+  out=$(check_copy sentence-end '寫 config/myshape-port.') ||
+    fail "a period that ends the sentence must not become part of the name: $out"
+  expect_caught config-extension '`config/no-such-file.json`' "config/no-such-file.json"
+  pass "a config file name keeps its extension and passes when the board reads it"
+}
+
 test_catches_wrong_template_versions() {
   expect_caught main-version '`captain.md：新增（v99）`' "captain.md is cited at v99"
   expect_caught shared-version '`規則：captain.md 和範本相同（v6）；captain-shared.md 和範本相同（v98）`' \
@@ -64,4 +74,5 @@ test_missing_guide() {
   pass "a missing guide is a usage error, not a pass"
 }
 
-fm_test_run test_real_guide_passes test_catches_wrong_names test_catches_wrong_template_versions test_missing_guide
+fm_test_run test_real_guide_passes test_catches_wrong_names test_config_file_read_by_the_board \
+  test_catches_wrong_template_versions test_missing_guide
