@@ -63,7 +63,11 @@ firstmate 本身的需求只在上游的文件寫一次，照那裡準備：
 
 - 主 home：`node` 22 以上與 `jq`。
   看板只跑編譯好的 `dist/`，不需要 TypeScript 支援。
-- 開看板的瀏覽器要在主 home 這台機器上：服務只綁 `127.0.0.1`（[contracts](myshape/spec/contracts.markdown) 第 6.2 節）。
+- 開看板的瀏覽器預設要在主 home 這台機器上：服務只綁 `127.0.0.1`（[contracts](myshape/spec/contracts.markdown) 第 6.2 節）。
+  要從手機打開，照 contracts 第 6.2 節「遠端名稱」：在主 home 的 `config/` 寫 `myshape-remote.json`（這台電腦的 `<電腦>.<tailnet>.ts.net` 名稱與 Tailscale 登入），跑 `bin/myshape.sh restart`，再用 `tailscale serve` 的 HTTP 轉送（`tailscale serve --bg <埠>`）把那個名稱轉到看板的埠；不要用它的 TCP 轉送（`--tcp`、`--tls-terminated-tcp`），那樣看板分不出請求是誰送的（[看板的 handover](myshape/spec/handover.markdown) 第 4 節）。
+  沒有這個檔、或檔是空的時只認本機，和以前一樣；檔讀不懂時也只認本機，`state/myshape/service.log` 寫原因。
+  手機的網址是把 `bin/myshape.sh open` 印的 `http://127.0.0.1:<埠>` 換成 `https://<名稱>`，`#t=` 之後不變。
+  讓看板執行程式的確認只能在這台 PC 上按：手機上不顯示「確認…」，改寫「只能在 PC 上確認」。
 - 遠端 second mate 的機器：只要 `jq`，不需要 `node`（第 8 節）。
 - `quota-axi` 對看板是選用的：主 home 沒有它時，「用量」面板寫「這台機器沒有 quota-axi，看不到 Claude 的用量。」，其他照常（[adapter](fm-board/spec/adapter.markdown) 第 3.1 節）。
   看板只顯示這台機器預設的那一個 Claude 帳號：在 shell 設的 `QUOTA_AXI_CLAUDE_PROFILES` 傳不到看板的 feed，遠端 second mate 那台的帳號也不顯示（[狀態數字](myshape/spec/status-metrics.markdown)「已知的限制」）。
