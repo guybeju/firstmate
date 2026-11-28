@@ -214,11 +214,16 @@
 #      `resolved` never become current state or detail.
 #   5. Missing meta or torn-down worktree: report unknown · none. If no run is
 #      attributed to this crew, a dead endpoint also reports unknown · none rather
-#      than trusting a stale status log. On tmux, herdr, and rex, which own a
+#      than trusting a stale status log, unless the log's current declaration is
+#      a terminal done that bin/fm-dod-lib.sh accepts, or a failed: the worker
+#      finished and its endpoint closed before cleanup, so that state is reported
+#      with source status-log and the closed endpoint named in the detail. On
+#      tmux, herdr, and rex, which own a
 #      recovery-grade classifier, only its positive death evidence reads as gone
 #      (the endpoint is authoritatively absent, or its pane holds no agent); an
 #      endpoint that merely failed to answer reports unknown · none as
-#      unreachable, and an alive endpoint whose scrollback read failed is still
+#      unreachable (or the same terminal state, naming the endpoint as not
+#      answering), and an alive endpoint whose scrollback read failed is still
 #      classified by step 4. Backends with no classifier keep reading a failed
 #      capture as gone. The fallback's own comment owns the per-verdict rules.
 #
@@ -1542,12 +1547,33 @@ fi
 
 # --- fallback: no run attributed to this crew ------------------------------
 # The run-step path above already handled any crew with a run, regardless of pane
-# liveness, so a finished-but-pane-closed crew never reaches here. Down here there
+# liveness, so a finished-but-pane-closed crew with a run never reaches here. Down here there
 # is no run to consult, so only positive evidence that the target is gone may
 # read as death - a backend that failed to answer is unknown, never death, for
 # the classifier-backed backends (tmux, herdr, rex, and t3code) - and every death-class
-# verdict reports unknown rather than trusting a possibly-stale status log as
-# the current state.
+# or unanswering verdict reports unknown rather than trusting a possibly-stale
+# status log as the current state, with one exception: a log whose current
+# declaration is a terminal done (that bin/fm-dod-lib.sh accepts) or failed is
+# the worker's own last word, and its endpoint closing or going quiet before
+# cleanup is the normal end of a finished lane, so that terminal state is
+# reported from the status log with the closed endpoint named in the detail.
+# A done the gate refuses keeps the unknown reading here.
+emit_closed_endpoint() {  # <unknown-reason> [terminal-endpoint-detail]
+  local reason=$1 endpoint=${2:-worker endpoint closed: $1}
+  case "$LOG_VERB" in
+    done)
+      if fm_dod_accept_ship_done "$KIND" "$(meta_value mode)" "$WT" "$(meta_value project)" \
+        "$LOG_LINE" "$STATE" "$ID" "$META" >/dev/null; then
+        emit "done" status-log "$(status_line_note "$LOG_LINE")${SEP}$endpoint"
+      fi
+      ;;
+    failed)
+      emit failed status-log "$(status_line_note "$LOG_LINE")${SEP}$endpoint"
+      ;;
+  esac
+  emit unknown none "$reason"
+}
+
 [ -n "$BACKEND_TARGET" ] || emit unknown none "no backend target recorded"
 if ! pane_readable "$BACKEND_TARGET"; then
   # A failed probe is not itself evidence the pane is gone: the herdr CLI can
@@ -1587,16 +1613,17 @@ if ! pane_readable "$BACKEND_TARGET"; then
     tmux:alive|herdr:alive|rex:alive|t3code:alive)
       ;;
     tmux:missing|herdr:missing|rex:missing|t3code:missing)
-      emit unknown none "backend target gone: $BACKEND_TARGET"
+      emit_closed_endpoint "backend target gone: $BACKEND_TARGET"
       ;;
     tmux:dead|herdr:dead|rex:dead|t3code:dead)
-      emit unknown none "backend target gone: $BACKEND_TARGET (agent gone, pane shell remains)"
+      emit_closed_endpoint "backend target gone: $BACKEND_TARGET (agent gone, pane shell remains)"
       ;;
     tmux:*|herdr:*|rex:*|t3code:*)
-      emit unknown none "backend unreachable ($TASK_BACKEND endpoint state: $AGENT_STATE)"
+      emit_closed_endpoint "backend unreachable ($TASK_BACKEND endpoint state: $AGENT_STATE)" \
+        "worker endpoint $BACKEND_TARGET not answering ($TASK_BACKEND endpoint state: $AGENT_STATE)"
       ;;
     *)
-      emit unknown none "backend target gone: $BACKEND_TARGET"
+      emit_closed_endpoint "backend target gone: $BACKEND_TARGET"
       ;;
   esac
 fi
