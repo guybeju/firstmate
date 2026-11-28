@@ -47,7 +47,8 @@ fork 的首頁顯示的是 `main`，和上游一樣，但首頁右側 About 的�
 那一次走在 `carry` 改成帶釘住的副本之前，所以第 3 步後來加上的 `bin/fm-board-vendor.sh --check` 確認沒有從零走過。
 
 macOS 上 `bin/myshape*.sh` 與 `bin/fm-board.sh` 用的是 `PATH` 上第一個 `bash`（腳本第一行是 `#!/usr/bin/env bash`），細節在 handover 第 1 節。
-遠端的 second mate 會跑 `bin/fm-dispatch-plan.sh` 的 `order` 與 `queues-in`，以及 `bin/fm-board.sh tag` 對佇列副本的檢查（第 8 節第 6 點）；它們照 bash 3.2 與 BSD 工具寫。
+遠端的 second mate 會跑 `bin/fm-dispatch-plan.sh` 的 `order`、`queues-in` 與 `machine`（主 home 的 `machines` 經 `bin/fm-on.sh` 叫它，第 8 節第 7 點），以及 `bin/fm-board.sh tag` 對佇列副本的檢查（第 8 節第 6 點）；它們照 bash 3.2 與 BSD 工具寫。
+`machine` 還沒有在真的 Mac 上跑過（[dispatch-plan 的說明](dispatch-plan/spec/dispatch-plan.markdown)第 11 節「沒有測到的」）；Mac 上沒有 `timeout` 時它自己的時間上限不生效，整次呼叫仍由主 home 那邊的 20 秒切掉。
 在 GitHub 的 macOS 機器上用 `/bin/bash` 3.2 跑過一次（guybeju/myshape 的 <https://github.com/guybeju/myshape/actions/runs/45400618489/attempts/2>）：`fm-board/test/stage-1-tag.sh` 的 18 項全過，`dispatch-plan/test` 有一項 `order` 的測試失敗（`every item the captain says is done waits for a check, and nothing else`）；那次 macOS 上的失敗不修。
 
 ## 1. 需要的東西
@@ -222,10 +223,16 @@ bin/fm-board.sh install-rules
 規則是 first mate 的，所以安裝的指令與範本（`fm-board/rules/`）都在 first mate 這一側。
 它們在 guybeju/myshape 的 `adapters/firstmate/fm-board/rules/` 寫，跟著釘住的副本進來。
 
-**確認**：輸出有 `captain.md：新增（v14）` 與 `captain-shared.md：新增（v5）`（已經裝過的是 `已更新` 或 `已是最新`）。
-之後 `bin/fm-board.sh rules` 印出 `規則：captain.md 和範本相同（v14）；captain-shared.md 和範本相同（v5）`。
+**確認**：輸出有 `captain.md：新增（v15）` 與 `captain-shared.md：新增（v5）`（已經裝過的是 `已更新` 或 `已是最新`）。
+之後 `bin/fm-board.sh rules` 印出 `規則：captain.md 和範本相同（v15）；captain-shared.md 和範本相同（v5）`。
 裝完重開主 first mate 的 session：規則在下一次 session 開始或下一次壓縮之後才生效（`install-rules` 自己也會印這一句）。
 重開的 session 的啟動摘要裡會有第 5 步說的那一行；服務一直開著時是 `看板服務：在跑`。
+
+主 home 的規則從 v15 起叫主 first mate 跑完 `bin/fm-dispatch-plan.sh order` 之後再跑 `bin/fm-dispatch-plan.sh machines`，照它的「該轉告」「該通知」做（[dispatch-plan 的說明](dispatch-plan/spec/dispatch-plan.markdown)第 10 節）。
+要 `machines` 算出每個專案還能派幾個，每台機器最上層的 home 在 `config/project-capacity` 寫那台每個專案同時能跑幾個 worker；檔的格式在 [configuration「Project capacity」](docs/configuration.md#project-capacity-configproject-capacity)。
+這個檔是選用的：有排隊的項目卻沒寫上限的專案，`machines` 印 `<專案>：這台沒有設上限（config/project-capacity），下一個：…`，派工照常。
+**確認**：在主 home 跑 `bin/fm-dispatch-plan.sh machines`，每台機器一個區塊，第一行是 `<機器名>（<home>、…）：可以加（rule-v1）。` 接著負載、記憶體與磁碟（忙的時候是 `先等`，讀不到時是 `不知道`，括號裡寫原因）；寫了上限的專案各一行 `<專案>：上限 <n>，佔用 <m>，還能派 <k>。`（沒有位子時是 `滿了。`）。
+最後的「環境差異」是每台和共用工具清單（`dispatch-plan/common-tools.tsv`）比的差距，寫成要補的事；清單上的 `pnpm` 與 `firefox` 只有開發與跑頁面測試時才要（第 1 步），`shellcheck` 只有跑 `bin/fm-lint.sh` 時才要；沒裝不影響看板與派工。
 
 **不對時**：
 
@@ -283,6 +290,8 @@ bin/fm-board.sh install-rules
   退回看板經設定檔接上 aggregator 之前的程式時，看板又只執行寫死的 `bin/fm-board.sh`；`config/myshape-aggregator.json` 與 `data/myshape/confirmations.json` 留著，舊版不讀。
   退回看板有 hashtag 之前的程式時，舊版不讀 `data/myshape/hashtags.json`，所以什麼都不會丟；檔案留著，回到新版時 hashtag 又會出現。
   退回視圖沒有 `order` 之前的版本時，舊版下一次存 `hashtags.json` 會丟掉每個視圖的排列，回到新版時那些視圖是照優先順序；頁面記在 `localStorage` 的不受影響。
+  退回 hashtag 設定沒有 `aggregator_must_mark_new`（aggregator 開新的 hashtag 要明說）之前的版本時，舊版下一次存 `hashtags.json` 會丟掉這個設定，也不要求 `--new`；回到新版時它是預設的「要」，關掉過的要在頁面上再關一次。
+  舊版不認得 `--new` 與 `--new-hashtag`，用了是用法錯。
   退回看板替卡計時之前的程式時，舊版不讀 `data/myshape/lifecycle.json`；檔案留著，回到新版時照檔裡的接著算（[lifecycle](myshape/spec/lifecycle.markdown) 第 6 節）。
   退回看板有排程之前的程式時，舊版不讀 `data/myshape/schedules.json`，有排程的議題在那裡只是「待辦」裡的一般議題，所以什麼都不會丟；檔案留著，回到新版時排程又會出現。
   退回看板有排程的時鐘之前的程式時，時鐘跟著停了，看板不再自己送排程的通知；寫入歷史裡記成 `expired`（過期沒送）的那幾筆，舊版不認得，頁面上顯示原文 `expired`，也不會接著送。
@@ -332,6 +341,11 @@ second mate 本身怎麼佈建照上游：同機的見 [secondmate-provisioning 
      副本超過一小時時，遠端的 `tag` 不再拿它檢查，照給的 id 寫入並說沒有檢查。
      同一台超過一小時沒送到時，主 first mate 會收到一則通知，同一段時間只有一則。
    - 不要了就跑 `bin/fm-check-unregister.sh dispatch-queues`。
+7. **有遠端的 second mate 時，確認主 home 讀得到那台機器**。
+   主 home 的 `machines`（第 6 步）對 `data/secondmates.md` 裡每個在別台的 second mate 跑 `bin/fm-on.sh <id> fm-dispatch-plan.sh machine --json`，最多等 20 秒；那台的專案上限寫在那台最上層的 home 的 `config/project-capacity`。
+   **確認**：在主 home 跑 `bin/fm-on.sh <id> fm-dispatch-plan.sh machine --json`，印一份 JSON，`schema` 是 `fm-dispatch-machine.v1`；`bin/fm-dispatch-plan.sh machines` 裡那台的區塊是 `可以加` 或 `先等`。
+   **不對時**：那台的區塊是 `<id> 那台：不知道（<原因>）；不算也不轉交。`，那台這一輪不算。
+   原因是 `那邊的 fm-dispatch-plan.sh 還沒有 machine（回 2）` 時，那台的 code root 還沒更新到這一版，回第 1 與第 4 點；`連不到（fm-on.sh 回 255）` 時照 [remote-secondmates](docs/remote-secondmates.md) 查主 home 到那台的連線。
 
 之後新增的遠端 second mate：在那台機器手動 clone code root 之後先做上面的第 1 點，再照上游的流程佈建 home；不把已經存在的 `origin` 改成指向 fork（rollout「之後怎麼更新」）。
 
