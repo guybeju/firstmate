@@ -194,7 +194,7 @@ bin/myshape.sh status
 所以服務停過之後再啟動時，還在時段裡的場次照常開、通知寫明晚了多久，時段整個過去了的照排程設定的 `missed` 處理，預設是每個排程送一則 `schedule.missed`。
 看板也替每張卡計時（[lifecycle](myshape/spec/lifecycle.markdown)）：一張卡過了提醒期限還沒有人接手，看板送 first mate 一則提醒（`stall.nudge`）；過了交給使用者的期限，看板把它放到使用者面前，成為「沒人處理的議題」或「沒人接」卡。
 這兩種卡和 first mate 的提議關閉排在待決事項後面，同一條佇列一次一張，輪到時看板送一則 `decision.front` 通知；有議題的「沒人接」卡上的〔請 first mate 處理〕送 first mate 一則訊息。
-每個期限都在首頁的「期限設定」調；期限設定與每張卡開始計時的時間存在 `data/myshape/lifecycle.json`，服務重啟不歸零。
+每個期限都在首頁「更多」分頁的「期限設定」調；期限設定與每張卡開始計時的時間存在 `data/myshape/lifecycle.json`，服務重啟不歸零。
 看板只把卡放到使用者面前，從不自己派工、回答或關閉待決事項、自動封存議題（lifecycle 的不變式 I）。
 
 服務第一次成功啟動之後，主 first mate 每次開 session 都會檢查它：沒在跑就啟動，並在啟動摘要 fleet state 那一段的最後印一行 `看板服務：在跑`、`看板服務：原本沒在跑，已啟動`、`看板服務：原本沒有回應，已重新啟動`、`看板服務：已接上 firstmate，換上新的看板` 或 `看板服務：無法啟動：<原因>`（[`bin/fm-topic-session-start.sh`](bin/fm-topic-session-start.sh)）。
