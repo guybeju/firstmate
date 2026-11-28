@@ -28,7 +28,9 @@
 #   (e3) an older live sibling with an unfetched head cannot hide a newer failure
 #   (f) no run + semantic busy                                    -> pane
 #   (g) no run + semantic idle falls to the status-log verb       -> status-log
-#   (h) dead pane: no run -> unknown/none; with a run -> run-step (not the shell)
+#   (h) dead pane: no run -> unknown/none; with a run -> run-step (not the shell);
+#       no run and a terminal log a finished worker left (an accepted done, or
+#       failed) -> that state from the status log, naming the closed endpoint
 #   (i) kind=scout skips the run lookup                           -> pane/status-log
 #   (j) torn-down worktree / missing meta                         -> unknown/none
 #   (k) crew_is_provably_working end-to-end over the REAL helper (not a canned
@@ -3292,7 +3294,7 @@ test_dead_window_ignores_stale_status_log() {
   make_repo_on_branch "$d/wt" fm/feat-dead
   make_fakebin "$d" >/dev/null
   fm_write_meta "$d/state/feat-dead.meta" "window=fm:fm-feat-dead" "worktree=$d/wt" "kind=ship"
-  printf 'done: old completion event\n' > "$d/state/feat-dead.status"
+  printf 'needs-decision: pick the widget color\n' > "$d/state/feat-dead.status"
   FM_FAKE_AXI_STATUS=""
   FM_FAKE_RUNS_LIST=""
   FM_FAKE_TMUX_MISSING=1
@@ -3339,7 +3341,7 @@ test_no_run_tmux_unreadable_reads_unreachable_not_gone() {
   make_fakebin "$d" >/dev/null
   fm_write_meta "$d/state/feat-tmux-unread.meta" "window=fm:fm-feat-tmux-unread" \
     "worktree=$d/wt" "kind=ship"
-  printf 'done: old completion event\n' > "$d/state/feat-tmux-unread.status"
+  printf 'working: implementing the widget\n' > "$d/state/feat-tmux-unread.status"
   FM_FAKE_AXI_STATUS=""
   FM_FAKE_RUNS_LIST=""
   FM_FAKE_TMUX_UNREADABLE=1
@@ -3386,6 +3388,118 @@ test_dead_window_still_reports_active_run_step() {
   assert_contains "$out" "source: run-step" "closed pane does not mask the active run-step"
   assert_not_contains "$out" "state: unknown" "closed pane with an active run must never be unknown"
   pass "closed pane still reports an active run-step"
+}
+
+# A worker that finished closes its endpoint before cleanup; with no run attributed,
+# its own terminal report is the current state, not unknown. The fixture is a
+# direct-PR ship whose done names its PR and whose head origin/main already holds,
+# so bin/fm-dod-lib.sh accepts the done.
+write_finished_direct_pr_case() {  # <case-dir> <id> <status-line> [extra-meta...]
+  local d=$1 id=$2 line=$3
+  shift 3
+  make_repo_on_branch "$d/wt" "fm/$id"
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/$id.meta" "window=fm:fm-$id" "worktree=$d/wt" "kind=ship" \
+    "mode=direct-PR" "$@"
+  printf '%s\n' "$line" > "$d/state/$id.status"
+}
+
+test_dead_window_accepted_done_reports_done() {
+  reset_fakes
+  local d; d=$(new_case dead-window-finished-done)
+  write_finished_direct_pr_case "$d" feat-fin-done \
+    'done [at=1795800000]: PR https://github.com/o/r/pull/7'
+  FM_FAKE_TMUX_MISSING=1
+  local out; out=$(run_crew_state "$d" feat-fin-done)
+  assert_contains "$out" "state: done" "a finished worker's accepted done survives its closed endpoint"
+  assert_contains "$out" "source: status-log" "the terminal state comes from the worker's own report"
+  assert_contains "$out" "PR https://github.com/o/r/pull/7" "the done detail keeps the reported PR"
+  assert_contains "$out" "worker endpoint closed: backend target gone: fm:fm-feat-fin-done" \
+    "the detail names the closed endpoint"
+  assert_not_contains "$out" "state: unknown" "a finished worker is not unreadable"
+  pass "a dead endpoint over an accepted done reads done from the status log"
+}
+
+test_dead_window_failed_reports_failed() {
+  reset_fakes
+  local d; d=$(new_case dead-window-finished-failed)
+  write_finished_direct_pr_case "$d" feat-fin-failed \
+    'failed [at=1795800000]: the migration cannot run on this schema'
+  FM_FAKE_TMUX_WINDOW_GONE=1
+  local out; out=$(run_crew_state "$d" feat-fin-failed)
+  assert_contains "$out" "state: failed" "a finished worker's failed survives its closed endpoint"
+  assert_contains "$out" "source: status-log" "the failed state comes from the worker's own report"
+  assert_contains "$out" "the migration cannot run on this schema" "the failed detail keeps the reason"
+  assert_contains "$out" "worker endpoint closed: backend target gone: fm:fm-feat-fin-failed" \
+    "the detail names the closed endpoint"
+  pass "a dead endpoint over a failed report reads failed from the status log"
+}
+
+test_unanswering_endpoint_accepted_done_reports_done() {
+  reset_fakes
+  local d; d=$(new_case unanswering-finished-done)
+  write_finished_direct_pr_case "$d" feat-fin-quiet \
+    'done [at=1795800000]: PR https://github.com/o/r/pull/8'
+  FM_FAKE_TMUX_UNREADABLE=1
+  local out; out=$(run_crew_state "$d" feat-fin-quiet)
+  assert_contains "$out" "state: done" "a finished worker's accepted done survives an unanswering endpoint"
+  assert_contains "$out" "source: status-log" "the terminal state comes from the worker's own report"
+  assert_contains "$out" "worker endpoint fm:fm-feat-fin-quiet not answering" \
+    "the detail names the endpoint that did not answer"
+  assert_not_contains "$out" "backend target gone" "an unanswering endpoint is still not claimed gone"
+  pass "an unanswering endpoint over an accepted done reads done from the status log"
+}
+
+test_herdr_husk_failed_reports_failed() {
+  command -v jq >/dev/null 2>&1 || { pass "herdr husk failed test skipped without jq"; return; }
+  reset_fakes
+  local d; d=$(new_case herdr-husk-finished-failed)
+  make_repo_on_branch "$d/wt" fm/feat-husk-failed
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-husk-failed.meta" "window=default:w1:p2" "worktree=$d/wt" "kind=ship" \
+    "mode=direct-PR" "backend=herdr" "harness=claude"
+  printf 'failed [at=1795800000]: upstream API removed\n' > "$d/state/feat-husk-failed.status"
+  FM_FAKE_TMUX_MISSING=1
+  FM_FAKE_HERDR_READ_FAIL=1
+  FM_FAKE_HERDR_HUSK=1
+  local out; out=$(run_crew_state "$d" feat-husk-failed)
+  assert_contains "$out" "state: failed" "a husk pane over a failed report reads failed"
+  assert_contains "$out" "source: status-log" "the failed state comes from the worker's own report"
+  assert_contains "$out" "worker endpoint closed: backend target gone: default:w1:p2 (agent gone, pane shell remains)" \
+    "the detail names the husk endpoint"
+  pass "a herdr husk over a failed report reads failed from the status log"
+}
+
+# The unchanged readings: a done the definition-of-done gate refuses (its named
+# head exists only in the disposable copy), and a dead endpoint whose newest
+# line is not terminal, both stay unknown.
+test_dead_window_unaccepted_done_stays_unknown() {
+  reset_fakes
+  local d; d=$(new_case dead-window-unaccepted-done)
+  write_finished_direct_pr_case "$d" feat-fin-local \
+    'done [at=1795800000]: PR https://github.com/o/r/pull/9'
+  git -C "$d/wt" commit -q --allow-empty -m "only in the disposable copy"
+  FM_FAKE_TMUX_MISSING=1
+  local out; out=$(run_crew_state "$d" feat-fin-local)
+  assert_contains "$out" "state: unknown" "a refused done over a dead endpoint stays unknown"
+  assert_contains "$out" "source: none" "a refused done is not read from the status log"
+  assert_contains "$out" "backend target gone: fm:fm-feat-fin-local" "the unknown reading keeps its reason"
+  assert_not_contains "$out" "state: done" "a head only in the disposable copy is never done"
+  assert_not_contains "$out" "state: blocked" "a dead endpoint keeps today's unknown reading, not blocked"
+  pass "a dead endpoint over a refused done stays unknown"
+}
+
+test_dead_window_nonterminal_line_stays_unknown() {
+  reset_fakes
+  local d; d=$(new_case dead-window-nonterminal)
+  write_finished_direct_pr_case "$d" feat-fin-paused \
+    'paused [at=1795800000]: waiting on the vendor sandbox'
+  FM_FAKE_TMUX_MISSING=1
+  local out; out=$(run_crew_state "$d" feat-fin-paused)
+  assert_contains "$out" "state: unknown" "a non-terminal newest line over a dead endpoint stays unknown"
+  assert_contains "$out" "source: none" "a non-terminal line is not read from the status log"
+  assert_contains "$out" "backend target gone: fm:fm-feat-fin-paused" "the unknown reading keeps its reason"
+  pass "a dead endpoint over a non-terminal line stays unknown"
 }
 
 test_no_timeout_uses_perl_bound() {
@@ -6850,6 +6964,12 @@ test_gone_window_in_live_session_ignores_stale_status_log
 test_no_run_tmux_unreadable_reads_unreachable_not_gone
 test_dead_window_still_reports_terminal_run_step
 test_dead_window_still_reports_active_run_step
+test_dead_window_accepted_done_reports_done
+test_dead_window_failed_reports_failed
+test_unanswering_endpoint_accepted_done_reports_done
+test_herdr_husk_failed_reports_failed
+test_dead_window_unaccepted_done_stays_unknown
+test_dead_window_nonterminal_line_stays_unknown
 test_no_timeout_uses_perl_bound
 test_scout_skips_run_lookup
 test_torn_down_worktree
