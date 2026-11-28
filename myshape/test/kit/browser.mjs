@@ -2,8 +2,17 @@
 // built-ins, so the page can be checked the way the captain uses it.
 //
 // Usage: node browser.mjs <url> <script.mjs>
-// The script's default export receives { evaluate, waitFor, click, type,
-// screenshot, text } and may throw to fail.
+// The script's default export receives { evaluate, waitFor, click,
+// pointerClick, touchDrag, type, screenshot, text, setViewport } and may
+// throw to fail.
+// The window starts at 1300 x 950; setViewport(width, height) changes it.
+// TB_COLOR_SCHEME=dark or light makes the page see that colour scheme
+// (prefers-color-scheme); unset, Firefox's own default applies.
+// TB_POINTER=coarse makes the page see a touch screen ((pointer: coarse) and
+// (any-pointer: coarse)); unset, it sees a mouse.
+// With TB_PROXY_PORT set, Firefox sends every request for a name other than
+// 127.0.0.1 or localhost through the HTTP proxy on that port, such as
+// serve-stand-in.mjs.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -35,8 +44,42 @@ function sweepStaleProfiles() {
   }
 }
 
+// Firefox's web appearance setting: 0 is dark, 1 is light, 2 follows the system.
+const COLOR_SCHEMES = { dark: 0, light: 1 };
+const scheme = process.env.TB_COLOR_SCHEME;
+if (scheme !== undefined && !Object.hasOwn(COLOR_SCHEMES, scheme)) {
+  console.error(`not ok - TB_COLOR_SCHEME must be dark or light, got ${JSON.stringify(scheme)}`);
+  process.exit(2);
+}
+
+// Firefox's pointer capabilities: 1 is coarse, 2 fine, 4 hover.
+const POINTERS = { coarse: 1 };
+const pointer = process.env.TB_POINTER;
+if (pointer !== undefined && !Object.hasOwn(POINTERS, pointer)) {
+  console.error(`not ok - TB_POINTER must be coarse, got ${JSON.stringify(pointer)}`);
+  process.exit(2);
+}
+
 sweepStaleProfiles();
 const profile = fs.mkdtempSync(path.join(os.homedir(), `${PROFILE_PREFIX}${process.pid}-`));
+const prefs = {};
+if (scheme !== undefined) prefs["layout.css.prefers-color-scheme.content-override"] = COLOR_SCHEMES[scheme];
+if (pointer !== undefined) {
+  prefs["ui.primaryPointerCapabilities"] = POINTERS[pointer];
+  prefs["ui.allPointerCapabilities"] = POINTERS[pointer];
+}
+if (process.env.TB_PROXY_PORT !== undefined) {
+  Object.assign(prefs, {
+    "network.proxy.type": 1,
+    "network.proxy.http": "127.0.0.1",
+    "network.proxy.http_port": Number(process.env.TB_PROXY_PORT),
+    // The stand-in speaks plain HTTP only, so the page is not first tried over HTTPS.
+    "dom.security.https_first": false,
+    "dom.security.https_first_schemeless": false,
+  });
+}
+const prefLines = Object.entries(prefs).map(([name, value]) => `user_pref(${JSON.stringify(name)}, ${JSON.stringify(value)});\n`);
+if (prefLines.length > 0) fs.writeFileSync(path.join(profile, "user.js"), prefLines.join(""));
 const port = 20000 + Math.floor(Math.random() * 20000);
 const firefoxArgs = ["--headless", "--no-remote", "--profile", profile];
 firefoxArgs.push(`--remote-debugging-port=${port}`, "about:blank");
@@ -110,7 +153,8 @@ try {
   await send("session.new", { capabilities: {} });
   const { contexts } = await send("browsingContext.getTree", {});
   const context = contexts[0].context;
-  await send("browsingContext.setViewport", { context, viewport: { width: 1300, height: 950 } });
+  const setViewport = (width, height) => send("browsingContext.setViewport", { context, viewport: { width, height } });
+  await setViewport(1300, 950);
   await send("browsingContext.navigate", { context, url, wait: "complete" });
 
   const evaluate = async (expression) => {
@@ -120,6 +164,7 @@ try {
   };
   const tools = {
     evaluate,
+    setViewport,
     text: () => evaluate("document.body.innerText"),
     async waitFor(description, expression, timeoutMs = 8000) {
       const deadline = Date.now() + timeoutMs;
@@ -141,6 +186,17 @@ try {
       const [x, y] = point.split(",").map(Number);
       const steps = [{ type: "pointerMove", x, y }, { type: "pointerDown", button: 0 }, { type: "pointerUp", button: 0 }];
       await send("input.performActions", { context, actions: [{ type: "pointer", id: "mouse", parameters: { pointerType: "mouse" }, actions: steps }] });
+    },
+    /**
+     * Presses a finger at the first point, holds it `holdMs`, slides it
+     * through the other points (each move taking `moveMs`) and lifts it.
+     */
+    async touchDrag(points, holdMs, moveMs = 200) {
+      const [first, ...rest] = points.map(({ x, y }) => ({ x: Math.round(x), y: Math.round(y) }));
+      const steps = [{ type: "pointerMove", ...first }, { type: "pointerDown", button: 0 }, { type: "pause", duration: holdMs }];
+      for (const point of rest) steps.push({ type: "pointerMove", duration: moveMs, ...point });
+      steps.push({ type: "pointerUp", button: 0 });
+      await send("input.performActions", { context, actions: [{ type: "pointer", id: "finger", parameters: { pointerType: "touch" }, actions: steps }] });
     },
     async type(selector, value) {
       const found = await evaluate(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; el.focus(); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event("input", { bubbles: true })); return true; })()`);
