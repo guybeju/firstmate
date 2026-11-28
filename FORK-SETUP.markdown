@@ -64,7 +64,7 @@ firstmate 本身的需求只在上游的文件寫一次，照那裡準備：
 - 主 home：`node` 22 以上與 `jq`。
   看板只跑編譯好的 `dist/`，不需要 TypeScript 支援。
 - 開看板的瀏覽器預設要在主 home 這台機器上：服務只綁 `127.0.0.1`（[contracts](myshape/spec/contracts.markdown) 第 6.2 節）。
-  要從手機打開，照 contracts 第 6.2 節「遠端名稱」：在主 home 的 `config/` 寫 `myshape-remote.json`（這台電腦的 `<電腦>.<tailnet>.ts.net` 名稱與 Tailscale 登入），跑 `bin/myshape.sh restart`，再用 `tailscale serve` 的 HTTP 轉送（`tailscale serve --bg <埠>`）把那個名稱轉到看板的埠；不要用它的 TCP 轉送（`--tcp`、`--tls-terminated-tcp`），那樣看板分不出請求是誰送的（[看板的 handover](myshape/spec/handover.markdown) 第 4 節）。
+  要從手機打開，照 contracts 第 6.2 節「遠端名稱」：在主 home 寫 `config/myshape-remote.json`（這台電腦的 `<電腦>.<tailnet>.ts.net` 名稱與 Tailscale 登入），跑 `bin/myshape.sh restart`，再用 `tailscale serve` 的 HTTP 轉送（`tailscale serve --bg <埠>`）把那個名稱轉到看板的埠；不要用它的 TCP 轉送（`--tcp`、`--tls-terminated-tcp`），那樣看板分不出請求是誰送的（[看板的 handover](myshape/spec/handover.markdown) 第 4 節）。
   沒有這個檔、或檔是空的時只認本機，和以前一樣；檔讀不懂時也只認本機，`state/myshape/service.log` 寫原因。
   手機的網址是把 `bin/myshape.sh open` 印的 `http://127.0.0.1:<埠>` 換成 `https://<名稱>`，`#t=` 之後不變。
   讓看板執行程式的確認只能在這台 PC 上按：手機上不顯示「確認…」，改寫「只能在 PC 上確認」。
@@ -380,7 +380,7 @@ second mate 本身怎麼佈建照上游：同機的見 [secondmate-provisioning 
 - 每個相對連結指到的檔案存在（不檢查 `#` 後面的段落錨點）。
 - 提到的每支 `bin/fm-*.sh` 與 `bin/myshape.sh` 存在而且可以執行。
 - `myshape.sh`、`fm-board.sh`、`fm-dispatch-plan.sh` 後面接的每個子命令都列在那支指令開頭的用法裡。
-- 提到的每個 `config/<名稱>` 都出現在 `bin/` 的某支腳本裡。
+- 提到的每個 `config/<名稱>`（連副檔名）都出現在 `bin/` 的某支腳本裡，或是看板編譯好的 `myshape/dist/` 從 config 目錄讀它。
 - 寫成 `/<技能>` 或「`<名稱>` 技能」的，在 `.agents/skills/` 底下都有那個技能。
 - 寫在 `captain.md` 與 `captain-shared.md` 後面的版本（例如 `（v11）`）等於 `fm-board/rules/` 裡範本的版本。
 
